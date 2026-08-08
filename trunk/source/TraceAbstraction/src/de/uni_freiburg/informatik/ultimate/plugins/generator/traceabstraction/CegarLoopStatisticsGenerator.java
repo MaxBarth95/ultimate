@@ -138,8 +138,9 @@ public class CegarLoopStatisticsGenerator extends StatisticsGeneratorWithStopwat
 	public Object getValue(final String key) {
 		final CegarLoopStatisticsDefinitions keyEnum = CegarLoopStatisticsDefinitions.valueOf(key);
 		return switch (keyEnum) {
-		case OverallTime, EmptinessCheckTime, AutomataDifference, DeadEndRemovalTime, HoareAnnotationTime,
-				BasicInterpolantAutomatonTime, InitialAbstractionConstructionTime, DumpTime -> {
+		case OverallTime, EmptinessCheckTime, AtsParsingTime, CounterexampleParsingTime, AutomataDifference,
+				DeadEndRemovalTime, HoareAnnotationTime, BasicInterpolantAutomatonTime,
+				InitialAbstractionConstructionTime, DumpTime -> {
 			try {
 				yield getElapsedTime(key);
 			} catch (final StopwatchStillRunningException e) {
@@ -175,6 +176,8 @@ public class CegarLoopStatisticsGenerator extends StatisticsGeneratorWithStopwat
 	public String[] getStopwatches() {
 		return new String[] { CegarLoopStatisticsDefinitions.OverallTime.toString(),
 				CegarLoopStatisticsDefinitions.EmptinessCheckTime.toString(),
+				CegarLoopStatisticsDefinitions.AtsParsingTime.toString(),
+				CegarLoopStatisticsDefinitions.CounterexampleParsingTime.toString(),
 				CegarLoopStatisticsDefinitions.AutomataDifference.toString(),
 				CegarLoopStatisticsDefinitions.DeadEndRemovalTime.toString(),
 				CegarLoopStatisticsDefinitions.HoareAnnotationTime.toString(),

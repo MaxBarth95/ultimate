@@ -77,6 +77,8 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.LanguageOperation;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Triple;
+import multiprocessed.MultiProcessedCegarCoordinator;
+import multiprocessed.MultiProcessedCegarWorker;
 
 /**
  * A utility class that allows creating CEGAR loops for different programs (based on some common settings).
@@ -233,8 +235,15 @@ public class CegarLoopFactory<L extends IIcfgTransition<?>> {
 				yield new ParallelNwaCegarLoop<>(name, abstraction, root, csToolkit, predicateFactory, mPrefs,
 						errorLocs, proofProducer, services, mTransitionClazz, stateFactoryForRefinement);
 			}
-			yield new NwaCegarLoop<>(name, abstraction, root, csToolkit, predicateFactory, mPrefs, errorLocs,
+			yield switch (mPrefs.getMultiProcessingComponent()) {
+			case DISABLED -> new NwaCegarLoop<>(name, abstraction, root, csToolkit, predicateFactory, mPrefs, errorLocs,
 					proofProducer, services, mTransitionClazz, stateFactoryForRefinement);
+			case COORDINATOR ->
+					new MultiProcessedCegarCoordinator<>(name, abstraction, root, csToolkit, predicateFactory, mPrefs,
+							errorLocs, proofProducer, services, mTransitionClazz, stateFactoryForRefinement);
+			case WORKER -> new MultiProcessedCegarWorker(name, abstraction, root, csToolkit, predicateFactory, mPrefs,
+					errorLocs, proofProducer, services, mTransitionClazz, stateFactoryForRefinement);
+			};
 		}
 		};
 	}

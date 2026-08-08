@@ -103,6 +103,16 @@ public class PathProgramCache<LETTER> {
 		return count;
 	}
 
+	/** Stable identifier for the path program induced by a counterexample. */
+	public static <LETTER> String getPathProgramHash(final Word<LETTER> counterexample) {
+		return Integer.toUnsignedString(counterexample.asSet().hashCode());
+	}
+
+	/** Number previously observed, without logging when this path program is new. */
+	public int getPathProgramCountOrZero(final Word<LETTER> counterexample) {
+		return mKnownPathPrograms.getOrDefault(counterexample.asSet(), 0);
+	}
+
 	public List<Integer> computeSortedHistrogram() {
 		final Integer[] visualizationArray = HistogramOfIterable.generateVisualizationArray(mKnownPathPrograms);
 		return Collections.unmodifiableList(Arrays.asList(visualizationArray));

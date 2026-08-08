@@ -684,4 +684,8 @@ public abstract class BasicCegarLoop<L extends IIcfgTransition<?>, A extends IAu
 		}
 
 	}
+
+	protected final PathProgramCache<L> getPathProgramCache() {
+		return mStrategyFactory.getPathProgramCache();
+	}
 }

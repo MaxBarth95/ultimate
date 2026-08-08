@@ -103,6 +103,18 @@ public final class TAPreferences {
 	private final boolean mMinimizeAbstractionPerWorker;
 	private final int mSearchLoopBound;
 
+	// Multi-process trace abstraction
+	private final MultiProcessComponent mMultiProcessComponent;
+	private final String mMultiProcessExchangeRoot;
+	private final String mMultiProcessWorkerCommand;
+	private final int mMultiProcessWorkerCount;
+	private final String mMultiProcessWorkerId;
+	private final int mMultiProcessJobTimeoutSeconds;
+
+	public enum MultiProcessComponent {
+		DISABLED, COORDINATOR, WORKER
+	}
+
 	public enum Artifact {
 		ABSTRACTION, INTERPOLANT_AUTOMATON, NEG_INTERPOLANT_AUTOMATON, RCFG
 	}
@@ -213,6 +225,18 @@ public final class TAPreferences {
 		mMinimizeAbstractionPerWorker =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_MINIMIZE_ABSTRACTION_PER_WORKER);
 		mSearchLoopBound = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_SEARCH_LOOP_BOUND);
+
+		mMultiProcessComponent = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_COMPONENT,
+				MultiProcessComponent.class);
+		mMultiProcessExchangeRoot =
+				mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_EXCHANGE_ROOT);
+		mMultiProcessWorkerCommand =
+				mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_WORKER_COMMAND);
+		mMultiProcessWorkerCount =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_WORKER_COUNT);
+		mMultiProcessWorkerId = mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_WORKER_ID);
+		mMultiProcessJobTimeoutSeconds =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_JOB_TIMEOUT_SECONDS);
 	}
 
 	/**
@@ -608,5 +632,29 @@ public final class TAPreferences {
 
 	public int getSearchLoopBound() {
 		return mSearchLoopBound;
+	}
+
+	public MultiProcessComponent getMultiProcessingComponent() {
+		return mMultiProcessComponent;
+	}
+
+	public String getMultiProcessExchangeRoot() {
+		return mMultiProcessExchangeRoot;
+	}
+
+	public String getMultiProcessWorkerCommand() {
+		return mMultiProcessWorkerCommand;
+	}
+
+	public int getMultiProcessWorkerCount() {
+		return mMultiProcessWorkerCount;
+	}
+
+	public String getMultiProcessWorkerId() {
+		return mMultiProcessWorkerId;
+	}
+
+	public int getMultiProcessJobTimeoutSeconds() {
+		return mMultiProcessJobTimeoutSeconds;
 	}
 }

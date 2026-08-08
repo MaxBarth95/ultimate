@@ -67,6 +67,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.Concurrency;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.InterpolantAutomatonEnhancement;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.LooperCheck;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.MultiProcessComponent;
 
 /**
  * Initializer and container of preferences for the trace abstraction plugin.
@@ -551,6 +552,23 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 			"Limits how often the IsEmptyParallel search is allowed to visit the same transition letter pair. Default -1 means infinetly often";
 	private static final int DEF_SEARCH_LOOP_BOUND = -1;
 
+	// Multi Process Trace Abstraction
+	// ========================================================================
+	public static final String LABEL_MULTI_PROCESS_COMPONENT = "multi process component";
+	private static final String DESC_MULTI_PROCESS_COMPONENT =
+			"Select whether this Ultimate instance runs normal trace abstraction, the coordinator, or one worker job.";
+	private static final MultiProcessComponent DEF_MULTI_PROCESS_COMPONENT = MultiProcessComponent.DISABLED;
+	public static final String LABEL_MULTI_PROCESS_EXCHANGE_ROOT = "multi process exchange root";
+	private static final String DEF_MULTI_PROCESS_EXCHANGE_ROOT = "multiprocess-cegar";
+	public static final String LABEL_MULTI_PROCESS_WORKER_COMMAND = "multi process worker command";
+	private static final String DEF_MULTI_PROCESS_WORKER_COMMAND = "";
+	public static final String LABEL_MULTI_PROCESS_WORKER_COUNT = "multi process worker count";
+	private static final int DEF_MULTI_PROCESS_WORKER_COUNT = 1;
+	public static final String LABEL_MULTI_PROCESS_WORKER_ID = "multi process worker id";
+	private static final String DEF_MULTI_PROCESS_WORKER_ID = "worker";
+	public static final String LABEL_MULTI_PROCESS_JOB_TIMEOUT_SECONDS = "multi process job timeout in seconds";
+	private static final int DEF_MULTI_PROCESS_JOB_TIMEOUT_SECONDS = 300;
+
 	/**
 	 * Constructor.
 	 */
@@ -849,6 +867,24 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						DESC_PARALLELSEARCH_ACTIVE_CEX_ONLY, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_MINIMIZE_ABSTRACTION_PER_WORKER, DEF_MINIMIZE_ABSTRACTION_PER_WORKER,
 						DESC_MINIMIZE_ABSTRACTION_PER_WORKER, PreferenceType.Boolean));
+
+	}
+
+	public static UltimatePreferenceItemContainer getMultiProcessTASettings() {
+		return new UltimatePreferenceItemContainer("Multi Process Trace Abstraction",
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_COMPONENT, DEF_MULTI_PROCESS_COMPONENT,
+						DESC_MULTI_PROCESS_COMPONENT, PreferenceType.Combo, MultiProcessComponent.values()),
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_EXCHANGE_ROOT, DEF_MULTI_PROCESS_EXCHANGE_ROOT,
+						PreferenceType.String),
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_WORKER_COMMAND, DEF_MULTI_PROCESS_WORKER_COMMAND,
+						PreferenceType.String),
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_WORKER_COUNT, DEF_MULTI_PROCESS_WORKER_COUNT,
+						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(1, 1_000)),
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_WORKER_ID, DEF_MULTI_PROCESS_WORKER_ID,
+						PreferenceType.String),
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_JOB_TIMEOUT_SECONDS,
+						DEF_MULTI_PROCESS_JOB_TIMEOUT_SECONDS, PreferenceType.Integer,
+						new IUltimatePreferenceItemValidator.IntegerValidator(1, Integer.MAX_VALUE)));
 
 	}
 

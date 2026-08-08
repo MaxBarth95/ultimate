@@ -135,7 +135,7 @@ public class TraceAbstractionObserver implements IUnmanagedObserver {
 		mRootOfNewModel = tas.getRootOfNewModel();
 	}
 
-	private List<INestedWordAutomaton<String, String>>
+	public List<INestedWordAutomaton<String, String>>
 			constructRawNestedWordAutomata(final List<AutomataTestFileAST> automataTestFileAsts) {
 		final List<INestedWordAutomaton<String, String>> result = new ArrayList<>();
 		for (final AutomataTestFileAST automataTestFileAst : automataTestFileAsts) {

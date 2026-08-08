@@ -49,6 +49,10 @@ public enum CegarLoopStatisticsDefinitions implements IStatisticsElement {
 
 	EmptinessCheckTime(StatisticsType.LONG_ADDITION, StatisticsType.KEY_BEFORE_NANOS),
 
+	AtsParsingTime(StatisticsType.LONG_ADDITION, StatisticsType.KEY_BEFORE_NANOS),
+
+	CounterexampleParsingTime(StatisticsType.LONG_ADDITION, StatisticsType.KEY_BEFORE_NANOS),
+
 	AutomataDifference(StatisticsType.LONG_ADDITION, StatisticsType.KEY_BEFORE_NANOS),
 
 	DeadEndRemovalTime(StatisticsType.LONG_ADDITION, StatisticsType.KEY_BEFORE_NANOS),

@@ -31,6 +31,9 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
 
@@ -99,6 +102,66 @@ public final class Dumper implements AutoCloseable {
 		} finally {
 			mIterationPW.flush();
 		}
+	}
+
+	public void dumpNestedRunJson(final IRun<?, ?> run, final int pathProgramCount) {
+		if (run == null || !(run instanceof NestedRun)) {
+			throw new AssertionError("Failed to dump NestedRun");
+		}
+
+		final NestedWord<CodeBlock> counterexample = NestedWord.nestedWord(((IRun<CodeBlock, ?>) run).getWord());
+
+		final StringBuilder json = new StringBuilder();
+
+		json.append("{\n");
+		json.append("  \"pathProgramCount\": ").append(pathProgramCount).append(",\n");
+		json.append("  \"symbols\": [\n");
+
+		for (int i = 0; i < counterexample.length(); i++) {
+			final CodeBlock symbol = counterexample.getSymbol(i);
+
+			json.append("    \"").append(escapeJsonString(String.valueOf(symbol))).append("\"");
+
+			if (i < counterexample.length() - 1) {
+				json.append(",");
+			}
+
+			json.append("\n");
+		}
+
+		json.append("  ]\n");
+		json.append("}\n");
+
+		try {
+			Files.writeString(Path.of("./input/counterexamples/nested-run.json"), json.toString(),
+					StandardCharsets.UTF_8);
+		} catch (final IOException e) {
+			throw new RuntimeException("Failed to write nested-run.json", e);
+		}
+
+	}
+
+	private String escapeJsonString(final String value) {
+		if (value == null) {
+			return "";
+		}
+
+		final StringBuilder escaped = new StringBuilder();
+
+		for (final char c : value.toCharArray()) {
+			switch (c) {
+			case '"' -> escaped.append("\\\"");
+			case '\\' -> escaped.append("\\\\");
+			case '\n' -> escaped.append("\\n");
+			case '\r' -> escaped.append("\\r");
+			case '\t' -> escaped.append("\\t");
+			case '\b' -> escaped.append("\\b");
+			case '\f' -> escaped.append("\\f");
+			default -> escaped.append(c);
+			}
+		}
+
+		return escaped.toString();
 	}
 
 	public void dumpNestedRun(final IRun<?, ?> run) {
@@ -170,4 +233,5 @@ public final class Dumper implements AutoCloseable {
 			mIterationPW.flush();
 		}
 	}
+
 }
