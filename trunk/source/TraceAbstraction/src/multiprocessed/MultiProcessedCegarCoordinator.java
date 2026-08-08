@@ -488,7 +488,8 @@ public class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>, A exte
 	}
 
 	protected static void atomicWrite(final Path var0, final String var1) throws IOException {
-		final Path var2 = var0.resolveSibling(var0.getFileName() + ".tmp");
+		final Path var2 = var0.resolveSibling(var0.getFileName() + "." + ProcessHandle.current().pid() + "."
+				+ Thread.currentThread().threadId() + ".tmp");
 		Files.writeString(var2, var1, StandardCharsets.UTF_8);
 
 		try {

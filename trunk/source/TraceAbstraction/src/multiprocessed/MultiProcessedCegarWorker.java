@@ -196,51 +196,59 @@ public final class MultiProcessedCegarWorker<L extends IIcfgTransition<?>>
 	}
 
 	private boolean loadNextJob() {
-		try {
-			installLatestAbstractionIfNeeded();
-			mCurrentRequest = waitForRequest();
-			if (mCurrentRequest == null) {
-				return false;
-			}
-			mConsumedRequests.add(mCurrentRequest);
-			final String requestJson = Files.readString(mCurrentRequest);
-			mCurrentPathProgramHash = jsonString(requestJson, "pathProgramHash");
-			if (Files.isRegularFile(cancellationFile(jobId(mCurrentRequest)))) {
-				publishResult(jobId(mCurrentRequest), "CANCELLED", null, "Coordinator cancelled stale counterexample");
+		while (true) {
+			try {
+				if (isShutdownRequested()) {
+					return false;
+				}
+				installLatestAbstractionIfNeeded();
+				if (isShutdownRequested()) {
+					return false;
+				}
+				mCurrentRequest = waitForRequest();
+				if (mCurrentRequest == null) {
+					return false;
+				}
+				mConsumedRequests.add(mCurrentRequest);
+				final String requestJson = Files.readString(mCurrentRequest);
+				mCurrentPathProgramHash = jsonString(requestJson, "pathProgramHash");
+				if (Files.isRegularFile(cancellationFile(jobId(mCurrentRequest)))) {
+					publishResult(jobId(mCurrentRequest), "CANCELLED", null,
+							"Coordinator cancelled stale counterexample");
+					mCurrentRequest = null;
+					mCurrentPathProgramHash = null;
+					continue;
+				}
+				final long parsingStarted = System.nanoTime();
+				mCegarLoopBenchmark.start(CegarLoopStatisticsDefinitions.CounterexampleParsingTime);
+				try {
+					final List<String> symbols = NestedRunParser.readNestedRun(mCurrentRequest);
+					final NestedRunParser<L, IPredicate> parser = new NestedRunParser<>();
+					mCounterexample = parser.getTraceInAbstractionFromStrings(symbols, mAbstraction);
+				} finally {
+					mCegarLoopBenchmark.stop(CegarLoopStatisticsDefinitions.CounterexampleParsingTime);
+					mLogger.info("Parsed counterexample %s in %.6f s", mCurrentRequest,
+							(System.nanoTime() - parsingStarted) / 1_000_000_000.0);
+				}
+				mCurrentCounterexampleIsFresh = true;
+				publishWorkerStatus("WORKING", jobId(mCurrentRequest), mCurrentPathProgramHash);
+				return true;
+			} catch (final InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException("Worker could not receive its next job", e);
+			} catch (final IOException e) {
+				throw new IllegalStateException("Worker could not read its next job", e);
+			} catch (final RuntimeException | AssertionError e) {
+				if (mCurrentRequest == null) {
+					throw e;
+				}
+				final String failedJobId = jobId(mCurrentRequest);
+				mLogger.error("Worker could not reconstruct counterexample for job " + failedJobId, e);
+				publishResult(failedJobId, "ERROR", null, e.toString());
 				mCurrentRequest = null;
 				mCurrentPathProgramHash = null;
-				return loadNextJob();
+				publishWorkerStatus("IDLE", null, null);
 			}
-			final long parsingStarted = System.nanoTime();
-			mCegarLoopBenchmark.start(CegarLoopStatisticsDefinitions.CounterexampleParsingTime);
-			try {
-				final List<String> symbols = NestedRunParser.readNestedRun(mCurrentRequest);
-				final NestedRunParser<L, IPredicate> parser = new NestedRunParser<>();
-				mCounterexample = parser.getTraceInAbstractionFromStrings(symbols, mAbstraction);
-			} finally {
-				mCegarLoopBenchmark.stop(CegarLoopStatisticsDefinitions.CounterexampleParsingTime);
-				mLogger.info("Parsed counterexample %s in %.6f s", mCurrentRequest,
-						(System.nanoTime() - parsingStarted) / 1_000_000_000.0);
-			}
-			mCurrentCounterexampleIsFresh = true;
-			publishWorkerStatus("WORKING", jobId(mCurrentRequest), mCurrentPathProgramHash);
-			return true;
-		} catch (final InterruptedException e) {
-			Thread.currentThread().interrupt();
-			throw new IllegalStateException("Worker could not receive its next job", e);
-		} catch (final IOException e) {
-			throw new IllegalStateException("Worker could not read its next job", e);
-		} catch (final RuntimeException | AssertionError e) {
-			if (mCurrentRequest == null) {
-				throw e;
-			}
-			final String failedJobId = jobId(mCurrentRequest);
-			mLogger.error("Worker could not reconstruct counterexample for job " + failedJobId, e);
-			publishResult(failedJobId, "ERROR", null, e.toString());
-			mCurrentRequest = null;
-			mCurrentPathProgramHash = null;
-			publishWorkerStatus("IDLE", null, null);
-			return loadNextJob();
 		}
 	}
 
@@ -269,8 +277,11 @@ public final class MultiProcessedCegarWorker<L extends IIcfgTransition<?>>
 		try (WatchService watcher = FileSystems.getDefault().newWatchService()) {
 			mInbox.register(watcher, StandardWatchEventKinds.ENTRY_CREATE);
 			while (true) {
+				if (isShutdownRequested()) {
+					return null;
+				}
 				installLatestAbstractionIfNeeded();
-				if (Files.isRegularFile(mInbox.resolve(SHUTDOWN_FILE))) {
+				if (isShutdownRequested()) {
 					return null;
 				}
 				final Path existing = findUnconsumedRequest();
@@ -281,12 +292,15 @@ public final class MultiProcessedCegarWorker<L extends IIcfgTransition<?>>
 				for (final WatchEvent<?> event : key.pollEvents()) {
 					if (event.kind() == StandardWatchEventKinds.ENTRY_CREATE) {
 						final Path candidate = mInbox.resolve((Path) event.context()).toAbsolutePath().normalize();
-						if (candidate.getFileName().toString().equals(SHUTDOWN_FILE)) {
+						if (candidate.getFileName().toString().equals(SHUTDOWN_FILE) || isShutdownRequested()) {
 							return null;
 						}
 						if (isRequest(candidate) && Files.isRegularFile(candidate)
 								&& !Files.exists(cancellationFile(jobId(candidate)))) {
 							installLatestAbstractionIfNeeded();
+							if (isShutdownRequested()) {
+								return null;
+							}
 							if (tryClaim(candidate)) {
 								return candidate;
 							}
@@ -298,6 +312,10 @@ public final class MultiProcessedCegarWorker<L extends IIcfgTransition<?>>
 				}
 			}
 		}
+	}
+
+	private boolean isShutdownRequested() {
+		return Files.isRegularFile(mInbox.resolve(SHUTDOWN_FILE));
 	}
 
 	private void installLatestAbstractionIfNeeded() {
