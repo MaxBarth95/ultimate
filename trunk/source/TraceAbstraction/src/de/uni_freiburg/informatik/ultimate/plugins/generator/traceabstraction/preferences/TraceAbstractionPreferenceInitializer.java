@@ -754,7 +754,7 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 				new UltimatePreferenceItem<>(LABEL_DUMP_PATH_PROGRAM_IF_ANALYZED_TOO_OFTEN, 0, PreferenceType.Integer),
 				new UltimatePreferenceItem<>(LABEL_DUMP_PATH_PROGRAM_STOP_MODE, PathProgramDumpStop.AFTER_FIRST_DUMP,
 						PreferenceType.Combo, PathProgramDumpStop.values()),
-				getConcurrencySettings(), getParallelCegarSettings() };
+				getConcurrencySettings(), getParallelCegarSettings(), getMultiProcessTASettings() };
 	}
 
 	private static UltimatePreferenceItemContainer getConcurrencySettings() {
