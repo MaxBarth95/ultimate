@@ -1,0 +1,18 @@
+- entry_type: invariant_set
+  metadata:
+    format_version: '2.0'
+    uuid: 67519ee8-b8d7-4278-95dd-97dd9c3efa16
+    creation_time: '2026-07-10T17:09:48+02:00'
+    producer:
+      name: UNUSED
+      version: 0.3.1-?-?
+    task:
+      input_files:
+      - C:\Users\maxba\Documents\GIT\ultimate\trunk\multiprocess-test\examples\safe.c
+      input_file_hashes:
+        C:\Users\maxba\Documents\GIT\ultimate\trunk\multiprocess-test\examples\safe.c: UNUSED
+      specification: UNUSED
+      data_model: UNUSED
+      language: C
+  content: [
+    ]

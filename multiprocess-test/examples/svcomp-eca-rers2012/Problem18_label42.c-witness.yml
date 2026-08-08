@@ -1,0 +1,26 @@
+- entry_type: invariant_set
+  metadata:
+    format_version: '2.0'
+    uuid: 6c2b91cf-1fad-46f8-9c9a-5de73d565226
+    creation_time: '2026-07-10T22:23:21+02:00'
+    producer:
+      name: UNUSED
+      version: 0.3.1-?-?
+    task:
+      input_files:
+      - C:\Users\maxba\Documents\GIT\ultimate\trunk\multiprocess-test\examples\svcomp-eca-rers2012\Problem18_label42.c
+      input_file_hashes:
+        C:\Users\maxba\Documents\GIT\ultimate\trunk\multiprocess-test\examples\svcomp-eca-rers2012\Problem18_label42.c: UNUSED
+      specification: UNUSED
+      data_model: UNUSED
+      language: C
+  content:
+  - invariant:
+      type: loop_invariant
+      location:
+        file_name: C:\Users\maxba\Documents\GIT\ultimate\trunk\multiprocess-test\examples\svcomp-eca-rers2012\Problem18_label42.c
+        line: 4269
+        column: 5
+        function: main
+      value: (a24 <= 3 && a18 <= 9) || (a24 <= 3 && a24 != 2) || (6 <= a15 && a24 <= 3) || (5 == a15 && a24 <= 3) || (a15 <= 4 && a24 == 4) || (5 == a15 && a24 == 4) || (307 <= a3 && a24 <= 3)
+      format: c_expression

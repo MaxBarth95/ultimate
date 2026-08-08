@@ -1,0 +1,25 @@
+- entry_type: violation_sequence
+  metadata:
+    format_version: '2.0'
+    uuid: a4ae441d-625d-4959-9e14-9e90dd871114
+    creation_time: '2026-07-10T17:11:56+02:00'
+    producer:
+      name: UNUSED
+      version: 0.3.1-?-?
+    task:
+      input_files:
+      - C:\Users\maxba\Documents\GIT\ultimate\trunk\multiprocess-test\examples\unsafe.c
+      input_file_hashes:
+        C:\Users\maxba\Documents\GIT\ultimate\trunk\multiprocess-test\examples\unsafe.c: UNUSED
+      specification: UNUSED
+      data_model: UNUSED
+      language: C
+  content:
+  - segment:
+    - waypoint:
+        type: target
+        action: follow
+        location:
+          file_name: C:\Users\maxba\Documents\GIT\ultimate\trunk\multiprocess-test\examples\unsafe.c
+          line: 4
+          function: main
