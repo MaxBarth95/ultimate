@@ -112,7 +112,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private final Set<Integer> mCounterexamplesToBeRemovedFromActiveCexMap = new HashSet<>();
 	protected InterpolationTechnique mInterpolationTechnique;
 
-	protected Class<L> mTransitionClazz;
+	public Class<L> mTransitionClazz;
 
 	// Addtional Statistiks for Evaluation
 	private Integer mCounterexamplesChecked = 0;

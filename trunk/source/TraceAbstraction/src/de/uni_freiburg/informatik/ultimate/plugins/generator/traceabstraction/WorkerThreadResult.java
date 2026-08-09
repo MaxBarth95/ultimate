@@ -55,7 +55,7 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	 * The object returned by an @ICegarNwaWorkerThread
 	 *
 	 */
-	WorkerThreadResult(final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahend,
+	public WorkerThreadResult(final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahend,
 			final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahendBeforeEnhancement,
 			final IPredicateUnifier predicateUnifier, final boolean explointSigmaStarConcatOfIA,
 			final InterpolantAutomatonEnhancement enhanceMode, final boolean useErrorAutomaton,

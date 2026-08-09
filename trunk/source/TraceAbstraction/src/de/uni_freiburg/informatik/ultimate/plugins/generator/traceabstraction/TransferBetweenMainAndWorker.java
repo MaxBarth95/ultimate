@@ -96,11 +96,11 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 	private final CfgSmtToolkit mWorkerCsToolkit;
 	private final ProgramVariableTransferrer mVarTransfer;
 
-	enum Mode {
+	public enum TransferMode {
 		NONE, MAIN2WORKER, WORKER2MAIN
 	}
 
-	private Mode mMode = Mode.NONE;
+	private TransferMode mMode = TransferMode.NONE;
 
 	/**
 	 * A class used to transfer runs / cex and automata between worker and main scripts. Also used to create the worker
@@ -139,7 +139,7 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 	 * Gets a run / counterexample with Letters whose transformula comes from one script. Returns a new run with new
 	 * letters, whose transformula comes from target script. The semantics of both runs are equal.
 	 */
-	public IRun<LETTER, ?> transferRun(final NestedRun<LETTER, ?> counterexample, final Mode mode) {
+	public IRun<LETTER, ?> transferRun(final NestedRun<LETTER, ?> counterexample, final TransferMode mode) {
 		final NestedRun<LETTER, ?> oldCounterexample = counterexample;
 		mMode = mode;
 		NestedWord<LETTER> currentWord = new NestedWord<>();
@@ -274,7 +274,7 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 		for (final Entry<IProgramVar, TermVariable> entry : map.entrySet()) {
 			IProgramVar transferredProgramVar;
 			if (!mProgramVarBackTranslationCache.containsKey(entry.getKey())) {
-				assert mMode.equals(Mode.MAIN2WORKER);
+				assert mMode.equals(TransferMode.MAIN2WORKER);
 				switch (entry.getKey()) {
 				case final ProgramNonOldVar var -> {
 					transferredProgramVar = mVarTransfer.translateProgramVar(var);
@@ -314,7 +314,7 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 	 */
 	public INwaOutgoingLetterAndTransitionProvider<LETTER, STATE> transferAutomaton(
 			final INwaOutgoingLetterAndTransitionProvider<LETTER, STATE> automaton,
-			final IEmptyStackStateFactory<STATE> emptyStateFactory, final Mode mode) {
+			final IEmptyStackStateFactory<STATE> emptyStateFactory, final TransferMode mode) {
 		final long setuptime = System.nanoTime() / 1000000000;
 		VpAlphabet<LETTER> alphabet;
 		Set<LETTER> internalAlphabet;

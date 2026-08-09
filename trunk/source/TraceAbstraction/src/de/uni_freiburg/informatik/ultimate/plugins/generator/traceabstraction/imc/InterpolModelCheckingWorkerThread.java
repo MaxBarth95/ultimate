@@ -69,19 +69,19 @@ import de.uni_freiburg.informatik.ultimate.logic.Script;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop.AutomatonType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop.CegarLoopResultBuilder;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop.Result;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ICegarNwaWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.IPostconditionProvider;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.IPreconditionProvider;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.NwaCegarLoop.AutomatonType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ParallelNwaCegarLoop;
-
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.PathProgramCache;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.PredicateFactoryForInterpolantAutomata;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.PredicateFactoryRefinement;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker.TransferMode;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.errorabstraction.ErrorGeneralizationEngine;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.InterpolantAutomatonEnhancement;
@@ -191,7 +191,7 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 				mLogger.info("WorkerThread for Symbolic Execution Starts");
 				mIteration = 1;
 
-				final boolean safe = runSymExec();
+				final boolean safe = runIMC();
 				if (safe) {
 					mBlockingQueueForResults.put(new WorkerThreadResult<>(null, null, null, false, null, false, null,
 							null, null, null, false));
@@ -221,7 +221,7 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 			return true;
 		} else if (!imc.isSafe() && !imc.wasUnkown()) {
 			mCounterexample = mNwaCexTransferrer.transferRun(imc.getCounterexample(),
-					TransferBetweenMainAndWorker.Mode.MAIN2WORKER);
+					TransferBetweenMainAndWorker.TransferMode.MAIN2WORKER);
 			return false;
 		} else {
 			throw new AssertionError("Loop Bound");
@@ -231,8 +231,8 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 	public void constructErrorAutomatonAndPutItInQueue(final IRun<L, ?> counterexampleWorker)
 			throws InterruptedException {
 		try {
-			final IRun<L, ?> counterexample = mNwaCexTransferrer.transferRun((NestedRun<L, ?>) counterexampleWorker,
-					TransferBetweenMainAndWorker.Mode.MAIN2WORKER);
+			final IRun<L, ?> counterexample =
+					mNwaCexTransferrer.transferRun((NestedRun<L, ?>) counterexampleWorker, TransferMode.MAIN2WORKER);
 			mAbstraction = (INestedWordAutomaton<L, IPredicate>) getAndTransferAbstraction();
 			final var locations = getControlConfigurationsFromCounterexample(counterexample);
 			final Counterexample<L> cex = new Counterexample<>(counterexample.getWord(), locations);
@@ -291,7 +291,7 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 	public INwaOutgoingLetterAndTransitionProvider<L, IPredicate> getAndTransferAbstraction() {
 		final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> mainAbstraction = mMainThread.getAbstraction();
 		final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> workerAbstraction = mNwaCexTransferrer
-				.transferAutomaton(mainAbstraction, mPredicateFactoryInterpolantAutomata, Mode.MAIN2WORKER);
+				.transferAutomaton(mainAbstraction, mPredicateFactoryInterpolantAutomata, TransferMode.MAIN2WORKER);
 		return workerAbstraction;
 	}
 
@@ -407,7 +407,7 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 		// mCegarLoopBenchmark.start(CegarLoopStatisticsDefinitions.AutomataDifference.toString());
 		final IPredicateUnifier predicateUnifier = mRefinementResult.getPredicateUnifier();
 
-		final AutomatonType automatonType;
+		AutomatonType automatonType;
 		final boolean useErrorAutomaton;
 		final NestedWordAutomaton<L, IPredicate> subtrahendBeforeEnhancement;
 		final InterpolantAutomatonEnhancement enhanceMode;
@@ -424,9 +424,9 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 
 		final WorkerThreadResult<L, A> workerResult = new WorkerThreadResult(
 				mNwaCexTransferrer.transferAutomaton(subtrahend, mPredicateFactoryInterpolantAutomata,
-						Mode.WORKER2MAIN),
+						TransferMode.WORKER2MAIN),
 				mNwaCexTransferrer.transferAutomaton(subtrahendBeforeEnhancement, mPredicateFactoryInterpolantAutomata,
-						Mode.WORKER2MAIN),
+						TransferMode.WORKER2MAIN),
 				predicateUnifier, exploitSigmaStarConcatOfIa, enhanceMode, useErrorAutomaton, automatonType,
 				mCfgSmtToolkit.getManagedScript(), null, mPredicateFactory, false);
 		return workerResult;

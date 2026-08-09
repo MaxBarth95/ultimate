@@ -76,7 +76,7 @@ import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop.CegarLoopResultBuilder;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop.Result;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.NwaCegarLoop.AutomatonType;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker.Mode;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.errorabstraction.ErrorGeneralizationEngine;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.AbstractInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.DeterministicInterpolantAutomaton;
@@ -197,7 +197,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 				final IRun<L, ?> mainThreadCounterexample = mWorkerTaskQueue.take();
 				mProgramCache.copyProgramCache(mMainThread.getCurrentProgramCache());
 				mCounterexample =
-						mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mainThreadCounterexample, Mode.MAIN2WORKER);
+						mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mainThreadCounterexample, TransferMode.MAIN2WORKER);
 
 				// set the programCount to x-1, because we will report it again later
 				mProgramCache.setPathProgramCount(mCounterexample.getWord(),
@@ -268,7 +268,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	private INwaOutgoingLetterAndTransitionProvider<L, IPredicate> getAbstraction() {
 		final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> mainAbstraction = mMainThread.getAbstraction();
 		final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> workerAbstraction = mNwaCexTransferrer
-				.transferAutomaton(mainAbstraction, mPredicateFactoryInterpolantAutomata, Mode.MAIN2WORKER);
+				.transferAutomaton(mainAbstraction, mPredicateFactoryInterpolantAutomata, TransferMode.MAIN2WORKER);
 		return workerAbstraction;
 	}
 
@@ -419,12 +419,12 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 
 		final WorkerThreadResult<L, A> workerResult = new WorkerThreadResult<>(
 				mNwaCexTransferrer.transferAutomaton(subtrahend, mPredicateFactoryInterpolantAutomata,
-						Mode.WORKER2MAIN),
+						TransferMode.WORKER2MAIN),
 				mNwaCexTransferrer.transferAutomaton(subtrahendBeforeEnhancement, mPredicateFactoryInterpolantAutomata,
-						Mode.WORKER2MAIN),
+						TransferMode.WORKER2MAIN),
 				predicateUnifier, exploitSigmaStarConcatOfIa, enhanceMode, useErrorAutomaton, automatonType,
 				mCfgSmtToolkit.getManagedScript(),
-				mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mCounterexample, Mode.WORKER2MAIN), mPredicateFactory,
+				mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mCounterexample, TransferMode.WORKER2MAIN), mPredicateFactory,
 				false);
 
 		// TODO missing a lot of stuff from NwaCegarLoop

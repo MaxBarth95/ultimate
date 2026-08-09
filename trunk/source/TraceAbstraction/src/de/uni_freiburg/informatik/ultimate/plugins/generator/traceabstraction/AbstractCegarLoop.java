@@ -173,7 +173,7 @@ public abstract class AbstractCegarLoop<L extends IIcfgTransition<?>, A extends 
 
 	protected IUltimateServiceProvider mServices;
 
-	protected final TaskIdentifier mTaskIdentifier;
+	public final TaskIdentifier mTaskIdentifier;
 
 	protected Dumper mDumper;
 
