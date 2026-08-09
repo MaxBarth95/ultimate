@@ -123,7 +123,7 @@ public abstract class AbstractCegarLoop<L extends IIcfgTransition<?>, A extends 
 	/**
 	 * Intermediate layer to encapsulate communication with SMT solvers.
 	 */
-	protected final CfgSmtToolkit mCsToolkit;
+	public final CfgSmtToolkit mCsToolkit;
 	protected final PredicateFactory mPredicateFactory;
 
 	/**
@@ -766,7 +766,7 @@ public abstract class AbstractCegarLoop<L extends IIcfgTransition<?>, A extends 
 
 	}
 
-	protected final class CegarLoopResultBuilder {
+	public final class CegarLoopResultBuilder {
 		private final Map<IcfgLocation, CegarLoopLocalResult<L>> mResults = new LinkedHashMap<>();
 
 		public CegarLoopResultBuilder addResultForAllRemaining(final Result result) {
