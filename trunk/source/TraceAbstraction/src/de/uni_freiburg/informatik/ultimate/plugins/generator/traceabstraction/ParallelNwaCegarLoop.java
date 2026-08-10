@@ -82,6 +82,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.Activat
 import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.preferences.IcfgPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization.AutomataMinimizationTimeout;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolModelCheckingWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.InterpolantAutomatonEnhancement;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.Minimization;
@@ -199,6 +200,14 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		final TaCheckAndRefinementPreferences<L> taCheckAndRefinementPrefs =
 				new TaCheckAndRefinementPreferences<>(getServices(), mPref, mInterpolationTechnique,
 						mSimplificationTechnique, freshToolKit, predicateFactory, mIcfg);
+
+		if (id == 0) {
+			return new InterpolModelCheckingWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices,
+					freshToolKit, predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
+					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
+					transferUtils, mTaskIdentifier);
+		}
+
 		// initialize worker
 		return new CegarNwaWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
 				predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,

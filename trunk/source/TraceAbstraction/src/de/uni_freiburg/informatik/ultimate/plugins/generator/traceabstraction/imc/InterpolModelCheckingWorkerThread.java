@@ -123,7 +123,6 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 
 	private final PathProgramCache<L> mProgramCache;
 	private final TaskIdentifier mTaskIdentifier;
-	ManagedScript mMainMgdScript;
 
 	/**
 	 * CegarNwaWorkerThread is a runnable that will be executed by an executor service. It takes counterexamples from
@@ -170,10 +169,9 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 		mBlockingQueueForResults = blockingQueueForResults;
 		mWorkerTaskQueue = workerTaskQueue;
 		mNwaCexTransferrer = transferWorkerUtils;
-		mAbstraction = (INestedWordAutomaton<L, IPredicate>) getAbstraction();
+		mAbstraction = (INestedWordAutomaton<L, IPredicate>) getAndTransferAbstraction();
 		mTaskIdentifier = taskIdentifier;
 		mProgramCache = new PathProgramCache<>(mLogger);
-		mMainMgdScript = mainThread.mCsToolkit.getManagedScript();
 	}
 
 	/*
@@ -185,10 +183,10 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 	 */
 	@Override
 	public void run() {
-		Thread.currentThread().setName("Sym Exec Thread");
+		Thread.currentThread().setName("IMC Thread");
 		while (!Thread.currentThread().isInterrupted()) {
 			try {
-				mLogger.info("WorkerThread for Symbolic Execution Starts");
+				mLogger.info("WorkerThread for IMC Starts");
 				mIteration = 1;
 
 				final boolean safe = runIMC();
@@ -203,20 +201,21 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
 			} catch (final Throwable t) {
-				try {
-					mBlockingQueueForResults.put(new WorkerThreadResult<>(null, null, null, false, null, false, null,
-							null, null, null, true));
-				} catch (final InterruptedException ie) {
-					Thread.currentThread().interrupt();
-				}
-				return;
+				throw new AssertionError(t);
+//				try {
+//					mBlockingQueueForResults.put(new WorkerThreadResult<>(null, null, null, false, null, false, null,
+//							null, null, null, true));
+//				} catch (final InterruptedException ie) {
+//					Thread.currentThread().interrupt();
+//				}
+				// return;
 			}
 		}
 	}
 
 	private boolean runIMC() throws AutomataLibraryException, InterruptedException {
 		final InterpolationBasedModelChecking imc = new InterpolationBasedModelChecking(mServices, mLogger,
-				mTaCheckAndRefinementPrefs, mCfgSmtToolkit, mMainMgdScript, mAbstraction, mTaskIdentifier, this, mPref);
+				mTaCheckAndRefinementPrefs, mCfgSmtToolkit, mAbstraction, mTaskIdentifier, this, mPref);
 		if (imc.isSafe() && !imc.wasOverapproximated()) {
 			return true;
 		} else if (!imc.isSafe() && !imc.wasUnkown()) {
