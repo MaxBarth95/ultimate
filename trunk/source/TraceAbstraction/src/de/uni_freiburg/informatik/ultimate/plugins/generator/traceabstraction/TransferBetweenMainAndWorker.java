@@ -56,6 +56,7 @@ import de.uni_freiburg.informatik.ultimate.lib.icfg.CodeBlock;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.Return;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.SequentialComposition;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.StatementSequence;
+import de.uni_freiburg.informatik.ultimate.lib.icfg.Summary;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.DefaultIcfgSymbolTable;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.IIcfgSymbolTable;
@@ -151,6 +152,7 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 			case final Return re -> nestingOperation = NestedWord.MINUS_INFINITY;
 			case final StatementSequence stmt -> nestingOperation = NestedWord.INTERNAL_POSITION;
 			case final SequentialComposition seqComp -> nestingOperation = NestedWord.INTERNAL_POSITION;
+			case final Summary sum -> nestingOperation = NestedWord.INTERNAL_POSITION;
 			default -> new AssertionError("Unexpected letter type: " + letter.getClass());
 			}
 			final NestedWord<LETTER> singleWord = new NestedWord<>(transferEdge(letter), nestingOperation);
@@ -174,6 +176,7 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 			case final Return re -> transferredLetter = (LETTER) getTransferReturn(re);
 			case final StatementSequence stmt -> transferredLetter = (LETTER) getTransferStmtSequence(stmt);
 			case final SequentialComposition seqComp -> transferredLetter = (LETTER) getTransferSeqComp(seqComp);
+			case final Summary sum -> transferredLetter = (LETTER) getTransferSummary(sum);
 			default -> new AssertionError("Unexpected letter type: " + letter.getClass());
 			}
 		}
@@ -226,6 +229,15 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 		newReturn.setPayload(re.getPayload());
 		return newReturn;
 
+	}
+
+	private Summary getTransferSummary(final Summary sum) {
+		final Summary newSum = new Summary(sum.getSerialNumber(), (BoogieIcfgLocation) sum.getSource(),
+				(BoogieIcfgLocation) sum.getTarget(), sum.getCallStatement(), sum.calledProcedureHasImplementation(),
+				mLogger);
+		newSum.setTransitionFormula(transferTransFormulaWithMode(sum.getTransformula()));
+		newSum.setPayload(sum.getPayload());
+		return newSum;
 	}
 
 	private UnmodifiableTransFormula transferTransFormulaWithMode(final UnmodifiableTransFormula inTF) {
