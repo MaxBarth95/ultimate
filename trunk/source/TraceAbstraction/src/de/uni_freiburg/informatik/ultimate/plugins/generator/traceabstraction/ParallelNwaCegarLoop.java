@@ -262,6 +262,14 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 							shutDownAndDestroy(mDestroyEverything);
 							throw new AssertionError("Worker Crashed!, Exiting CEGAR loop!");
 						}
+						if (workerResult.getSubtrahend() == null) {
+							mAbstraction = new NestedWordAutomaton(new AutomataLibraryServices(getServices()),
+									mAbstraction.getVpAlphabet(), mPredicateFactoryInterpolantAutomata);
+							mResultBuilder.addResultForAllRemaining(Result.SAFE);
+							updateAndPrintStatistics(true);
+							return;
+						}
+
 						// If Error automaton terminate immediately
 						if (mPref.stopAfterFirstViolation()
 								&& workerResult.getAutomatonType().equals(AutomatonType.ERROR)) {
