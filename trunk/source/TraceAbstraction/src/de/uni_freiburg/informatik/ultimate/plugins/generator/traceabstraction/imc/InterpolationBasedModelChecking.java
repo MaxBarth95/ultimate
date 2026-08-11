@@ -17,8 +17,6 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolk
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IAction;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.BasicPredicateFactory;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicate;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateUtils;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.TermTransferrer;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.taskidentifier.TaskIdentifier;
@@ -27,7 +25,6 @@ import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.PureSubstitution;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder.SolverMode;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder.SolverSettings;
-import de.uni_freiburg.informatik.ultimate.logic.AnnotatedTerm;
 import de.uni_freiburg.informatik.ultimate.logic.FormulaUnLet;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
@@ -155,7 +152,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 			// UNSAT: extract the k+1 cut-point interpolants before popping the scope
 			final Term[] interpolants = mMgdImcScript.getInterpolants(mIMCLock, partition);
 			mLogger.info("IMC: k=%d - obtained %d cut-point interpolants", k, interpolants.length);
-			final IPredicate[] cutpointPreds = unSsaToRepresentativeFrame(interpolants);
+			final Term[] cutpointPreds = unSsaToRepresentativeFrame(interpolants);
 			mMgdImcScript.pop(mIMCLock, 1);
 
 			if (hasStabilized(cutpointPreds, k)) {
@@ -257,20 +254,10 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 								mWorkerMgdScript.getScript());
 				mConstants2BoogieVar.put(mWorker2Imc.transform(constant), pv);
 			}
-			partition[s] = assertNamed(ssaFormula);
+			partition[s] = SmtUtils.annotateAndAssert(mMgdImcScript.getScript(), ssaFormula, "imc" + s);
 		}
+		// SmtUtils.interpolateBinary(, partition[0], partition[1]);
 		return partition;
-	}
-
-	/**
-	 * Asserts {@code term} under a fresh {@code :named} annotation and returns the SMT constant naming it, ready to be
-	 * used as an entry of a {@link ManagedScript#getInterpolants} partition.
-	 */
-	private Term assertNamed(final Term term) {
-		final String name = "imc_" + mNameCounter++;
-		final AnnotatedTerm named = (AnnotatedTerm) SmtUtils.constructNamedTerm(mMgdImcScript.getScript(), term, name);
-		mMgdImcScript.assertTerm(mIMCLock, named);
-		return named;
 	}
 
 	/**
@@ -285,20 +272,19 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * resulting predicate live consistently in {@link #mWorkerMgdScript}, matching what {@code mCsToolkit}'s symbol
 	 * table actually has registered.
 	 */
-	private IPredicate[] unSsaToRepresentativeFrame(final Term[] interpolants) {
+	private Term[] unSsaToRepresentativeFrame(final Term[] interpolants) {
 		final Map<Term, Term> const2RepTv = new HashMap<>();
 		for (final Map.Entry<Term, IProgramVar> entry : mConstants2BoogieVar.entrySet()) {
+			// entry comes from imc script
 			final Term transferredConstant = mImc2Worker.transform(entry.getKey());
-			const2RepTv.put(transferredConstant, entry.getValue().getTermVariable());
+			const2RepTv.put(transferredConstant, mImc2Worker.transform(entry.getValue().getDefaultConstant()));
 		}
-		final BasicPredicateFactory predicateFactory =
-				new BasicPredicateFactory(mServices, mWorkerMgdScript, mCsToolkit.getSymbolTable());
-		final IPredicate[] result = new IPredicate[interpolants.length];
+		final Term[] result = new Term[interpolants.length];
 		for (int i = 0; i < interpolants.length; i++) {
 			final Term unlet = new FormulaUnLet().transform(interpolants[i]);
 			final Term transferred = mImc2Worker.transform(unlet);
 			final Term representative = PureSubstitution.apply(mWorkerMgdScript, const2RepTv, transferred);
-			result[i] = predicateFactory.newPredicate(representative);
+			result[i] = representative;
 		}
 		return result;
 	}
@@ -310,15 +296,13 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * since iterations {@code 1..k} were each individually confirmed infeasible by the caller already, the program is
 	 * safe.
 	 */
-	private boolean hasStabilized(final IPredicate[] cutpointPreds, final int k) {
-		final BasicPredicateFactory predicateFactory =
-				new BasicPredicateFactory(mServices, mWorkerMgdScript, mCsToolkit.getSymbolTable());
-		final List<IPredicate> earlierLayers = new ArrayList<>(k);
+	private boolean hasStabilized(final Term[] unSSAdInterpolants, final int k) {
+		final List<Term> earlierLayers = new ArrayList<>(k);
 		for (int j = 0; j < k; j++) {
-			earlierLayers.add(cutpointPreds[j]);
+			earlierLayers.add(unSSAdInterpolants[j]);
 		}
-		final IPredicate union = predicateFactory.or(earlierLayers);
-		return isUnsat(cutpointPreds[k].getFormula(), SmtUtils.not(mWorkerMgdScript.getScript(), union.getFormula()));
+		final Term union = SmtUtils.or(mWorkerMgdScript.getScript(), earlierLayers);
+		return isUnsat(unSSAdInterpolants[k], SmtUtils.not(mWorkerMgdScript.getScript(), union));
 	}
 
 	/**
