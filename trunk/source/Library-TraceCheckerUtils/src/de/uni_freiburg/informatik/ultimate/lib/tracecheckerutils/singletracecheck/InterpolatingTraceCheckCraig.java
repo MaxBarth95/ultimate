@@ -238,7 +238,7 @@ public class InterpolatingTraceCheckCraig<L extends IAction> extends Interpolati
 			mTraceCheckBenchmarkGenerator.stop(TraceCheckStatisticsDefinitions.InterpolantComputationTime.toString());
 		}
 		// TODO: remove this if relevant variables are definitely correct.
-		// assert testRelevantVars() : "bug in relevant variables";
+		assert testRelevantVars() : "bug in relevant variables";
 	}
 
 	private boolean testRelevantVars() {

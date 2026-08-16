@@ -1,6 +1,7 @@
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -28,7 +29,8 @@ import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverB
 import de.uni_freiburg.informatik.ultimate.logic.FormulaUnLet;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.LoopSegmentFormulaBuilder.LoopSegments;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.Checkpoint;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.CheckpointGraph;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.RefinementStrategy;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
@@ -39,7 +41,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * Upper bound on how many times the loop body is unwound while searching for an inductive interpolant. Placeholder
 	 * constant; not yet wired through a preference.
 	 */
-	private static final int MAX_K = 20;
+	private static final int MAX_K = 200000;
 
 	private final INestedWordAutomaton<LETTER, STATE> mAbstraction;
 	private final ManagedScript mMgdImcScript;
@@ -71,6 +73,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	// (mWorkerMgdScript), whose symbol table holds the real IProgramVars the rest of the worker recognizes.
 	private final TermTransferrer mImc2Worker;
 	private final TermTransferrer mWorker2Imc;
+	final Map<String, Term> mIndexedConstantsWorkerScript = new HashMap<>();
 
 	/**
 	 *
@@ -104,73 +107,174 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	}
 
 	/**
+	 * Result of checking one INIT-to-FINAL path through the checkpoint graph (see {@link #runPath}).
+	 */
+	private enum PathVerdict {
+		SAFE, UNSAFE, UNKNOWN
+	}
+
+	/**
 	 * Runs bounded-unwinding Interpolation-Based Model Checking on a nested word automaton (path program or
-	 * abstraction) that represents a program with exactly one loop.
+	 * abstraction) that represents a program with any number of non-nested loops.
 	 *
-	 * The three region summaries (prefix / one loop-body pass / suffix), each covering <b>all</b> paths through their
-	 * region, come from {@link LoopSegmentFormulaBuilder}. For k = 1, 2, ..., MAX_K: assert prefix &and; loop^k &and;
-	 * suffix as SSA, named per region. If SAT, a real bug was found. If UNSAT, obtain the k+1 cut-point interpolants;
-	 * if the newest one is already subsumed by the disjunction of the earlier ones, the loop-head reachable set has
-	 * stabilized (a valid, sound stopping criterion since iterations 1..k were each individually confirmed infeasible
-	 * already) and the program is safe.
+	 * The checkpoint graph (program entry / every loop head / accepting-or-error states, connected by <b>all</b>-paths
+	 * loop-free edge formulas, plus one loop-body formula per loop head) comes from
+	 * {@link CheckpointGraphFormulaBuilder}. Execution may visit only a subset of the loop heads, possibly several in
+	 * sequence, and different branches may visit different subsets/orders, so every distinct INIT-to-FINAL path is
+	 * checked in turn via {@link #runPath}; the program is unsafe as soon as any path is, and safe only if every path
+	 * is.
 	 */
 	private void run() throws AutomataLibraryException {
 		mMgdImcScript.lock(mIMCLock);
 		mLogger.info("IMC: starting bounded-unwinding interpolation-based model checking (MAX_K=%d)", MAX_K);
 
-		final LoopSegments segments =
-				new LoopSegmentFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
-		mLogger.info("IMC: loop segment formulas ready, starting unwinding loop");
+		final CheckpointGraph<STATE> graph =
+				new CheckpointGraphFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
+		final List<List<Checkpoint<STATE>>> paths = graph.enumeratePaths();
+		mLogger.info("IMC: checkpoint graph ready (%d loop head(s)), %d path(s) to check", graph.getLoopHeads().size(),
+				paths.size());
 
-		for (int k = 1; k <= MAX_K; k++) {
-			mLogger.info("IMC: k=%d - asserting prefix, %d copies of loop body, suffix", k, k);
-			mMgdImcScript.push(mIMCLock, 1);
-
-			final List<UnmodifiableTransFormula> regions = new ArrayList<>();
-			regions.add(segments.getPrefix());
-			regions.addAll(Collections.nCopies(k, segments.getLoopBody()));
-			regions.add(segments.getSuffix());
-
-			final Term[] partition = assertRegionSequenceNamed(regions);
-			final LBool sat = mMgdImcScript.checkSat(mIMCLock);
-			mLogger.info("IMC: k=%d - solver result: %s", k, sat);
-
-			if (sat == LBool.SAT) {
-				mSafe = false;
-				mLogger.info("IMC: k=%d - feasible counterexample found, program is unsafe", k);
-				mMgdImcScript.pop(mIMCLock, 1);
+		boolean unsafe = false;
+		boolean unknown = false;
+		for (final List<Checkpoint<STATE>> path : paths) {
+			mLogger.info("IMC: checking path %s", path);
+			final PathVerdict verdict = runPath(graph, path);
+			mLogger.info("IMC: path %s - verdict %s", path, verdict);
+			if (verdict == PathVerdict.UNSAFE) {
+				unsafe = true;
 				break;
 			}
-			if (sat == LBool.UNKNOWN) {
-				mSolverReturnedUnknown = true;
-				mSafe = false;
-				mLogger.info("IMC: k=%d - solver returned unknown, aborting", k);
-				mMgdImcScript.pop(mIMCLock, 1);
-				break;
-			}
-
-			// UNSAT: extract the k+1 cut-point interpolants before popping the scope
-			final Term[] interpolants = mMgdImcScript.getInterpolants(mIMCLock, partition);
-			mLogger.info("IMC: k=%d - obtained %d cut-point interpolants", k, interpolants.length);
-			final Term[] cutpointPreds = unSsaToRepresentativeFrame(interpolants);
-			mMgdImcScript.pop(mIMCLock, 1);
-
-			if (hasStabilized(cutpointPreds, k)) {
-				mSafe = true;
-				mLogger.info("IMC: k=%d - interpolant sequence stabilized, program is safe", k);
-				break;
-			}
-			mLogger.info("IMC: k=%d - interpolant sequence has not stabilized yet", k);
-			if (k == MAX_K) {
-				mSolverReturnedUnknown = true;
-				mSafe = false;
-				mLogger.info("IMC: reached MAX_K=%d without stabilizing or finding a bug", MAX_K);
+			if (verdict == PathVerdict.UNKNOWN) {
+				unknown = true;
 			}
 		}
+
+		mSafe = !unsafe && !unknown;
+		mSolverReturnedUnknown = !unsafe && unknown;
 
 		mMgdImcScript.unlock(mIMCLock);
 		mLogger.info("is safe " + (mSafe && !mSolverReturnedUnknown));
 		mLogger.info("solver returned unknown: " + mSolverReturnedUnknown);
+	}
+
+	/**
+	 * Checks one INIT-to-FINAL path through the checkpoint graph. If the path has no loop head at all, this is a single
+	 * plain SAT check on its one edge formula. Otherwise the loop heads on the path are processed in order, one "phase"
+	 * per loop head: phase {@code p} sweeps {@code k_p = 1..MAX_K} for loop head {@code p}, with every earlier loop
+	 * head on the path frozen at whatever iteration count its own phase stabilized at, and every later loop head on the
+	 * path taken exactly one mandatory pass (it hasn't been reached yet). Each sweep step reuses exactly the same
+	 * push/{@link #assertRegionSequenceNamed}/checkSat/{@link #hasStabilized} machinery the single-loop case already
+	 * used, just with a longer, phase-appropriate region chain.
+	 * <p>
+	 * <b>Soundness</b>: an {@link PathVerdict#UNSAFE} verdict is always backed by one concrete, directly re-checkable
+	 * SAT region chain - a literal prefix / fixed loop-iteration-counts / tail sequence, asserted and solved exactly
+	 * like the single-loop case, regardless of which {@code k}'s were frozen for other loop heads - so it is
+	 * unconditionally sound. A {@link PathVerdict#SAFE} verdict only proves that this sequential-freeze strategy found
+	 * no bug up to {@code MAX_K} per phase; it does <em>not</em> prove safety for arbitrary <em>joint</em> iteration
+	 * counts across multiple loop heads simultaneously (e.g. a bug only reachable by a specific combination of counts
+	 * across two different loop heads on the same path is never asserted here) - the same kind of bounded/heuristic
+	 * limitation {@code MAX_K} itself already carries for a single loop.
+	 */
+	private PathVerdict runPath(final CheckpointGraph<STATE> graph, final List<Checkpoint<STATE>> path) {
+		final List<STATE> loopHeadsOnPath = new ArrayList<>();
+		for (final Checkpoint<STATE> checkpoint : path) {
+			if (checkpoint.isLoopHead()) {
+				loopHeadsOnPath.add(checkpoint.getLoopHead());
+			}
+		}
+
+		if (loopHeadsOnPath.isEmpty()) {
+			final List<UnmodifiableTransFormula> regions = List.of(graph.getEdge(Checkpoint.init(), Checkpoint.fin()));
+			mMgdImcScript.push(mIMCLock, 1);
+			assertRegionSequenceNamed(regions);
+			final LBool sat = mMgdImcScript.checkSat(mIMCLock);
+			mMgdImcScript.pop(mIMCLock, 1);
+			if (sat == LBool.SAT) {
+				return PathVerdict.UNSAFE;
+			}
+			return sat == LBool.UNKNOWN ? PathVerdict.UNKNOWN : PathVerdict.SAFE;
+		}
+
+		final List<UnmodifiableTransFormula> frozenPrefix = new ArrayList<>();
+		frozenPrefix.add(graph.getEdge(Checkpoint.init(), Checkpoint.loopHead(loopHeadsOnPath.get(0))));
+
+		for (int p = 0; p < loopHeadsOnPath.size(); p++) {
+			final STATE loopHead = loopHeadsOnPath.get(p);
+			final List<UnmodifiableTransFormula> tail = buildTail(graph, loopHeadsOnPath, p);
+			final int offset = frozenPrefix.size();
+
+			boolean stabilized = false;
+			for (int k = 1; k <= MAX_K; k++) {
+				mLogger.info("IMC: path %s, loop head %s, k=%d - asserting %d regions", path, loopHead, k,
+						offset + k + tail.size());
+				mMgdImcScript.push(mIMCLock, 1);
+
+				final List<UnmodifiableTransFormula> regions = new ArrayList<>(frozenPrefix);
+				regions.addAll(Collections.nCopies(k, graph.getLoopBody(loopHead)));
+				regions.addAll(tail);
+
+				final Term[] partition = assertRegionSequenceNamed(regions);
+				final LBool sat = mMgdImcScript.checkSat(mIMCLock);
+				mLogger.info("IMC: path %s, loop head %s, k=%d - solver result: %s", path, loopHead, k, sat);
+
+				if (sat == LBool.SAT) {
+					mMgdImcScript.pop(mIMCLock, 1);
+					return PathVerdict.UNSAFE;
+				}
+				if (sat == LBool.UNKNOWN) {
+					mMgdImcScript.pop(mIMCLock, 1);
+					return PathVerdict.UNKNOWN;
+				}
+
+				// UNSAT: extract this phase's k+1 cut-point interpolants before popping the scope. Cutpoint j of
+				// this phase sits at global interpolant index (offset - 1 + j), since `offset` regions (the frozen
+				// prefix) precede this phase's own loop-body copies.
+				final Term[] interpolants = mMgdImcScript.getInterpolants(mIMCLock, partition);
+				final Term[] cutpointPreds = unSsaToRepresentativeFrame(interpolants);
+				mMgdImcScript.pop(mIMCLock, 1);
+				final Term[] phaseSlice = Arrays.copyOfRange(cutpointPreds, offset - 1, offset + k);
+
+				if (hasStabilized(phaseSlice, k)) {
+					mLogger.info("IMC: path %s, loop head %s, k=%d - interpolant sequence stabilized", path, loopHead,
+							k);
+					frozenPrefix.addAll(Collections.nCopies(k, graph.getLoopBody(loopHead)));
+					final Checkpoint<STATE> next =
+							p + 1 < loopHeadsOnPath.size() ? Checkpoint.loopHead(loopHeadsOnPath.get(p + 1))
+									: Checkpoint.fin();
+					frozenPrefix.add(graph.getEdge(Checkpoint.loopHead(loopHead), next));
+					stabilized = true;
+					break;
+				}
+				mLogger.info("IMC: path %s, loop head %s, k=%d - interpolant sequence has not stabilized yet", path,
+						loopHead, k);
+			}
+			if (!stabilized) {
+				mLogger.info("IMC: path %s, loop head %s - reached MAX_K=%d without stabilizing or finding a bug", path,
+						loopHead, MAX_K);
+				return PathVerdict.UNKNOWN;
+			}
+		}
+		return PathVerdict.SAFE;
+	}
+
+	/**
+	 * The fixed continuation of {@code path} after phase {@code phaseIndex}'s loop head: one mandatory pass through
+	 * every later loop head on the path (it hasn't been reached yet, so it isn't swept - only the current phase's loop
+	 * head is), followed by the edge into FINAL. Constant across a phase's whole {@code k} sweep, exactly like the
+	 * single-loop case's {@code suffix} was constant across {@code k}.
+	 */
+	private List<UnmodifiableTransFormula> buildTail(final CheckpointGraph<STATE> graph,
+			final List<STATE> loopHeadsOnPath, final int phaseIndex) {
+		final List<UnmodifiableTransFormula> tail = new ArrayList<>();
+		STATE current = loopHeadsOnPath.get(phaseIndex);
+		for (int q = phaseIndex + 1; q < loopHeadsOnPath.size(); q++) {
+			final STATE next = loopHeadsOnPath.get(q);
+			tail.add(graph.getEdge(Checkpoint.loopHead(current), Checkpoint.loopHead(next)));
+			tail.add(graph.getLoopBody(next));
+			current = next;
+		}
+		tail.add(graph.getEdge(Checkpoint.loopHead(current), Checkpoint.fin()));
+		return tail;
 	}
 
 	private SolverSettings getSolverSetting() {
@@ -226,7 +330,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * Assumes procedures are inlined (no oldvars / calling contexts to special-case).
 	 */
 	private Term[] assertRegionSequenceNamed(final List<UnmodifiableTransFormula> regions) {
-		final Map<String, Term> indexedConstants = new HashMap<>();
+
 		mConstants2BoogieVar = new HashMap<>();
 		final Term[] partition = new Term[regions.size()];
 		for (int s = 0; s < regions.size(); s++) {
@@ -235,7 +339,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 			final int idxOutVar = s + 1;
 			final Set<IProgramVar> assignedVars = new HashSet<>();
 			Term ssaFormula = PredicateUtils.formulaWithIndexedVars(region, idxInVar, idxOutVar, assignedVars,
-					indexedConstants, mWorkerMgdScript.getScript());
+					mIndexedConstantsWorkerScript, mWorkerMgdScript.getScript());
 			ssaFormula = mWorker2Imc.transform(ssaFormula);
 
 			// Mirrors formulaWithIndexedVars' own constant choice per var exactly (oldvars use their stable default
@@ -244,13 +348,13 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 			// procedures are assumed inlined, but cheap to keep correct in case an oldvar slips through.
 			for (final IProgramVar pv : region.getInVars().keySet()) {
 				final Term constant = pv.isOldvar() ? pv.getDefaultConstant()
-						: PredicateUtils.getIndexedConstant(pv, idxInVar, indexedConstants,
+						: PredicateUtils.getIndexedConstant(pv, idxInVar, mIndexedConstantsWorkerScript,
 								mWorkerMgdScript.getScript());
 				mConstants2BoogieVar.put(mWorker2Imc.transform(constant), pv);
 			}
 			for (final IProgramVar pv : assignedVars) {
 				final Term constant = pv.isOldvar() && !region.getAssignedVars().contains(pv) ? pv.getDefaultConstant()
-						: PredicateUtils.getIndexedConstant(pv, idxOutVar, indexedConstants,
+						: PredicateUtils.getIndexedConstant(pv, idxOutVar, mIndexedConstantsWorkerScript,
 								mWorkerMgdScript.getScript());
 				mConstants2BoogieVar.put(mWorker2Imc.transform(constant), pv);
 			}
@@ -265,7 +369,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * {@link IProgramVar#getTermVariable()}, so that cut-point interpolants obtained at different loop-copy positions
 	 * become directly comparable formulas over the same variable frame. Interpolants come back from
 	 * {@code mMgdScript.getInterpolants} native to IMC's own script; {@code pv.getTermVariable()} is native to the
-	 * worker's script ({@link #mWorkerMgdScript}), since {@code pv} is one of {@link LoopSegmentFormulaBuilder}'s
+	 * worker's script ({@link #mWorkerMgdScript}), since {@code pv} is one of {@link CheckpointGraphFormulaBuilder}'s
 	 * unmodified, worker-native {@code IProgramVar}s. Substituting one script's term into a formula native to the other
 	 * would silently build a mismatched term tree, so the interpolant (and the SSA constants it's keyed on) is
 	 * transferred into the worker's script via {@link #mImc2Worker} first; only then does the substitution and the
