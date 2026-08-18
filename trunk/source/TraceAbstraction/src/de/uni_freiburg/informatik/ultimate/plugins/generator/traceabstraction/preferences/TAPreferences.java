@@ -99,6 +99,7 @@ public final class TAPreferences {
 	// Parallel Trace Abstraction Settings
 	private final int mThreadLimit;
 	private final boolean mParallelCegarLoop;
+	private final boolean mUseKInductionWorker;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
 	private final int mSearchLoopBound;
@@ -207,6 +208,7 @@ public final class TAPreferences {
 				IndependenceSettings.DEFAULT_SOLVER_TIMEOUT /* currently ignored; not exposed as setting */);
 
 		mParallelCegarLoop = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLEL_CEGAR_LOOP);
+		mUseKInductionWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_USE_KINDUCTION_WORKER);
 		mThreadLimit = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_THREADLIMIT);
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY);
@@ -596,6 +598,10 @@ public final class TAPreferences {
 
 	public boolean isParallelCegarLoop() {
 		return mParallelCegarLoop;
+	}
+
+	public boolean isKInductionWorkerEnabled() {
+		return mUseKInductionWorker;
 	}
 
 	public boolean minimizeAbstractionPerWorker() {

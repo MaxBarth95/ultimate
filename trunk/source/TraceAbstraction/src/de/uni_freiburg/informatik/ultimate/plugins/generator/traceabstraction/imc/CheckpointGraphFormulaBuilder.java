@@ -470,15 +470,17 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 			mLoopHead = loopHead;
 		}
 
-		static <STATE> Checkpoint<STATE> init() {
+		// public: also constructed from outside this package by callers of CheckpointGraph's public getEdge/
+		// getLoopBody API (e.g. traceabstraction.kinduction.KInduction), not just from within this package.
+		public static <STATE> Checkpoint<STATE> init() {
 			return new Checkpoint<>(Kind.INIT, null);
 		}
 
-		static <STATE> Checkpoint<STATE> fin() {
+		public static <STATE> Checkpoint<STATE> fin() {
 			return new Checkpoint<>(Kind.FINAL, null);
 		}
 
-		static <STATE> Checkpoint<STATE> loopHead(final STATE loopHead) {
+		public static <STATE> Checkpoint<STATE> loopHead(final STATE loopHead) {
 			return new Checkpoint<>(Kind.LOOP_HEAD, loopHead);
 		}
 

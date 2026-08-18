@@ -83,6 +83,8 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.prefere
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization.AutomataMinimizationTimeout;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolModelCheckingWorkerThread;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.IInvariantSupplier;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.KInductionWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.InterpolantAutomatonEnhancement;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.Minimization;
@@ -206,6 +208,13 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 					freshToolKit, predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
 					transferUtils, mTaskIdentifier);
+		}
+
+		if (id == 1 && mPref.isKInductionWorkerEnabled()) {
+			return new KInductionWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
+					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
+					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
+					transferUtils, mTaskIdentifier, IInvariantSupplier.none());
 		}
 
 		// initialize worker

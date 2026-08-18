@@ -16,7 +16,9 @@ import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IAction;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.TransFormulaBuilder;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula.Infeasibility;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateUtils;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.TermTransferrer;
@@ -26,9 +28,11 @@ import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.PureSubstitution;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder.SolverMode;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder.SolverSettings;
+import de.uni_freiburg.informatik.ultimate.logic.ApplicationTerm;
 import de.uni_freiburg.informatik.ultimate.logic.FormulaUnLet;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
+import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.Checkpoint;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.CheckpointGraph;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
@@ -160,20 +164,28 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	/**
 	 * Checks one INIT-to-FINAL path through the checkpoint graph. If the path has no loop head at all, this is a single
 	 * plain SAT check on its one edge formula. Otherwise the loop heads on the path are processed in order, one "phase"
-	 * per loop head: phase {@code p} sweeps {@code k_p = 1..MAX_K} for loop head {@code p}, with every earlier loop
-	 * head on the path frozen at whatever iteration count its own phase stabilized at, and every later loop head on the
-	 * path taken exactly one mandatory pass (it hasn't been reached yet). Each sweep step reuses exactly the same
-	 * push/{@link #assertRegionSequenceNamed}/checkSat/{@link #hasStabilized} machinery the single-loop case already
-	 * used, just with a longer, phase-appropriate region chain.
+	 * per loop head: phase {@code p} sweeps {@code k_p = 1..MAX_K} for loop head {@code p}, with every later loop head
+	 * on the path taken exactly one mandatory pass for the purpose of {@link #hasStabilized}'s search (it hasn't been
+	 * reached yet). Each sweep step reuses exactly the same push/{@link #assertRegionSequenceNamed}/checkSat/
+	 * {@link #hasStabilized} machinery the single-loop case already used, just with a longer, phase-appropriate region
+	 * chain.
 	 * <p>
-	 * <b>Soundness</b>: an {@link PathVerdict#UNSAFE} verdict is always backed by one concrete, directly re-checkable
-	 * SAT region chain - a literal prefix / fixed loop-iteration-counts / tail sequence, asserted and solved exactly
-	 * like the single-loop case, regardless of which {@code k}'s were frozen for other loop heads - so it is
-	 * unconditionally sound. A {@link PathVerdict#SAFE} verdict only proves that this sequential-freeze strategy found
-	 * no bug up to {@code MAX_K} per phase; it does <em>not</em> prove safety for arbitrary <em>joint</em> iteration
-	 * counts across multiple loop heads simultaneously (e.g. a bug only reachable by a specific combination of counts
-	 * across two different loop heads on the same path is never asserted here) - the same kind of bounded/heuristic
-	 * limitation {@code MAX_K} itself already carries for a single loop.
+	 * Once phase {@code p} stabilizes, every earlier loop head is <em>not</em> frozen at the concrete iteration count
+	 * that happened to make its own phase stabilize - that would only prove safety for that one arbitrary count,
+	 * silently missing a bug that needs a different one. Instead {@link #buildLoopInvariantSummary} turns the just-proven
+	 * inductive invariant into a "havoc, then assume" region, carrying forward the fact that it holds after <em>any</em>
+	 * number of iterations {@code n >= 0} (not just {@code k_p}) - see that method's javadoc for why over- rather than
+	 * under-approximating variables the invariant doesn't mention is the sound choice. This is what makes later phases
+	 * sound for "this loop ran any number of times", not just one lucky value.
+	 * <p>
+	 * <b>Soundness</b>: an {@link PathVerdict#UNSAFE} verdict is always backed by one concrete, directly re-checkable SAT
+	 * region chain for the loop head currently being swept - so it is sound with respect to <em>this program</em>
+	 * whenever no earlier loop head's invariant summary over-approximates by havocking a variable the bug actually
+	 * depends on (see {@link #buildLoopInvariantSummary}); such a spurious witness is directly checkable by hand against
+	 * the original program, unlike a silent false {@link PathVerdict#SAFE}. A {@link PathVerdict#SAFE} verdict proves
+	 * safety for <em>any</em> combination of iteration counts across every loop head on this path, up to the
+	 * per-phase interpolant-stabilization bound {@code MAX_K} - the same kind of bounded/heuristic limitation
+	 * {@code MAX_K} itself already carries for a single loop, now generalized to every loop head instead of exactly one.
 	 */
 	private PathVerdict runPath(final CheckpointGraph<STATE> graph, final List<Checkpoint<STATE>> path) {
 		final List<STATE> loopHeadsOnPath = new ArrayList<>();
@@ -237,7 +249,15 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 				if (hasStabilized(phaseSlice, k)) {
 					mLogger.info("IMC: path %s, loop head %s, k=%d - interpolant sequence stabilized", path, loopHead,
 							k);
-					frozenPrefix.addAll(Collections.nCopies(k, graph.getLoopBody(loopHead)));
+					// hasStabilized proved phaseSlice[0..k-1]'s disjunction ("invariant") is inductive w.r.t.
+					// loopBody and holds after ANY number n >= 0 of iterations (not just k) - see runPath's
+					// javadoc. Carrying it forward as an assumed fact (instead of freezing exactly k concrete
+					// copies of loopBody) is what lets later phases verify "this loop ran any number of times",
+					// closing the gap where a bug needing some other iteration count of this loop was never
+					// explored once it got frozen at one arbitrary, lucky k.
+					final Term invariant =
+							SmtUtils.or(mWorkerMgdScript.getScript(), Arrays.asList(phaseSlice).subList(0, k));
+					frozenPrefix.add(buildLoopInvariantSummary(invariant));
 					final Checkpoint<STATE> next =
 							p + 1 < loopHeadsOnPath.size() ? Checkpoint.loopHead(loopHeadsOnPath.get(p + 1))
 									: Checkpoint.fin();
@@ -275,6 +295,47 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 		}
 		tail.add(graph.getEdge(Checkpoint.loopHead(current), Checkpoint.fin()));
 		return tail;
+	}
+
+	/**
+	 * Turns a proven-inductive loop invariant (a {@link Term}, native to {@link #mWorkerMgdScript}, over program
+	 * vars' {@link IProgramVar#getDefaultConstant() default constants} - see {@link #unSsaToRepresentativeFrame})
+	 * into a "havoc, then assume" {@link UnmodifiableTransFormula}: every program var that {@code invariant}
+	 * actually constrains gets a fresh outVar tied to that constraint; every other var gets no outVar at all, so
+	 * the next region's own SSA indexing will declare a fresh, wholly unconstrained constant for it (a genuine
+	 * havoc). No inVars are added - {@code invariant} is self-contained and does not depend on how the loop head
+	 * was reached.
+	 * <p>
+	 * This is deliberately an over-approximation for any variable the invariant doesn't mention (rather than
+	 * assuming it stayed unchanged): an interpolant is only guaranteed sufficient for its own infeasibility proof,
+	 * not a complete description of the loop's effect on every variable, so treating an unmentioned-but-modified
+	 * variable as unchanged could silently rule out real post-loop values - the same class of false-{@code SAFE}
+	 * mistake this method exists to fix (see the call site in {@link #runPath}). Over-approximating instead can in
+	 * principle make a later {@link PathVerdict#UNSAFE} verdict a spurious artifact of the havoc rather than the
+	 * original program - a materially better failure mode than a silent false {@code SAFE}, since a concrete
+	 * witness is directly re-checkable against the original program by hand.
+	 */
+	private UnmodifiableTransFormula buildLoopInvariantSummary(final Term invariant) {
+		final Map<Term, IProgramVar> defaultConstant2ProgVar = new HashMap<>();
+		for (final IProgramVar pv : mConstants2BoogieVar.values()) {
+			defaultConstant2ProgVar.put(pv.getDefaultConstant(), pv);
+		}
+		final TransFormulaBuilder tfb = new TransFormulaBuilder(null, null, true, null, true, null, true);
+		final Map<Term, Term> substitution = new HashMap<>();
+		for (final ApplicationTerm constant : SmtUtils.extractConstants(invariant, false)) {
+			final IProgramVar pv = defaultConstant2ProgVar.get(constant);
+			if (pv == null) {
+				// Not one of the program vars in play for this run (e.g. a solver-internal symbol); nothing to do.
+				continue;
+			}
+			final TermVariable fresh =
+					mWorkerMgdScript.constructFreshTermVariable(pv.getGloballyUniqueId(), pv.getTermVariable().getSort());
+			tfb.addOutVar(pv, fresh);
+			substitution.put(constant, fresh);
+		}
+		tfb.setFormula(PureSubstitution.apply(mWorkerMgdScript, substitution, invariant));
+		tfb.setInfeasibility(Infeasibility.NOT_DETERMINED);
+		return tfb.finishConstruction(mWorkerMgdScript);
 	}
 
 	private SolverSettings getSolverSetting() {
