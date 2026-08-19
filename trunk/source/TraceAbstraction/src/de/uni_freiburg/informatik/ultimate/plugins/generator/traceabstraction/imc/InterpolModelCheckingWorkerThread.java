@@ -196,7 +196,10 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 					return;
 				} else {
 
-					throw new AssertionError("No Support for CEX yet");
+//					throw new AssertionError("No Support for CEX yet");
+					mBlockingQueueForResults.put(new WorkerThreadResult<>(null, null, null, true, null, false, null,
+							null, null, null, false));
+					return;
 				}
 
 			} catch (final InterruptedException e) {
