@@ -111,50 +111,65 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Result of checking one INIT-to-FINAL path through the checkpoint graph (see {@link #runPath}).
+	 * Result of checking one INIT-to-FINAL path through the checkpoint graph (see {@link #runPath}). Package-visible
+	 * (not {@code private}) so {@link InterproceduralImcOrchestrator} can aggregate verdicts across procedures.
 	 */
-	private enum PathVerdict {
+	enum PathVerdict {
 		SAFE, UNSAFE, UNKNOWN
 	}
 
 	/**
-	 * Runs bounded-unwinding Interpolation-Based Model Checking on a nested word automaton (path program or
-	 * abstraction) that represents a program with any number of non-nested loops.
-	 *
-	 * The checkpoint graph (program entry / every loop head / accepting-or-error states, connected by <b>all</b>-paths
-	 * loop-free edge formulas, plus one loop-body formula per loop head) comes from
-	 * {@link CheckpointGraphFormulaBuilder}. Execution may visit only a subset of the loop heads, possibly several in
-	 * sequence, and different branches may visit different subsets/orders, so every distinct INIT-to-FINAL path is
-	 * checked in turn via {@link #runPath}; the program is unsafe as soon as any path is, and safe only if every path
-	 * is.
+	 * {@link #runPath}'s result: the verdict, plus - only when {@code verdict == SAFE} - the concrete region chain
+	 * that proved it (the same chain already asserted/checked, exposed rather than discarded). This is what lets
+	 * {@link InterproceduralImcOrchestrator} reuse the exact formulas already proven for one path (including any
+	 * {@link #buildLoopInvariantSummary} regions) when composing a procedure summary, instead of recomputing a
+	 * second, separate approximation.
+	 */
+	static final class PathResult {
+		final PathVerdict verdict;
+		final List<UnmodifiableTransFormula> provenRegionChain;
+
+		private PathResult(final PathVerdict verdict, final List<UnmodifiableTransFormula> provenRegionChain) {
+			this.verdict = verdict;
+			this.provenRegionChain = provenRegionChain;
+		}
+
+		static PathResult safe(final List<UnmodifiableTransFormula> regionChain) {
+			return new PathResult(PathVerdict.SAFE, regionChain);
+		}
+
+		static PathResult unsafe() {
+			return new PathResult(PathVerdict.UNSAFE, null);
+		}
+
+		static PathResult unknown() {
+			return new PathResult(PathVerdict.UNKNOWN, null);
+		}
+	}
+
+	/**
+	 * Runs bounded-unwinding Interpolation-Based Model Checking across the whole (non-recursive) call graph of a
+	 * nested word automaton (path program or abstraction) that represents a program with any number of non-nested
+	 * loops and any number of non-recursive function calls.
+	 * <p>
+	 * The actual per-procedure orchestration - building each procedure's checkpoint graph
+	 * ({@link CheckpointGraphFormulaBuilder}), checking every INIT-to-FINAL path on it via {@link #runPath}, and
+	 * composing proven-safe paths into a callee's summary for its callers - is
+	 * {@link InterproceduralImcOrchestrator}'s job; recursion is rejected up front by
+	 * {@link ProcedureCallGraph} (a virtual call edge needs its callee's summary to already exist, which is
+	 * undefined for a cycle). This method just drives that orchestrator once and translates its aggregated
+	 * {@link PathVerdict} into {@link #mSafe}/{@link #mSolverReturnedUnknown}.
 	 */
 	private void run() throws AutomataLibraryException {
 		mMgdImcScript.lock(mIMCLock);
 		mLogger.info("IMC: starting bounded-unwinding interpolation-based model checking (MAX_K=%d)", MAX_K);
 
-		final CheckpointGraph<STATE> graph =
-				new CheckpointGraphFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
-		final List<List<Checkpoint<STATE>>> paths = graph.enumeratePaths();
-		mLogger.info("IMC: checkpoint graph ready (%d loop head(s)), %d path(s) to check", graph.getLoopHeads().size(),
-				paths.size());
+		final InterproceduralImcOrchestrator<LETTER, STATE> orchestrator = new InterproceduralImcOrchestrator<>(
+				mServices, mLogger, mCsToolkit, mWorkerMgdScript, mAbstraction, this::runPath);
+		final PathVerdict overall = orchestrator.run();
 
-		boolean unsafe = false;
-		boolean unknown = false;
-		for (final List<Checkpoint<STATE>> path : paths) {
-			mLogger.info("IMC: checking path %s", path);
-			final PathVerdict verdict = runPath(graph, path);
-			mLogger.info("IMC: path %s - verdict %s", path, verdict);
-			if (verdict == PathVerdict.UNSAFE) {
-				unsafe = true;
-				break;
-			}
-			if (verdict == PathVerdict.UNKNOWN) {
-				unknown = true;
-			}
-		}
-
-		mSafe = !unsafe && !unknown;
-		mSolverReturnedUnknown = !unsafe && unknown;
+		mSafe = overall == PathVerdict.SAFE;
+		mSolverReturnedUnknown = overall == PathVerdict.UNKNOWN;
 
 		mMgdImcScript.unlock(mIMCLock);
 		mLogger.info("is safe " + (mSafe && !mSolverReturnedUnknown));
@@ -187,7 +202,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * per-phase interpolant-stabilization bound {@code MAX_K} - the same kind of bounded/heuristic limitation
 	 * {@code MAX_K} itself already carries for a single loop, now generalized to every loop head instead of exactly one.
 	 */
-	private PathVerdict runPath(final CheckpointGraph<STATE> graph, final List<Checkpoint<STATE>> path) {
+	private PathResult runPath(final CheckpointGraph<STATE> graph, final List<Checkpoint<STATE>> path) {
 		final List<STATE> loopHeadsOnPath = new ArrayList<>();
 		for (final Checkpoint<STATE> checkpoint : path) {
 			if (checkpoint.isLoopHead()) {
@@ -202,9 +217,9 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 			final LBool sat = mMgdImcScript.checkSat(mIMCLock);
 			mMgdImcScript.pop(mIMCLock, 1);
 			if (sat == LBool.SAT) {
-				return PathVerdict.UNSAFE;
+				return PathResult.unsafe();
 			}
-			return sat == LBool.UNKNOWN ? PathVerdict.UNKNOWN : PathVerdict.SAFE;
+			return sat == LBool.UNKNOWN ? PathResult.unknown() : PathResult.safe(regions);
 		}
 
 		final List<UnmodifiableTransFormula> frozenPrefix = new ArrayList<>();
@@ -231,11 +246,11 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 
 				if (sat == LBool.SAT) {
 					mMgdImcScript.pop(mIMCLock, 1);
-					return PathVerdict.UNSAFE;
+					return PathResult.unsafe();
 				}
 				if (sat == LBool.UNKNOWN) {
 					mMgdImcScript.pop(mIMCLock, 1);
-					return PathVerdict.UNKNOWN;
+					return PathResult.unknown();
 				}
 
 				// UNSAT: extract this phase's k+1 cut-point interpolants before popping the scope. Cutpoint j of
@@ -271,10 +286,10 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 			if (!stabilized) {
 				mLogger.info("IMC: path %s, loop head %s - reached MAX_K=%d without stabilizing or finding a bug", path,
 						loopHead, MAX_K);
-				return PathVerdict.UNKNOWN;
+				return PathResult.unknown();
 			}
 		}
-		return PathVerdict.SAFE;
+		return PathResult.safe(frozenPrefix);
 	}
 
 	/**

@@ -53,8 +53,19 @@ import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
  * ({@code getEdge(INIT, loopHead)}, {@code getLoopBody(loopHead)}, {@code getEdge(loopHead, FINAL)}) this class used
  * to compute directly as prefix/loopBody/suffix.
  * <p>
- * Assumes procedures are already inlined: only internal transitions are considered, both at loop heads and
- * throughout the checkpoint graph. TODO: support call/return once that assumption is lifted.
+ * Operates over an explicit {@code scopeStates}/{@code initStates}/{@code finalStates} scope rather than always the
+ * whole automaton, so a single procedure's body can be built in isolation - see
+ * {@link InterproceduralImcOrchestrator}, which drives one {@link CheckpointGraphFormulaBuilder} instance per
+ * procedure (in call-graph callee-first order, via {@link ProcedureCallGraph}) to support real, non-recursive
+ * function calls. A call site is never added to the graph as a raw call/return pair: this class's core machinery
+ * ({@link GenericLabeledGraph}/{@link PathExpressionComputer}) is a flat graph with no call/return stack matching,
+ * so a raw call/return pair could get matched to the <em>wrong</em> return (e.g. a procedure called from two call
+ * sites). Instead, every call site's whole call-to-return span is collapsed into one precomputed <b>virtual edge</b>
+ * ({@code virtualCallEdges}, built by {@link InterproceduralImcOrchestrator} from the callee's own already-computed
+ * summary) before this class ever runs {@link PathExpressionComputer} - see {@link Edge} and
+ * {@link #combinedSuccessors}. This is also why recursion can't be supported this way: a virtual edge needs its
+ * callee's summary to already exist, which is undefined for a cycle in the call graph (rejected up front by
+ * {@link ProcedureCallGraph}).
  *
  * @param <LETTER>
  *            letter type
@@ -75,16 +86,41 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 	private final ILogger mLogger;
 	private final ManagedScript mMgdScript;
 	private final INestedWordAutomaton<LETTER, STATE> mAbstraction;
+	// The states/edges this instance builds a checkpoint graph over - a single procedure's body when driven by
+	// InterproceduralImcOrchestrator, or the whole automaton via the convenience constructor below (used by
+	// KInduction.java, and equivalent to this class's pre-interprocedural behavior).
+	private final Set<STATE> mScopeStates;
+	private final Set<STATE> mInitStates;
+	private final Collection<STATE> mFinalStates;
+	private final Map<STATE, Map<STATE, UnmodifiableTransFormula>> mVirtualCallEdges;
 	// Plain term transfer only - IProgramVar identity is never translated (see transferLetterFormula), matching how
 	// NestedSsaBuilder's own VariableVersioneer moves terms between scripts elsewhere in this codebase.
 	private final Map<LETTER, UnmodifiableTransFormula> mLetterCache = new HashMap<>();
 
+	/**
+	 * Whole-automaton convenience constructor: no scoping, no virtual call edges - exactly this class's
+	 * pre-interprocedural behavior (only real internal transitions are considered, procedures must be pre-inlined
+	 * for correctness). Kept for {@code KInduction.java}, which does not (yet) go through
+	 * {@link InterproceduralImcOrchestrator}.
+	 */
 	public CheckpointGraphFormulaBuilder(final IUltimateServiceProvider services, final ILogger logger,
 			final ManagedScript mgdScript, final INestedWordAutomaton<LETTER, STATE> abstraction) {
+		this(services, logger, mgdScript, abstraction, abstraction.getStates(), abstraction.getInitialStates(),
+				abstraction.getFinalStates(), Collections.emptyMap());
+	}
+
+	public CheckpointGraphFormulaBuilder(final IUltimateServiceProvider services, final ILogger logger,
+			final ManagedScript mgdScript, final INestedWordAutomaton<LETTER, STATE> abstraction,
+			final Set<STATE> scopeStates, final Set<STATE> initStates, final Collection<STATE> finalStates,
+			final Map<STATE, Map<STATE, UnmodifiableTransFormula>> virtualCallEdges) {
 		mServices = services;
 		mLogger = logger;
 		mMgdScript = mgdScript;
 		mAbstraction = abstraction;
+		mScopeStates = scopeStates;
+		mInitStates = initStates;
+		mFinalStates = finalStates;
+		mVirtualCallEdges = virtualCallEdges;
 	}
 
 	/**
@@ -95,8 +131,8 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 		final Set<STATE> loopHeads = findLoopHeads();
 		mLogger.info("IMC: found %d loop head(s): %s", loopHeads.size(), loopHeads);
 
-		final Map<STATE, Pair<LETTER, STATE>> enters = new LinkedHashMap<>();
-		final Map<STATE, Pair<LETTER, STATE>> exits = new LinkedHashMap<>();
+		final Map<STATE, Pair<Edge<LETTER>, STATE>> enters = new LinkedHashMap<>();
+		final Map<STATE, Pair<Edge<LETTER>, STATE>> exits = new LinkedHashMap<>();
 		for (final STATE loopHead : loopHeads) {
 			classifyLoopHeadTransitions(loopHead, enters, exits);
 			mLogger.info("IMC: loop head %s - enter %s -> %s, exit %s -> %s", loopHead,
@@ -104,18 +140,18 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 					exits.get(loopHead).getSecond());
 		}
 
-		final GenericLabeledGraph<STATE, LETTER> graph = buildCutGraph(loopHeads);
+		final GenericLabeledGraph<STATE, Edge<LETTER>> graph = buildCutGraph(loopHeads);
 		mLogger.info("IMC: built checkpoint graph with %d states and %d edges (loop heads excluded from outgoing)",
 				graph.getNodes().size(), graph.getEdges().size());
 
-		final PathExpressionComputer<STATE, LETTER> pathExprComputer = new PathExpressionComputer<>(graph);
+		final PathExpressionComputer<STATE, Edge<LETTER>> pathExprComputer = new PathExpressionComputer<>(graph);
 		final RegexToTransFormula evaluator = new RegexToTransFormula();
 
 		validateNoNesting(loopHeads, enters, pathExprComputer, evaluator);
 
 		final Map<STATE, UnmodifiableTransFormula> loopBodies = new LinkedHashMap<>();
 		for (final STATE loopHead : loopHeads) {
-			final Pair<LETTER, STATE> enter = enters.get(loopHead);
+			final Pair<Edge<LETTER>, STATE> enter = enters.get(loopHead);
 			final UnmodifiableTransFormula tail =
 					evaluator.evaluate(pathExprComputer.exprBetween(enter.getSecond(), loopHead));
 			if (tail == null) {
@@ -156,25 +192,23 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 		return new CheckpointGraph<>(loopHeads, loopBodies, edges);
 	}
 
-	private void classifyLoopHeadTransitions(final STATE loopHead, final Map<STATE, Pair<LETTER, STATE>> enters,
-			final Map<STATE, Pair<LETTER, STATE>> exits) {
-		Pair<LETTER, STATE> enter = null;
-		Pair<LETTER, STATE> exit = null;
-		// TODO: only internal transitions considered at the loop head; extend to call/return once the loop
-		// condition itself may involve a call.
-		for (final OutgoingInternalTransition<LETTER, STATE> t : mAbstraction.internalSuccessors(loopHead)) {
-			if (isLoopExitTransition(loopHead, t.getSucc())) {
+	private void classifyLoopHeadTransitions(final STATE loopHead,
+			final Map<STATE, Pair<Edge<LETTER>, STATE>> enters, final Map<STATE, Pair<Edge<LETTER>, STATE>> exits) {
+		Pair<Edge<LETTER>, STATE> enter = null;
+		Pair<Edge<LETTER>, STATE> exit = null;
+		for (final Pair<Edge<LETTER>, STATE> t : combinedSuccessors(loopHead)) {
+			if (isLoopExitTransition(loopHead, t.getSecond())) {
 				if (exit != null) {
 					throw new UnsupportedOperationException("CheckpointGraphFormulaBuilder currently supports only "
 							+ "a single loop-exit transition at loop head " + loopHead);
 				}
-				exit = new Pair<>(t.getLetter(), t.getSucc());
+				exit = t;
 			} else {
 				if (enter != null) {
 					throw new UnsupportedOperationException("CheckpointGraphFormulaBuilder currently supports only "
 							+ "a single loop-entry transition at loop head " + loopHead);
 				}
-				enter = new Pair<>(t.getLetter(), t.getSucc());
+				enter = t;
 			}
 		}
 		if (enter == null || exit == null) {
@@ -186,25 +220,47 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Copies the whole automaton, suppressing every loop head's outgoing edges. Every cycle in the automaton passes
-	 * through at least one {@link LoopEntryAnnotation}-marked state, so suppressing all of them here is what keeps
-	 * this graph acyclic/Star-free for {@link PathExpressionComputer}, generalizing the single-loop-head argument
-	 * this class used to rely on.
+	 * Copies {@link #mScopeStates}, suppressing every loop head's outgoing edges. Every cycle in the automaton
+	 * passes through at least one {@link LoopEntryAnnotation}-marked state, so suppressing all of them here is what
+	 * keeps this graph acyclic/Star-free for {@link PathExpressionComputer}, generalizing the single-loop-head
+	 * argument this class used to rely on.
 	 */
-	private GenericLabeledGraph<STATE, LETTER> buildCutGraph(final Set<STATE> loopHeads) {
-		final GenericLabeledGraph<STATE, LETTER> graph = new GenericLabeledGraph<>();
-		// TODO: only internal transitions are added to the graph; extend to call/return edges once procedures
-		// aren't assumed pre-inlined.
-		for (final STATE state : mAbstraction.getStates()) {
+	private GenericLabeledGraph<STATE, Edge<LETTER>> buildCutGraph(final Set<STATE> loopHeads) {
+		final GenericLabeledGraph<STATE, Edge<LETTER>> graph = new GenericLabeledGraph<>();
+		for (final STATE state : mScopeStates) {
 			graph.addNode(state);
 			if (loopHeads.contains(state)) {
 				continue;
 			}
-			for (final OutgoingInternalTransition<LETTER, STATE> t : mAbstraction.internalSuccessors(state)) {
-				graph.addEdge(state, t.getLetter(), t.getSucc());
+			for (final Pair<Edge<LETTER>, STATE> t : combinedSuccessors(state)) {
+				graph.addEdge(state, t.getFirst(), t.getSecond());
 			}
 		}
 		return graph;
+	}
+
+	/**
+	 * Every way to leave {@code state} while staying inside {@link #mScopeStates}: real internal successors (see
+	 * {@link Edge#real}), plus one virtual edge per precomputed call-site summary in {@link #mVirtualCallEdges} (see
+	 * {@link Edge#virtual}). Used everywhere this class used to iterate {@code internalSuccessors} directly, so a
+	 * whole call-to-return round trip is indistinguishable from a real internal edge to loop
+	 * classification/reachability/cut-graph construction - the class it happens inside doesn't need to know a call
+	 * was involved at all.
+	 */
+	private Iterable<Pair<Edge<LETTER>, STATE>> combinedSuccessors(final STATE state) {
+		final List<Pair<Edge<LETTER>, STATE>> result = new ArrayList<>();
+		for (final OutgoingInternalTransition<LETTER, STATE> t : mAbstraction.internalSuccessors(state)) {
+			if (mScopeStates.contains(t.getSucc())) {
+				result.add(new Pair<>(Edge.real(t.getLetter()), t.getSucc()));
+			}
+		}
+		final Map<STATE, UnmodifiableTransFormula> virtualFromHere = mVirtualCallEdges.get(state);
+		if (virtualFromHere != null) {
+			for (final Map.Entry<STATE, UnmodifiableTransFormula> entry : virtualFromHere.entrySet()) {
+				result.add(new Pair<>(Edge.virtual(entry.getValue()), entry.getKey()));
+			}
+		}
+		return result;
 	}
 
 	/**
@@ -213,8 +269,8 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 	 * Checked directly via the same {@code exprBetween}/{@code evaluate} calls used everywhere else in this class
 	 * (no separate reachability search needed), before any formula is built, so a violation fails fast.
 	 */
-	private void validateNoNesting(final Set<STATE> loopHeads, final Map<STATE, Pair<LETTER, STATE>> enters,
-			final PathExpressionComputer<STATE, LETTER> pathExprComputer, final RegexToTransFormula evaluator) {
+	private void validateNoNesting(final Set<STATE> loopHeads, final Map<STATE, Pair<Edge<LETTER>, STATE>> enters,
+			final PathExpressionComputer<STATE, Edge<LETTER>> pathExprComputer, final RegexToTransFormula evaluator) {
 		for (final STATE outer : loopHeads) {
 			final STATE enterSucc = enters.get(outer).getSecond();
 			for (final STATE inner : loopHeads) {
@@ -238,7 +294,7 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 	 */
 	private Collection<STATE> representativeStates(final Checkpoint<STATE> checkpoint) {
 		if (checkpoint.isFinal()) {
-			return mAbstraction.getFinalStates();
+			return mFinalStates;
 		}
 		if (checkpoint.isLoopHead()) {
 			return Collections.singleton(checkpoint.getLoopHead());
@@ -263,11 +319,11 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 	 * </ul>
 	 */
 	private UnmodifiableTransFormula computeEdge(final Checkpoint<STATE> from, final Checkpoint<STATE> to,
-			final Map<STATE, Pair<LETTER, STATE>> enters, final Map<STATE, Pair<LETTER, STATE>> exits,
-			final PathExpressionComputer<STATE, LETTER> pathExprComputer, final RegexToTransFormula evaluator) {
+			final Map<STATE, Pair<Edge<LETTER>, STATE>> enters, final Map<STATE, Pair<Edge<LETTER>, STATE>> exits,
+			final PathExpressionComputer<STATE, Edge<LETTER>> pathExprComputer, final RegexToTransFormula evaluator) {
 		final List<UnmodifiableTransFormula> alternatives = new ArrayList<>();
 		if (from.isInit()) {
-			for (final STATE init : mAbstraction.getInitialStates()) {
+			for (final STATE init : mInitStates) {
 				for (final STATE target : representativeStates(to)) {
 					final UnmodifiableTransFormula tf = evaluator.evaluate(pathExprComputer.exprBetween(init, target));
 					if (tf != null) {
@@ -276,8 +332,8 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 				}
 			}
 		} else if (from.isLoopHead()) {
-			final Pair<LETTER, STATE> exit = exits.get(from.getLoopHead());
-			final Pair<LETTER, STATE> enter = enters.get(from.getLoopHead());
+			final Pair<Edge<LETTER>, STATE> exit = exits.get(from.getLoopHead());
+			final Pair<Edge<LETTER>, STATE> enter = enters.get(from.getLoopHead());
 			for (final STATE target : representativeStates(to)) {
 				final UnmodifiableTransFormula exitTail =
 						evaluator.evaluate(pathExprComputer.exprBetween(exit.getSecond(), target));
@@ -301,13 +357,23 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 	 * with a mandatory alternative (only {@code loopBody} today) check for {@code null} themselves.
 	 */
 	private UnmodifiableTransFormula combine(final List<UnmodifiableTransFormula> alternatives) {
+		return combineAlternatives(mLogger, mServices, mMgdScript, alternatives);
+	}
+
+	/**
+	 * Same disjoining logic as {@link #combine}, exposed statically so {@link InterproceduralImcOrchestrator} can
+	 * reuse it to disjoin several proven-SAFE paths' composed effects into one procedure summary, without needing a
+	 * {@link CheckpointGraphFormulaBuilder} instance of its own.
+	 */
+	static UnmodifiableTransFormula combineAlternatives(final ILogger logger, final IUltimateServiceProvider services,
+			final ManagedScript mgdScript, final List<UnmodifiableTransFormula> alternatives) {
 		if (alternatives.isEmpty()) {
 			return null;
 		}
 		if (alternatives.size() == 1) {
 			return alternatives.get(0);
 		}
-		return TransFormulaUtils.parallelComposition(mLogger, mServices, mMgdScript, null, false, true,
+		return TransFormulaUtils.parallelComposition(logger, services, mgdScript, null, false, true,
 				alternatives.toArray(new UnmodifiableTransFormula[0]));
 	}
 
@@ -328,8 +394,8 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Simple BFS reachability check over internal transitions only (consistent with the "procedures inlined"
-	 * assumption elsewhere in this class). TODO: extend to call/return once that assumption is lifted.
+	 * Simple BFS reachability check over {@link #combinedSuccessors} (real internal transitions plus virtual call
+	 * edges - see the class javadoc).
 	 */
 	private boolean canReach(final STATE from, final STATE target) {
 		if (from.equals(target)) {
@@ -341,8 +407,8 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 		worklist.add(from);
 		while (!worklist.isEmpty()) {
 			final STATE state = worklist.poll();
-			for (final OutgoingInternalTransition<LETTER, STATE> t : mAbstraction.internalSuccessors(state)) {
-				final STATE succ = t.getSucc();
+			for (final Pair<Edge<LETTER>, STATE> t : combinedSuccessors(state)) {
+				final STATE succ = t.getSecond();
 				if (succ.equals(target)) {
 					return true;
 				}
@@ -360,12 +426,12 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Finds every loop head of {@link #mAbstraction}. Zero loop heads is the legitimate loop-free-program case, not
-	 * an error.
+	 * Finds every loop head within {@link #mScopeStates}. Zero loop heads is the legitimate loop-free-program (or
+	 * loop-free-procedure) case, not an error.
 	 */
 	private Set<STATE> findLoopHeads() {
 		final Set<STATE> loopHeads = new LinkedHashSet<>();
-		for (final STATE state : mAbstraction.getStates()) {
+		for (final STATE state : mScopeStates) {
 			if (isLoopEntryLocation(state)) {
 				loopHeads.add(state);
 			}
@@ -385,13 +451,17 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 	 * The checkpoint-graph regions are guaranteed acyclic by construction (every loop head contributes no outgoing
 	 * edges in the graph passed to {@link PathExpressionComputer}), so {@link Star} should never actually occur.
 	 */
-	private final class RegexToTransFormula implements IRegexVisitor<LETTER, UnmodifiableTransFormula, Void> {
+	private final class RegexToTransFormula implements IRegexVisitor<Edge<LETTER>, UnmodifiableTransFormula, Void> {
 
-		UnmodifiableTransFormula evaluate(final IRegex<LETTER> regex) {
+		UnmodifiableTransFormula evaluate(final IRegex<Edge<LETTER>> regex) {
 			return regex.accept(this);
 		}
 
-		UnmodifiableTransFormula letterFormula(final LETTER letter) {
+		UnmodifiableTransFormula letterFormula(final Edge<LETTER> edge) {
+			if (edge.isVirtual()) {
+				return edge.getVirtualFormula();
+			}
+			final LETTER letter = edge.getRealLetter();
 			if (mLetterCache.containsKey(letter)) {
 				return mLetterCache.get(letter);
 			}
@@ -401,7 +471,7 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 		}
 
 		@Override
-		public UnmodifiableTransFormula visit(final Union<LETTER> union, final Void argument) {
+		public UnmodifiableTransFormula visit(final Union<Edge<LETTER>> union, final Void argument) {
 			final UnmodifiableTransFormula first = evaluate(union.getFirst());
 			final UnmodifiableTransFormula second = evaluate(union.getSecond());
 			if (first == null) {
@@ -415,7 +485,7 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 		}
 
 		@Override
-		public UnmodifiableTransFormula visit(final Concatenation<LETTER> concatenation, final Void argument) {
+		public UnmodifiableTransFormula visit(final Concatenation<Edge<LETTER>> concatenation, final Void argument) {
 			final UnmodifiableTransFormula first = evaluate(concatenation.getFirst());
 			if (first == null) {
 				return null;
@@ -428,26 +498,67 @@ public class CheckpointGraphFormulaBuilder<LETTER extends IAction, STATE> {
 		}
 
 		@Override
-		public UnmodifiableTransFormula visit(final Star<LETTER> star, final Void argument) {
+		public UnmodifiableTransFormula visit(final Star<Edge<LETTER>> star, final Void argument) {
 			throw new AssertionError("Unexpected cycle in checkpoint graph; non-nesting invariant violated");
 		}
 
 		@Override
-		public UnmodifiableTransFormula visit(final Literal<LETTER> literal, final Void argument) {
+		public UnmodifiableTransFormula visit(final Literal<Edge<LETTER>> literal, final Void argument) {
 			return letterFormula(literal.getLetter());
 		}
 
 		@Override
-		public UnmodifiableTransFormula visit(final Epsilon<LETTER> epsilon, final Void argument) {
+		public UnmodifiableTransFormula visit(final Epsilon<Edge<LETTER>> epsilon, final Void argument) {
 			return TransFormulaBuilder.getTrivialTransFormula(mMgdScript);
 		}
 
 		@Override
-		public UnmodifiableTransFormula visit(final EmptySet<LETTER> emptySet, final Void argument) {
-			// No path at all for this (sub-)expression. TODO: once calls are supported, this might mean "a path
-			// exists but requires a call," not "no path" - for now (procedures assumed inlined) it genuinely
-			// means unreachable via internal transitions.
+		public UnmodifiableTransFormula visit(final EmptySet<Edge<LETTER>> emptySet, final Void argument) {
+			// No path at all for this (sub-)expression, within this scope.
 			return null;
+		}
+	}
+
+	/**
+	 * One edge of the cut graph passed to {@link PathExpressionComputer}: either a real automaton letter, or a
+	 * precomputed virtual edge summarizing a whole call-to-return span (see {@link #mVirtualCallEdges}). Wrapping
+	 * both in one type is what lets {@link #combinedSuccessors} (and therefore {@link #buildCutGraph},
+	 * {@link #canReach}, {@link #classifyLoopHeadTransitions}) treat a call round trip exactly like a real internal
+	 * edge, without {@link PathExpressionComputer} itself ever needing to understand calls or returns - see the
+	 * class javadoc for why raw call/return edges can't be added to this graph directly.
+	 */
+	static final class Edge<LETTER> {
+		private final LETTER mRealLetter;
+		private final UnmodifiableTransFormula mVirtualFormula;
+
+		private Edge(final LETTER realLetter, final UnmodifiableTransFormula virtualFormula) {
+			mRealLetter = realLetter;
+			mVirtualFormula = virtualFormula;
+		}
+
+		static <L> Edge<L> real(final L letter) {
+			return new Edge<>(letter, null);
+		}
+
+		static <L> Edge<L> virtual(final UnmodifiableTransFormula formula) {
+			return new Edge<>(null, formula);
+		}
+
+		boolean isVirtual() {
+			return mRealLetter == null;
+		}
+
+		LETTER getRealLetter() {
+			return mRealLetter;
+		}
+
+		UnmodifiableTransFormula getVirtualFormula() {
+			return mVirtualFormula;
+		}
+
+		@Override
+		public String toString() {
+			return isVirtual() ? "virtual(call)" : String.valueOf(mRealLetter);
 		}
 	}
 
