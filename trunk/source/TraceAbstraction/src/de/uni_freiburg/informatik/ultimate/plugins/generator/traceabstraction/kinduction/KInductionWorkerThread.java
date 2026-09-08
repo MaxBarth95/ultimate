@@ -49,16 +49,17 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.Pr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
 
 /**
  * Worker thread running {@link KInduction} inside {@link ParallelNwaCegarLoop}'s thread pool, modeled directly on
- * {@code InterpolModelCheckingWorkerThread} (same constructor shape, same single-shot {@link #run()} behavior,
- * same {@link WorkerThreadResult} sentinel on success). Unlike that class, this one does not carry the dead
+ * {@code InterpolModelCheckingWorkerThread} (same constructor shape, same single-shot {@link #run()} behavior, same
+ * {@link WorkerThreadResult} sentinel on success). Unlike that class, this one does not carry the dead
  * counterexample-refinement scaffolding ({@code constructErrorAutomatonAndPutItInQueue} and friends) - nothing in
- * either worker's current {@link #run()} path calls it, since neither algorithm can produce a counterexample yet
- * (see {@link KInduction}'s own TODO).
+ * either worker's current {@link #run()} path calls it, since neither algorithm can produce a counterexample yet (see
+ * {@link KInduction}'s own TODO).
  *
  * @author Max Barth (max.barth@lmu.de)
  */
@@ -75,7 +76,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	private final boolean mComputeHoareAnnotation;
 	private final TaCheckAndRefinementPreferences<L> mTaCheckAndRefinementPrefs;
 	public final ParallelNwaCegarLoop<L, A> mMainThread;
-	private INestedWordAutomaton<L, IPredicate> mAbstraction;
+	private final INestedWordAutomaton<L, IPredicate> mAbstraction;
 	// communication with controller
 	private final BlockingQueue<WorkerThreadResult<L, A>> mBlockingQueueForResults;
 	private final BlockingQueue<IRun<L, ?>> mWorkerTaskQueue;
@@ -123,8 +124,8 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 
 				final boolean safe = runKInduction();
 				if (safe) {
-					mBlockingQueueForResults.put(new WorkerThreadResult<>(null, null, null, false, null, false, null,
-							null, null, null, false));
+					mBlockingQueueForResults
+							.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null, null, null, null, null, false));
 					return;
 				}
 				throw new AssertionError("No Support for CEX yet");
@@ -133,8 +134,8 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 				Thread.currentThread().interrupt();
 			} catch (final Throwable t) {
 				try {
-					mBlockingQueueForResults.put(new WorkerThreadResult<>(null, null, null, false, null, false, null,
-							null, null, null, true));
+					mBlockingQueueForResults
+							.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null, null, null, null, null, true));
 				} catch (final InterruptedException e) {
 					e.printStackTrace();
 				}

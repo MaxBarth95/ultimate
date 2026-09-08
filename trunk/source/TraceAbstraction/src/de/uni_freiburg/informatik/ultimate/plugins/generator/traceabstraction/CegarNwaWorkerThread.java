@@ -77,6 +77,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.Ab
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop.Result;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.NwaCegarLoop.AutomatonType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker.TransferMode;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.errorabstraction.ErrorGeneralizationEngine;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.AbstractInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.DeterministicInterpolantAutomaton;
@@ -158,6 +159,9 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		mPredicateFactory = predicateFactory;
 		mPredicateFactoryInterpolantAutomata = predicateFactoryInterpolantAutomata;
 		mStateFactoryForRefinement = stateFactoryForRefinement;
+		if (computeHoareAnnotation) {
+			throw new AssertionError("unsupported");
+		}
 		mComputeHoareAnnotation = computeHoareAnnotation;
 		mSimplificationTechnique = pref.getSimplificationTechnique();
 		mMainThread = mainThread;
@@ -168,14 +172,13 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		mProgramCache = new PathProgramCache<>(mLogger);
 
 		final Thread.UncaughtExceptionHandler exhandler = (th, ex) -> {
-			mThreadResult = new WorkerThreadResult<>(null, null, null, false, null, false, AutomatonType.ERROR, null,
-					mCounterexample, null, true);
+			mThreadResult = new WorkerThreadResult<>(WorkerType.TA, null, null, null, mCounterexample, null, true);
 			try {
 				mBlockingQueueForResults.put(mThreadResult);
+				throw new AssertionError("Worker Thread failed due to " + ex);
 			} catch (final InterruptedException e) {
 				throw new AssertionError("Worker Thread failed due to " + e);
 			}
-			mMainThread.reportFailedContinuesWorkerThread();
 		};
 		Thread.currentThread().setUncaughtExceptionHandler(exhandler);
 
@@ -196,8 +199,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 				mIteration += 1;
 				final IRun<L, ?> mainThreadCounterexample = mWorkerTaskQueue.take();
 				mProgramCache.copyProgramCache(mMainThread.getCurrentProgramCache());
-				mCounterexample =
-						mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mainThreadCounterexample, TransferMode.MAIN2WORKER);
+				mCounterexample = mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mainThreadCounterexample,
+						TransferMode.MAIN2WORKER);
 
 				// set the programCount to x-1, because we will report it again later
 				mProgramCache.setPathProgramCount(mCounterexample.getWord(),
@@ -406,7 +409,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		} else {
 			automatonType = AutomatonType.FLOYD_HOARE;
 			useErrorAutomaton = false;
-			exploitSigmaStarConcatOfIa = !mComputeHoareAnnotation;
+			exploitSigmaStarConcatOfIa = true; // !mComputeHoareAnnotation; // unsupported
 			subtrahendBeforeEnhancement = mInterpolAutomaton;
 			enhanceMode = mPref.interpolantAutomatonEnhancement();
 			subtrahend = enhanceInterpolantAutomaton(enhanceMode, predicateUnifier, htc, subtrahendBeforeEnhancement);
@@ -417,15 +420,12 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		computeAutomataDifference(mAbstraction, subtrahend, subtrahendBeforeEnhancement, predicateUnifier,
 				exploitSigmaStarConcatOfIa, htc, enhanceMode, useErrorAutomaton, automatonType);
 
-		final WorkerThreadResult<L, A> workerResult = new WorkerThreadResult<>(
+		final WorkerThreadResult<L, A> workerResult = new WorkerThreadResult<>(WorkerType.TA,
 				mNwaCexTransferrer.transferAutomaton(subtrahend, mPredicateFactoryInterpolantAutomata,
 						TransferMode.WORKER2MAIN),
-				mNwaCexTransferrer.transferAutomaton(subtrahendBeforeEnhancement, mPredicateFactoryInterpolantAutomata,
-						TransferMode.WORKER2MAIN),
-				predicateUnifier, exploitSigmaStarConcatOfIa, enhanceMode, useErrorAutomaton, automatonType,
-				mCfgSmtToolkit.getManagedScript(),
-				mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mCounterexample, TransferMode.WORKER2MAIN), mPredicateFactory,
-				false);
+				automatonType, mCfgSmtToolkit.getManagedScript(),
+				mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mCounterexample, TransferMode.WORKER2MAIN),
+				mPredicateFactory, false);
 
 		// TODO missing a lot of stuff from NwaCegarLoop
 

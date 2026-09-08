@@ -32,45 +32,46 @@ import de.uni_freiburg.informatik.ultimate.automata.IRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INwaOutgoingLetterAndTransitionProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicate;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicateUnifier;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateFactory;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.NwaCegarLoop.AutomatonType;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.InterpolantAutomatonEnhancement;
 
 public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> {
 
 	private INwaOutgoingLetterAndTransitionProvider<L, IPredicate> mSubtrahend;
 	private AutomatonType mAutomatonType;
-	private final boolean mUseErrorAutomaton;
-	private INwaOutgoingLetterAndTransitionProvider<L, IPredicate> mSubtrahendBeforeEnhancement;
-	private InterpolantAutomatonEnhancement mEnhanceMode;
-	private final boolean mExploitSigmaStarConcatOfIa;
 	private ManagedScript mMgdScript;
 	private IRun<L, ?> mCounterexample;
 	PredicateFactory mPredicateFactory;
 	private final boolean mWorkerCrashed;
+	WorkerType mWorkerType;
+
+	public enum WorkerType
+
+	{
+		TA, IMC, SYMEXEC, KINDUCTION
+	}
 
 	/**
 	 * The object returned by an @ICegarNwaWorkerThread
 	 *
 	 */
-	public WorkerThreadResult(final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahend,
-			final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahendBeforeEnhancement,
-			final IPredicateUnifier predicateUnifier, final boolean explointSigmaStarConcatOfIA,
-			final InterpolantAutomatonEnhancement enhanceMode, final boolean useErrorAutomaton,
-			final AutomatonType automatonType, final ManagedScript mgdScript, final IRun<L, ?> counterexample,
-			final PredicateFactory predicateFactory, final boolean workerCrashed) {
+	public WorkerThreadResult(final WorkerType workerType,
+			final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahend, final AutomatonType automatonType,
+			final ManagedScript mgdScript, final IRun<L, ?> counterexample, final PredicateFactory predicateFactory,
+			final boolean workerCrashed) {
+		mWorkerType = workerType;
 		mSubtrahend = subtrahend;
 		mAutomatonType = automatonType;
-		mUseErrorAutomaton = useErrorAutomaton;
-		mEnhanceMode = enhanceMode;
-		mSubtrahendBeforeEnhancement = subtrahendBeforeEnhancement;
-		mExploitSigmaStarConcatOfIa = explointSigmaStarConcatOfIA;
 		mMgdScript = mgdScript;
 		mCounterexample = counterexample;
 		mPredicateFactory = predicateFactory;
 		mWorkerCrashed = workerCrashed;
+
+	}
+
+	public WorkerType getWorkerType() {
+		return mWorkerType;
 	}
 
 	public boolean workerCrashed() {
@@ -81,28 +82,12 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 		return mPredicateFactory;
 	}
 
-	public InterpolantAutomatonEnhancement getEnhanceMode() {
-		return mEnhanceMode;
-	}
-
 	public INwaOutgoingLetterAndTransitionProvider<L, IPredicate> getSubtrahend() {
 		return mSubtrahend;
 	}
 
 	public AutomatonType getAutomatonType() {
 		return mAutomatonType;
-	}
-
-	public boolean useErrorAutomaton() {
-		return mUseErrorAutomaton;
-	}
-
-	public INwaOutgoingLetterAndTransitionProvider<L, IPredicate> getSubtrahendBeforeEnhancement() {
-		return mSubtrahendBeforeEnhancement;
-	}
-
-	public boolean exploitSigmaStarConcatOfIa() {
-		return mExploitSigmaStarConcatOfIa;
 	}
 
 	public ManagedScript getWorkerMgdScript() {
@@ -116,8 +101,6 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	public void garbageCollect() {
 		mSubtrahend = null;
 		mAutomatonType = null;
-		mEnhanceMode = null;
-		mSubtrahendBeforeEnhancement = null;
 		mMgdScript = null;
 		mCounterexample = null;
 		mPredicateFactory = null;
