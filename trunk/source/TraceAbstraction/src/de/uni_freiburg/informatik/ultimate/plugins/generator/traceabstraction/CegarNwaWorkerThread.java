@@ -39,7 +39,9 @@ import de.uni_freiburg.informatik.ultimate.automata.IRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INwaOutgoingLetterAndTransitionProvider;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedRun;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWord;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWordAutomaton;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Accepts;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Difference;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.PowersetDeterminizer;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.oldapi.IOpWithDelayedDeadEndRemoval;
@@ -112,7 +114,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	private final SimplificationTechnique mSimplificationTechnique;
 	protected static final boolean REMOVE_DEAD_ENDS = true;
 	private final ParallelNwaCegarLoop<L, A> mMainThread;
-	private final INestedWordAutomaton<L, IPredicate> mAbstraction;
+	private INestedWordAutomaton<L, IPredicate> mAbstraction;
 	private StrategyFactory<L> mStrategyFactory;
 	// communication with controller
 	private WorkerThreadResult<L, A> mThreadResult = null;
@@ -121,6 +123,11 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	private final TransferBetweenMainAndWorker<L, IPredicate> mNwaCexTransferrer;
 
 	private final PathProgramCache<L> mProgramCache;
+	private long mIdleTime = 0;
+	private long mWastedTime = 0;
+	private int mWastedWork = 0;
+	private long mUpdatingATime = 0;
+	private long mGeneralizationTime = 0;
 
 	/**
 	 * CegarNwaWorkerThread is a runnable that will be executed by an executor service. It takes counterexamples from
@@ -197,10 +204,28 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			try {
 				mLogger.info("WorkerThread: " + Thread.currentThread() + " is Waiting for a Task");
 				mIteration += 1;
+				long time = System.nanoTime() / 1000000000;
 				final IRun<L, ?> mainThreadCounterexample = mWorkerTaskQueue.take();
+				mIdleTime += ((System.nanoTime() / 1000000000) - time);
+				final long busytime = System.nanoTime() / 1000000000;
+
 				mProgramCache.copyProgramCache(mMainThread.getCurrentProgramCache());
 				mCounterexample = mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mainThreadCounterexample,
 						TransferMode.MAIN2WORKER);
+				time = System.nanoTime() / 1000000000;
+				updateAbstractionIfSmaller();
+				boolean stillAccepted;
+				try {
+					stillAccepted = new Accepts<>(new AutomataLibraryServices(getServices()),
+							(INwaOutgoingLetterAndTransitionProvider<L, IPredicate>) mAbstraction,
+							(NestedWord<L>) mCounterexample.getWord()).getResult();
+				} catch (final AutomataLibraryException e) {
+					throw new AssertionError("WorkerThread Failed: " + e);
+				}
+				if (!stillAccepted) {
+					mWastedTime += ((System.nanoTime() / 1000000000) - busytime);
+					mWastedWork += 1;
+				}
 
 				// set the programCount to x-1, because we will report it again later
 				mProgramCache.setPathProgramCount(mCounterexample.getWord(),
@@ -211,20 +236,26 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 				mLogger.info("Starting Thread: " + Thread.currentThread().getId() + "# for Trace Check: " + traceHash);
 				Thread.currentThread().setName("Worker for " + traceHash);
 				try {
+					time = System.nanoTime() / 1000000000;
 					final var locations = getControlConfigurationsFromCounterexample(mCounterexample);
 					final Counterexample<L> counterexample = new Counterexample<>(mCounterexample.getWord(), locations);
 					final ITARefinementStrategy<L> strategy = setUpStrategy(counterexample);
 					final Pair<LBool, IProgramExecution<L, Term>> isCexResult = isCounterexampleFeasible(strategy);
+					mIdleTime += ((System.nanoTime() / 1000000000) - time);
 
+					mUpdatingATime += ((System.nanoTime() / 1000000000) - time);
+					time = System.nanoTime() / 1000000000;
 					final AbstractCegarLoop.AutomatonType automatonType = processFeasibilityCheckResult(strategy,
 							isCexResult.getFirst(), isCexResult.getSecond(), mCurrentErrorLoc);
 					constructRefinementAutomaton(automatonType);
 					mThreadResult = refineAbstractionInternally();
+					mGeneralizationTime += ((System.nanoTime() / 1000000000) - time);
 				} catch (AutomataLibraryException | ToolchainCanceledException | SMTLIBException e) {
 					throw new AssertionError("WorkerThread Failed: " + e);
 				}
 				mLogger.info("Done with Thread: " + Thread.currentThread().getId() + "#");
 				mBlockingQueueForResults.put(mThreadResult);
+				updateAndPrintStatistics(true);
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}
@@ -273,6 +304,17 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> workerAbstraction = mNwaCexTransferrer
 				.transferAutomaton(mainAbstraction, mPredicateFactoryInterpolantAutomata, TransferMode.MAIN2WORKER);
 		return workerAbstraction;
+	}
+
+	private void updateAbstractionIfSmaller() {
+		final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> mainAbstraction = mMainThread.getAbstraction();
+		if (mainAbstraction.size() < mAbstraction.size()) {
+			mLogger.info("Updating worker A, since main A " + mainAbstraction.size() + " is smaller than worker A "
+					+ mAbstraction.size());
+			mAbstraction = (INestedWordAutomaton<L, IPredicate>) mNwaCexTransferrer.transferAutomaton(mainAbstraction,
+					mPredicateFactoryInterpolantAutomata, TransferMode.MAIN2WORKER);
+		}
+
 	}
 
 	private IPreconditionProvider getPreconditionProvider() {
@@ -580,5 +622,19 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		final boolean cannibalize = enhanceMode == InterpolantAutomatonEnhancement.PREDICATE_ABSTRACTION_CANNIBALIZE;
 		return new DeterministicInterpolantAutomaton<>(getServices(), mCfgSmtToolkit, htc, inputInterpolantAutomaton,
 				predicateUnifier, conservativeSuccessorCandidateSelection, cannibalize);
+	}
+
+	private void updateAndPrintStatistics(final boolean printStatistics) {
+
+		if (printStatistics) {
+			mLogger.info("---------------------------");
+			mLogger.info("Worker Thread Stats: " + Thread.currentThread().getId());
+			mLogger.info("IdleTime: " + mIdleTime);
+			mLogger.info("mWastedTime: " + mWastedTime);
+			mLogger.info("mWastedWork: " + mWastedWork);
+			mLogger.info("mUpdatingATime: " + mUpdatingATime);
+			mLogger.info("mGeneralizationTime: " + mGeneralizationTime);
+			mLogger.info("---------------------------");
+		}
 	}
 }

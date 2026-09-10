@@ -79,6 +79,7 @@ import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracechec
 import de.uni_freiburg.informatik.ultimate.logic.Logics;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.Activator;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.preferences.IcfgPreferenceInitializer;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization.AutomataMinimizationTimeout;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolModelCheckingWorkerThread;
@@ -98,7 +99,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 
 	// Parallel Setup
 	private final ExecutorService mExec;
-	private int mThreadLimit;
+	private final int mThreadLimit;
+	private final int mNumTaWorkers;
+	private final int mNumImcWorkers;
+	private final int mNumSymExecWorkers;
+	private final int mNumKInductionWorkers;
 	private int mRunningThreads = 0;
 
 	// private final CompletionService<WorkerThreadResult<L, A>> mECS;
@@ -133,6 +138,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private final int mExceptionInWorker = 0;
 
 	private long mRefinementTime = 0;
+	private long mIdleTime = 0;
 
 	/**
 	 * Based on the @NwaCegarLoop. Given a ThreadLimit, creates a ExecutionerService that will manage the worker
@@ -162,10 +168,14 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		super(name, initialAbstraction, rootNode, csToolkit, predicateFactory, taPrefs, errorLocs, proofProducer,
 				services, transitionClazz, stateFactoryForRefinement);
 		// Start thread pool
-		mThreadLimit = mPref.getThreadLimit();
-		if (mThreadLimit == 0) { // maximum of available cores
-			mThreadLimit = Runtime.getRuntime().availableProcessors();
-			mThreadLimit -= 1; // one for main thread
+		mNumTaWorkers = mPref.getNumTaWorkers();
+		mNumImcWorkers = mPref.getNumImcWorkers();
+		mNumSymExecWorkers = mPref.getNumSymExecWorkers();
+		mNumKInductionWorkers = mPref.getNumKInductionWorkers();
+		mThreadLimit = mNumTaWorkers + mNumImcWorkers + mNumSymExecWorkers + mNumKInductionWorkers;
+		if (mThreadLimit == 0) {
+			throw new AssertionError(
+					"At least one parallel CEGAR worker thread must be configured (TA/IMC/SymExec/KInduction worker counts are all 0)");
 		}
 
 		mExec = Executors.newFixedThreadPool(mThreadLimit);
@@ -203,8 +213,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				}
 				abstractionWasRefined = true;
 			}
-			mLogger.info("No more worker results to process");
-			assert workerResult == null;
+
 			if (abstractionWasRefined && !mPref.minimizeAbstractionPerWorker()) {
 				// uses NWA CEGAR loop
 				// When do we minimize how often?
@@ -241,9 +250,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	/*
 	 * returns true, if CEGAR should terminate.
 	 */
-	private boolean handleWorkerResults(WorkerThreadResult<L, A> workerResult)
+	private boolean handleWorkerResults(final WorkerThreadResult<L, A> firstWorkerResult)
 			throws AutomataOperationCanceledException, AutomataLibraryException {
-
+		WorkerThreadResult<L, A> workerResult = firstWorkerResult;
 		// go through all done workerResult
 		while (workerResult != null) {
 			final long time = System.nanoTime() / 1000000000;
@@ -257,7 +266,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				shutDownAndDestroy(mDestroyEverything);
 				throw new AssertionError("Worker Crashed!, Exiting CEGAR loop!");
 			}
-			if (workerResult.getSubtrahend() == null) {
+			if (workerResult.mWorkerType.equals(WorkerType.IMC) && (workerResult.getSubtrahend() == null)) {
 				mAbstraction = new NestedWordAutomaton(new AutomataLibraryServices(getServices()),
 						mAbstraction.getVpAlphabet(), mPredicateFactoryInterpolantAutomata);
 				mResultBuilder.addResultForAllRemaining(Result.SAFE);
@@ -286,19 +295,34 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			workerResult = mWorkerResultQueue.poll();
 			mRefinementTime += ((System.nanoTime() / 1000000000) - time);
 		}
-
+		mLogger.info("No more worker results to process");
+		assert workerResult == null;
 		return false;
 	}
 
 	private void setUpWorkerThreads() {
 		final IcfgLocation currentErrorLoc = getErrorLocFromCounterexample();
 		final IUltimateServiceProvider iterationServices = createIterationTimer(currentErrorLoc);
-		for (int i = 0; i < mThreadLimit; i++) {
-			try {
-				mExec.submit(setUpWorkerThread(iterationServices, i));
-			} catch (final InterruptedException e) {
-				throw new AssertionError("Interrupted during worker setup " + e);
+		int id = 0;
+		try {
+			for (int i = 0; i < mNumTaWorkers; i++) {
+				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.TA));
+				id++;
 			}
+			for (int i = 0; i < mNumImcWorkers; i++) {
+				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.IMC));
+				id++;
+			}
+			for (int i = 0; i < mNumSymExecWorkers; i++) {
+				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.SYMEXEC));
+				id++;
+			}
+			for (int i = 0; i < mNumKInductionWorkers; i++) {
+				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.KINDUCTION));
+				id++;
+			}
+		} catch (final InterruptedException e) {
+			throw new AssertionError("Interrupted during worker setup " + e);
 		}
 	}
 
@@ -308,7 +332,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 *
 	 */
 	private ICegarNwaWorkerThread<L, A> setUpWorkerThread(final IUltimateServiceProvider iterationServices,
-			final int id) throws InterruptedException {
+			final int id, final WorkerType workerType) throws InterruptedException {
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(
 				new AutomataLibraryServices(mServices), mLogger, mCsToolkit.getManagedScript(), iterationServices,
@@ -340,25 +364,27 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				new TaCheckAndRefinementPreferences<>(getServices(), mPref, mInterpolationTechnique,
 						mSimplificationTechnique, freshToolKit, predicateFactory, mIcfg);
 
-		if (id == 0) {
+		switch (workerType) {
+		case IMC:
 			return new InterpolModelCheckingWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices,
 					freshToolKit, predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
 					transferUtils, mTaskIdentifier);
-		}
-
-		if (id == 1 && mPref.isKInductionWorkerEnabled()) {
+		case KINDUCTION:
 			return new KInductionWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
 					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
 					transferUtils, mTaskIdentifier, IInvariantSupplier.none());
+		case SYMEXEC:
+			// TODO: SymExec worker is not implemented yet; falls back to a TA worker for now.
+		case TA:
+			return new CegarNwaWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
+					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
+					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
+					transferUtils);
+		default:
+			throw new AssertionError("Unknown worker type " + workerType);
 		}
-
-		// initialize worker
-		return new CegarNwaWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
-				predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
-				stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
-				transferUtils);
 	}
 
 	private void updateAndPrintStatistics(final boolean printStatistics) {
@@ -389,6 +415,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			mLogger.info("WorkerSetUpTime: " + mWorkerSetUpTime + " s");
 			mLogger.info("ExceptionInWorker: " + mExceptionInWorker);
 			mLogger.info("mRefinementTime: " + mRefinementTime);
+			mLogger.info("IdleTime: " + mIdleTime);
 		}
 	}
 
@@ -432,11 +459,13 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			assert mRunningThreads > 0;
 			mLogger.info("All threads busy, going to sleep.");
 			// No busy waiting via BlockingQueue
+			final long time = System.nanoTime() / 1000000000;
 			try {
 				doneFuture = mWorkerResultQueue.take();
 			} catch (final InterruptedException e) {
 				throw new AssertionError("Main was Interrupted while waiting for results: " + e);
 			}
+			mIdleTime += ((System.nanoTime() / 1000000000) - time);
 			mLogger.info("Waking up, a worker is done.");
 		} else {
 			doneFuture = mWorkerResultQueue.poll();

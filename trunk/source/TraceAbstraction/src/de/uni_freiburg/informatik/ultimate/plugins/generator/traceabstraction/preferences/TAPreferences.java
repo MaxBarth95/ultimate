@@ -97,9 +97,11 @@ public final class TAPreferences {
 	private final IndependenceSettings mLbeIndependenceSettings;
 
 	// Parallel Trace Abstraction Settings
-	private final int mThreadLimit;
 	private final boolean mParallelCegarLoop;
-	private final boolean mUseKInductionWorker;
+	private final int mNumTaWorkers;
+	private final int mNumImcWorkers;
+	private final int mNumSymExecWorkers;
+	private final int mNumKInductionWorkers;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
 	private final int mSearchLoopBound;
@@ -208,8 +210,10 @@ public final class TAPreferences {
 				IndependenceSettings.DEFAULT_SOLVER_TIMEOUT /* currently ignored; not exposed as setting */);
 
 		mParallelCegarLoop = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLEL_CEGAR_LOOP);
-		mUseKInductionWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_USE_KINDUCTION_WORKER);
-		mThreadLimit = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_THREADLIMIT);
+		mNumTaWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_TA_WORKERS);
+		mNumImcWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_IMC_WORKERS);
+		mNumSymExecWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_SYMEXEC_WORKERS);
+		mNumKInductionWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_KINDUCTION_WORKERS);
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY);
 		mMinimizeAbstractionPerWorker =
@@ -592,16 +596,24 @@ public final class TAPreferences {
 		return new HoareProofSettings(getHoareAnnotationPositions(), getSimplificationTechnique());
 	}
 
-	public int getThreadLimit() {
-		return mThreadLimit;
-	}
-
 	public boolean isParallelCegarLoop() {
 		return mParallelCegarLoop;
 	}
 
-	public boolean isKInductionWorkerEnabled() {
-		return mUseKInductionWorker;
+	public int getNumTaWorkers() {
+		return mNumTaWorkers;
+	}
+
+	public int getNumImcWorkers() {
+		return mNumImcWorkers;
+	}
+
+	public int getNumSymExecWorkers() {
+		return mNumSymExecWorkers;
+	}
+
+	public int getNumKInductionWorkers() {
+		return mNumKInductionWorkers;
 	}
 
 	public boolean minimizeAbstractionPerWorker() {
