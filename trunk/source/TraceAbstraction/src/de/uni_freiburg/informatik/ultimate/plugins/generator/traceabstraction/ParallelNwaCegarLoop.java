@@ -107,7 +107,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private int mRunningThreads = 0;
 
 	// private final CompletionService<WorkerThreadResult<L, A>> mECS;
-	BlockingQueue<IRun<L, ?>> mWorkerTaskQueue = new LinkedBlockingQueue<>();
+	BlockingQueue<WorkerThreadTask<L>> mWorkerTaskQueue = new LinkedBlockingQueue<>();
 	BlockingQueue<WorkerThreadResult<L, A>> mWorkerResultQueue = new LinkedBlockingQueue<>();
 
 	// need global program cache, but worker need to get copy otherwise we
@@ -438,8 +438,10 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 * When we reach this method, we will always start at least one new worker.
 	 */
 	private void startWorker() {
-		mWorkerTaskQueue.add(mCounterexample);
+		final WorkerThreadTask<L> task = new WorkerThreadTask<>(mCounterexample);
 		mProgramCache.addRun(mCounterexample.getWord());
+		task.setPathProgramCount(mProgramCache.getPathProgramCount(mCounterexample.getWord()));
+		mWorkerTaskQueue.add(task);
 		final long time = System.nanoTime() / 1000000000;
 		mLogger.info("Main: Starting Thread");
 		final IcfgLocation currentErrorLoc = getErrorLocFromCounterexample();

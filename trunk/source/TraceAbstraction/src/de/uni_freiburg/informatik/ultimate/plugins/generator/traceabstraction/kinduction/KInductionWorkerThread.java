@@ -31,7 +31,6 @@ import java.util.concurrent.BlockingQueue;
 
 import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryException;
 import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
-import de.uni_freiburg.informatik.ultimate.automata.IRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INwaOutgoingLetterAndTransitionProvider;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
@@ -50,6 +49,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.Tr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadTask;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
 
@@ -79,7 +79,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	private final INestedWordAutomaton<L, IPredicate> mAbstraction;
 	// communication with controller
 	private final BlockingQueue<WorkerThreadResult<L, A>> mBlockingQueueForResults;
-	private final BlockingQueue<IRun<L, ?>> mWorkerTaskQueue;
+	private final BlockingQueue<WorkerThreadTask<L>> mWorkerTaskQueue;
 	private final TransferBetweenMainAndWorker<L, IPredicate> mNwaCexTransferrer;
 	private final TaskIdentifier mTaskIdentifier;
 	private final IInvariantSupplier<IPredicate> mInvariantSupplier;
@@ -92,7 +92,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 			final PredicateFactoryRefinement stateFactoryForRefinement, final boolean computeHoareAnnotation,
 			final ParallelNwaCegarLoop<L, A> mainThread,
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
-			final BlockingQueue<IRun<L, ?>> workerTaskQueue,
+			final BlockingQueue<WorkerThreadTask<L>> workerTaskQueue,
 			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils, final TaskIdentifier taskIdentifier,
 			final IInvariantSupplier<IPredicate> invariantSupplier) throws InterruptedException {
 		mLogger = logger;

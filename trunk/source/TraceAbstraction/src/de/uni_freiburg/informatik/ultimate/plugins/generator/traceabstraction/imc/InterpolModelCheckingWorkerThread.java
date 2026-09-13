@@ -58,6 +58,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.Tr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadTask;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.errorabstraction.ErrorGeneralizationEngine;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.StrategyFactory;
@@ -89,7 +90,7 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 	// communication with controller
 	private final WorkerThreadResult<L, A> mThreadResult = null;
 	private final BlockingQueue<WorkerThreadResult<L, A>> mBlockingQueueForResults;
-	private final BlockingQueue<IRun<L, ?>> mWorkerTaskQueue;
+	private final BlockingQueue<WorkerThreadTask<L>> mWorkerTaskQueue;
 	private final TransferBetweenMainAndWorker<L, IPredicate> mNwaCexTransferrer;
 
 	private final PathProgramCache<L> mProgramCache;
@@ -119,7 +120,7 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 			final PredicateFactoryRefinement stateFactoryForRefinement, final boolean computeHoareAnnotation,
 			final ParallelNwaCegarLoop<L, A> mainThread,
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
-			final BlockingQueue<IRun<L, ?>> workerTaskQueue,
+			final BlockingQueue<WorkerThreadTask<L>> workerTaskQueue,
 			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils, final TaskIdentifier taskIdentifier)
 			throws InterruptedException {
 

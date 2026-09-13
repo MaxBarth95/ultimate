@@ -119,7 +119,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	// communication with controller
 	private WorkerThreadResult<L, A> mThreadResult = null;
 	private final BlockingQueue<WorkerThreadResult<L, A>> mBlockingQueueForResults;
-	private final BlockingQueue<IRun<L, ?>> mWorkerTaskQueue;
+	private final BlockingQueue<WorkerThreadTask<L>> mWorkerTaskQueue;
 	private final TransferBetweenMainAndWorker<L, IPredicate> mNwaCexTransferrer;
 
 	private final PathProgramCache<L> mProgramCache;
@@ -152,7 +152,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			final PredicateFactoryRefinement stateFactoryForRefinement, final boolean computeHoareAnnotation,
 			final ParallelNwaCegarLoop<L, A> mainThread,
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
-			final BlockingQueue<IRun<L, ?>> workerTaskQueue,
+			final BlockingQueue<WorkerThreadTask<L>> workerTaskQueue,
 			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils) throws InterruptedException {
 
 		mLogger = logger;
@@ -205,10 +205,11 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 				mLogger.info("WorkerThread: " + Thread.currentThread() + " is Waiting for a Task");
 				mIteration += 1;
 				long time = System.nanoTime() / 1000000000;
-				final IRun<L, ?> mainThreadCounterexample = mWorkerTaskQueue.take();
+				final WorkerThreadTask<L> task = mWorkerTaskQueue.take();
+				final IRun<L, ?> mainThreadCounterexample = task.getCounterexample();
 				mIdleTime += ((System.nanoTime() / 1000000000) - time);
 				final long busytime = System.nanoTime() / 1000000000;
-
+				// mProgramCache = new PathProgramCache<>(mLogger);
 				mProgramCache.copyProgramCache(mMainThread.getCurrentProgramCache());
 				mCounterexample = mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mainThreadCounterexample,
 						TransferMode.MAIN2WORKER);
@@ -228,8 +229,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 				}
 
 				// set the programCount to x-1, because we will report it again later
-				mProgramCache.setPathProgramCount(mCounterexample.getWord(),
-						mProgramCache.getPathProgramCount(mainThreadCounterexample.getWord()) - 1);
+				mProgramCache.setPathProgramCount(mCounterexample.getWord(), task.getPathProgramCount() - 1);
 				final List<L> trace = mCounterexample.getWord().asList();
 				mCurrentErrorLoc = mCounterexample.getSymbol(mCounterexample.getLength() - 2).getTarget();
 				final int traceHash = trace.hashCode();
@@ -308,7 +308,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 
 	private void updateAbstractionIfSmaller() {
 		final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> mainAbstraction = mMainThread.getAbstraction();
-		if (mainAbstraction.size() < mAbstraction.size()) {
+		if (mainAbstraction instanceof NestedWordAutomaton && mainAbstraction.size() < mAbstraction.size()) {
 			mLogger.info("Updating worker A, since main A " + mainAbstraction.size() + " is smaller than worker A "
 					+ mAbstraction.size());
 			mAbstraction = (INestedWordAutomaton<L, IPredicate>) mNwaCexTransferrer.transferAutomaton(mainAbstraction,

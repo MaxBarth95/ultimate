@@ -422,6 +422,7 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 				}
 
 			} else {
+				mLogger.info("EXPENSIVE STUFF");
 				final Set<STATE> copyAllStates = new HashSet<>(allStates);
 				for (final STATE potentialhier : copyAllStates) {
 					for (final STATE hierPred : hierPredStates) {
@@ -450,6 +451,7 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 			// them
 		}
 		assert result.size() == automaton.size();
+		mLogger.info("Time spend transferring automaton: " + ((System.nanoTime() / 1000000000) - setuptime));
 		return result;
 
 	}
