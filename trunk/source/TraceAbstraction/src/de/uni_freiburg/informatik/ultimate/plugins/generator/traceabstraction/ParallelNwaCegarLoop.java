@@ -50,7 +50,9 @@ import de.uni_freiburg.informatik.ultimate.automata.nestedword.IDoubleDeckerAuto
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INwaOutgoingLetterAndTransitionProvider;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedRun;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWord;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWordAutomaton;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Accepts;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Difference;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.IsEmpty;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.IsEmptyParallel;
@@ -638,6 +640,12 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			throws AutomataLibraryException, AssertionError {
 		try {
 			mLogger.debug("Start constructing difference");
+
+			final boolean cexStillAccepted = new Accepts<>(new AutomataLibraryServices(getServices()), minuend,
+					(NestedWord<L>) workerResult.getCounterexample().getWord()).getResult();
+			if (!cexStillAccepted) {
+				mLogger.info("Warning: Counterexample of worker result is no longer accepted by the abstraction!");
+			}
 
 			final PowersetDeterminizer<L, IPredicate> psd = new PowersetDeterminizer<>(workerResult.getSubtrahend(),
 					true, mPredicateFactoryInterpolantAutomata);
