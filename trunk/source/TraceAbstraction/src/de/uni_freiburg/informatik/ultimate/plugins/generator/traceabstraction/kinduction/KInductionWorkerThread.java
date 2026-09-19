@@ -133,6 +133,10 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
 			} catch (final Throwable t) {
+				mLogger.error("KInduction worker crashed: " + t);
+				for (final StackTraceElement element : t.getStackTrace()) {
+					mLogger.error("\tat " + element);
+				}
 				try {
 					mBlockingQueueForResults
 							.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null, null, null, null, null, true));

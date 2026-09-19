@@ -22,19 +22,20 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramNonOldVar;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils.SimplificationTechnique;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.Checkpoint;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.CheckpointGraph;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.Checkpoint;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.Scope;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolationBasedModelChecking.PathResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolationBasedModelChecking.PathVerdict;
 
 /**
  * Drives IMC across an entire non-recursive call graph. {@link ProcedureCallGraph} gives the processing order
  * (every callee fully processed - and, if it needs one, already holding a summary - before any of its callers) and
- * rejects recursion up front, since a virtual call edge (see {@link CheckpointGraphFormulaBuilder}'s class javadoc)
+ * rejects recursion up front, since a virtual call edge (see {@link LoopTreeFormulaBuilder}'s class javadoc)
  * needs its callee's summary to already exist, which is undefined for a cycle.
  * <p>
  * For each procedure this builds up to two checkpoint graphs, both scoped to that procedure's own states (via
- * {@link CheckpointGraphFormulaBuilder}'s scoped constructor) and both with call sites already resolved into
+ * {@link LoopTreeFormulaBuilder}'s scoped constructor) and both with call sites already resolved into
  * virtual edges pointing at callees' already-computed summaries:
  * <ul>
  * <li>an <b>error graph</b> (FINAL = this procedure's own accepting/error states) - checked exactly like a whole,
@@ -62,7 +63,7 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 
 	@FunctionalInterface
 	interface PathChecker<STATE> {
-		PathResult check(CheckpointGraph<STATE> graph, List<Checkpoint<STATE>> path);
+		PathResult check(Scope<STATE> graph, List<Checkpoint<STATE>> path);
 	}
 
 	InterproceduralImcOrchestrator(final IUltimateServiceProvider services, final ILogger logger,
@@ -108,9 +109,9 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 			mLogger.info("IMC: checking procedure %s (%d state(s), entry=%s)", procedure, scopeStates.size(), isEntry);
 
 			final Set<STATE> errorStates = intersect(mAbstraction.getFinalStates(), scopeStates);
-			final CheckpointGraph<STATE> errorGraph = new CheckpointGraphFormulaBuilder<LETTER, STATE>(mServices,
+			final Scope<STATE> errorGraph = new LoopTreeFormulaBuilder<LETTER, STATE>(mServices,
 					mLogger, mWorkerMgdScript, mAbstraction, scopeStates, initStates, errorStates, virtualCallEdges)
-							.build();
+							.build().getRoot();
 			final PathVerdict errorVerdict = checkAllPaths(errorGraph, null);
 			if (errorVerdict == PathVerdict.UNSAFE) {
 				return PathVerdict.UNSAFE;
@@ -126,9 +127,9 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 
 			final Set<STATE> exitStates =
 					computeExitStates(scopeStates, callSitesByCallee.getOrDefault(procedure, Set.of()));
-			final CheckpointGraph<STATE> exitGraph = new CheckpointGraphFormulaBuilder<LETTER, STATE>(mServices,
+			final Scope<STATE> exitGraph = new LoopTreeFormulaBuilder<LETTER, STATE>(mServices,
 					mLogger, mWorkerMgdScript, mAbstraction, scopeStates, initStates, exitStates, virtualCallEdges)
-							.build();
+							.build().getRoot();
 			final List<List<UnmodifiableTransFormula>> safeChains = new ArrayList<>();
 			final PathVerdict exitVerdict = checkAllPaths(exitGraph, safeChains);
 			if (exitVerdict == PathVerdict.UNSAFE) {
@@ -149,7 +150,7 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 						false, false, SimplificationTechnique.NONE, chain));
 			}
 			final UnmodifiableTransFormula summary =
-					CheckpointGraphFormulaBuilder.combineAlternatives(mLogger, mServices, mWorkerMgdScript, perPathEffects);
+					LoopTreeFormulaBuilder.combineAlternatives(mLogger, mServices, mWorkerMgdScript, perPathEffects);
 			if (summary != null) {
 				summaries.put(procedure, summary);
 			}
@@ -166,7 +167,7 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 	 * (used to build a procedure's exit summary); pass {@code null} when the caller only cares about the verdict
 	 * (the error-graph case, where no summary is being built).
 	 */
-	private PathVerdict checkAllPaths(final CheckpointGraph<STATE> graph,
+	private PathVerdict checkAllPaths(final Scope<STATE> graph,
 			final List<List<UnmodifiableTransFormula>> collectSafeChainsInto) {
 		boolean unsafe = false;
 		boolean unknown = false;
@@ -196,7 +197,7 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 	 * One virtual call edge per call site in {@code callerScope} whose callee already has a summary (callees
 	 * without one - not yet processed, impossible once {@link ProcedureCallGraph} has run, or with no proven-safe
 	 * exit path - simply contribute no edge, the same "no edge" semantics
-	 * {@link CheckpointGraphFormulaBuilder#computeEdge} already uses everywhere else). Built via
+	 * {@link LoopTreeFormulaBuilder#combineAlternatives} already uses everywhere else). Built via
 	 * {@link TransFormulaUtils#sequentialCompositionWithCallAndReturn}, the same primitive already used elsewhere
 	 * in this codebase (e.g. {@code IcfgEdgeBuilder}) for exactly this call-TF/oldvars/globals/procedure-TF/return-TF
 	 * composition.

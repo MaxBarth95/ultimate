@@ -19,8 +19,8 @@ import de.uni_freiburg.informatik.ultimate.util.scc.StronglyConnectedComponent;
  * callee", derived from the automaton's call transitions) and rejects recursion up front: {@link #getProceduresCalleeFirst()}
  * throws {@link UnsupportedOperationException} if any procedure is (transitively, possibly mutually) reachable from
  * itself via a call, naming the offending call and the full cycle - mirroring
- * {@link CheckpointGraphFormulaBuilder}'s existing non-nesting-loop check, which fails the same way before any
- * formula-building starts. This is not merely a scope limitation: {@link CheckpointGraphFormulaBuilder}'s virtual
+ * {@link LoopTreeFormulaBuilder}'s existing non-nesting-loop check, which fails the same way before any
+ * formula-building starts. This is not merely a scope limitation: {@link LoopTreeFormulaBuilder}'s virtual
  * call edges (see its class javadoc) need their callee's summary to already exist as a finished formula, which is
  * undefined for a cycle in the call graph.
  * <p>

@@ -33,8 +33,8 @@ import de.uni_freiburg.informatik.ultimate.logic.FormulaUnLet;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.Checkpoint;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.CheckpointGraph;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.Checkpoint;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.Scope;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.RefinementStrategy;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
@@ -153,7 +153,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * loops and any number of non-recursive function calls.
 	 * <p>
 	 * The actual per-procedure orchestration - building each procedure's checkpoint graph
-	 * ({@link CheckpointGraphFormulaBuilder}), checking every INIT-to-FINAL path on it via {@link #runPath}, and
+	 * ({@link LoopTreeFormulaBuilder}), checking every INIT-to-FINAL path on it via {@link #runPath}, and
 	 * composing proven-safe paths into a callee's summary for its callers - is
 	 * {@link InterproceduralImcOrchestrator}'s job; recursion is rejected up front by
 	 * {@link ProcedureCallGraph} (a virtual call edge needs its callee's summary to already exist, which is
@@ -202,7 +202,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * per-phase interpolant-stabilization bound {@code MAX_K} - the same kind of bounded/heuristic limitation
 	 * {@code MAX_K} itself already carries for a single loop, now generalized to every loop head instead of exactly one.
 	 */
-	private PathResult runPath(final CheckpointGraph<STATE> graph, final List<Checkpoint<STATE>> path) {
+	private PathResult runPath(final Scope<STATE> graph, final List<Checkpoint<STATE>> path) {
 		final List<STATE> loopHeadsOnPath = new ArrayList<>();
 		for (final Checkpoint<STATE> checkpoint : path) {
 			if (checkpoint.isLoopHead()) {
@@ -298,7 +298,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * head is), followed by the edge into FINAL. Constant across a phase's whole {@code k} sweep, exactly like the
 	 * single-loop case's {@code suffix} was constant across {@code k}.
 	 */
-	private List<UnmodifiableTransFormula> buildTail(final CheckpointGraph<STATE> graph,
+	private List<UnmodifiableTransFormula> buildTail(final Scope<STATE> graph,
 			final List<STATE> loopHeadsOnPath, final int phaseIndex) {
 		final List<UnmodifiableTransFormula> tail = new ArrayList<>();
 		STATE current = loopHeadsOnPath.get(phaseIndex);
@@ -445,7 +445,7 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * {@link IProgramVar#getTermVariable()}, so that cut-point interpolants obtained at different loop-copy positions
 	 * become directly comparable formulas over the same variable frame. Interpolants come back from
 	 * {@code mMgdScript.getInterpolants} native to IMC's own script; {@code pv.getTermVariable()} is native to the
-	 * worker's script ({@link #mWorkerMgdScript}), since {@code pv} is one of {@link CheckpointGraphFormulaBuilder}'s
+	 * worker's script ({@link #mWorkerMgdScript}), since {@code pv} is one of {@link LoopTreeFormulaBuilder}'s
 	 * unmodified, worker-native {@code IProgramVar}s. Substituting one script's term into a formula native to the other
 	 * would silently build a mismatched term tree, so the interpolant (and the SSA constants it's keyed on) is
 	 * transferred into the worker's script via {@link #mImc2Worker} first; only then does the substitution and the

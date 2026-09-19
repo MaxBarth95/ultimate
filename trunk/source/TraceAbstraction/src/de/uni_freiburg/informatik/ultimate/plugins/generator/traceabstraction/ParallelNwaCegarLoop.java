@@ -268,7 +268,10 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				shutDownAndDestroy(mDestroyEverything);
 				throw new AssertionError("Worker Crashed!, Exiting CEGAR loop!");
 			}
-			if (workerResult.mWorkerType.equals(WorkerType.IMC) && (workerResult.getSubtrahend() == null)) {
+			// IMC and k-induction prove the whole program safe at once, they have no subtrahend to refine with.
+			if ((workerResult.mWorkerType.equals(WorkerType.IMC)
+					|| workerResult.mWorkerType.equals(WorkerType.KINDUCTION))
+					&& (workerResult.getSubtrahend() == null)) {
 				mAbstraction = new NestedWordAutomaton(new AutomataLibraryServices(getServices()),
 						mAbstraction.getVpAlphabet(), mPredicateFactoryInterpolantAutomata);
 				mResultBuilder.addResultForAllRemaining(Result.SAFE);

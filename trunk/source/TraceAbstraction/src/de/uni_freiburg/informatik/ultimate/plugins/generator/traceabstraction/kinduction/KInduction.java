@@ -30,7 +30,8 @@ package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.k
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,50 +44,53 @@ import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IAction;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.TransFormulaUtils;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateUtils;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.taskidentifier.TaskIdentifier;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.PureSubstitution;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
-import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils.SimplificationTechnique;
 import de.uni_freiburg.informatik.ultimate.logic.QuantifiedFormula;
+import de.uni_freiburg.informatik.ultimate.logic.Script;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
+import de.uni_freiburg.informatik.ultimate.logic.Sort;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.Checkpoint;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.CheckpointGraphFormulaBuilder.CheckpointGraph;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.LoopTree;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.PcTransitionSystem.StepVars;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
 
 /**
- * Bounded k-induction on a nested word automaton (path program or abstraction) that represents a program with any
- * number of non-nested loops. Reuses the same {@link CheckpointGraphFormulaBuilder} checkpoint graph
- * {@link de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolationBasedModelChecking
- * IMC} is built on (program entry / every loop head / accepting-or-error states, connected by all-loop-free-paths
- * edge formulas, plus one loop-body formula per loop head), and the same per-path/per-loop-head phase structure
- * ({@link #runPath}): earlier loop heads on a path are frozen at whatever iteration count their own phase proved
- * inductive, later loop heads are taken exactly one mandatory pass.
+ * k-induction on a nested word automaton (path program or abstraction) that represents a program with any number of
+ * loops, sequential or nested.
  * <p>
- * Unlike IMC, k-induction never needs an interpolating solver - only plain SAT/UNSAT checks - so this class
- * operates directly on the worker's own {@link ManagedScript} (no second, dedicated "interpolation" script), and is
- * consequently not restricted to an SMTInterpol-backed solver mode the way IMC is.
- * <p>
- * For each loop head on a path, at increasing {@code k = 1..MAX_K}, two independent checks are made:
+ * {@link LoopTreeFormulaBuilder} summarizes the program as a tree of loops whose edges are transition formulas
+ * between checkpoints (program start, loop heads, error states, ...). {@link PcTransitionSystem} turns this into one
+ * transition system whose state is the program variables plus a program counter {@code pc}. An error is reachable
+ * iff the system reaches {@code pc = FINAL}. This class runs plain k-induction on it, for {@code k = 1, 2, ...}:
  * <ul>
- * <li><b>Base case</b>: is a violation reachable within {@code k} concrete iterations from the (possibly already
- * partially fixed) path prefix? A SAT result here is a genuine, concrete witness - unconditionally sound
- * {@code UNSAFE}, exactly as in IMC.
- * <li><b>Step case</b> ({@link #checkStepCase}): starting from a free, unconstrained loop-head state (not tied to
- * any prefix), is "no violation" inductive after {@code k} iterations? An UNSAT result here, combined with the base
- * case's UNSAT for the same {@code k}, proves the loop head safe for <em>all</em> iteration counts.
+ * <li><b>Base case</b>: {@code pc_0 = INIT}, k transitions, {@code pc_k = FINAL}. SAT is a real violation
+ * (<i>unsafe</i>), since FINAL has a self loop this covers every error within k steps.
+ * <li><b>Step case</b>: k transitions starting in an arbitrary state that is not {@code INIT}, no error in the first
+ * k states, but an error in the last one. UNSAT together with the base case for k proves that no error is reachable
+ * at all (<i>safe</i>). INIT can be excluded in the first state because it has no incoming transition, so every
+ * error at a step {@code > k} is preceded by k non-INIT states, and errors at steps {@code <= k} are found by the
+ * base case.
  * </ul>
- * As with IMC, a per-path {@code SAFE} verdict is a bounded/heuristic argument (it does not prove safety for
- * arbitrary joint iteration counts across multiple loop heads on the same path simultaneously), while an
- * {@code UNSAFE} verdict is unconditionally sound.
+ * Since the whole program, including all loop heads, is one system, a SAFE result is a genuine proof also for
+ * several and for nested loops; there is no per-loop or per-path approximation. The only incompleteness is
+ * {@link #MAX_K} and the solver returning unknown.
+ * <p>
+ * <b>Invariant injection.</b> The {@link IInvariantSupplier} may return a trusted invariant for any loop head, also
+ * a nested one. It is assumed in every unrolled state where {@code pc} is that loop head, in the base and the step
+ * case. This only prunes the search and can make a loop inductive that is not k-inductive on its own, but a wrong
+ * invariant makes the result wrong. An invariant that mentions a variable that occurs in no transition is dropped,
+ * which is always sound.
+ * <p>
+ * <b>Learned invariants.</b> If the program is proven safe with some k, {@link #getLearnedInvariants()} returns for
+ * every loop head the formula "no error can be reached from here within k steps". It holds in every reachable state
+ * of the head, because the program is safe, and can be given to other components as an invariant.
  *
  * @param <LETTER>
  *            letter type
@@ -96,8 +100,8 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tr
 public class KInduction<LETTER extends IAction, STATE> {
 
 	/**
-	 * Upper bound on how many times the loop body is unwound while searching for an inductive step. Placeholder
-	 * constant, matching {@code InterpolationBasedModelChecking}; not yet wired through a preference.
+	 * Upper bound on how many transitions are unrolled while searching for an inductive step. Placeholder constant,
+	 * matching {@code InterpolationBasedModelChecking}; not yet wired through a preference.
 	 */
 	private static final int MAX_K = 200000;
 
@@ -115,6 +119,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 
 	private boolean mSolverReturnedUnknown;
 	private boolean mSafe;
+	private int mProvedK = -1;
+	private final Map<STATE, Term> mLearnedInvariants = new LinkedHashMap<>();
 
 	// Mirrors IMC's own worker-thread integration parameters, kept for structural consistency between the two
 	// algorithms (and as a hook for future preference-driven configuration, e.g. bounding MAX_K); not otherwise
@@ -127,8 +133,15 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private final IInvariantSupplier<STATE> mInvariantSupplier;
 
 	// Shared indexed-constant cache, reused across every push/pop-bracketed SAT query this instance ever issues -
-	// safe because scopes are always cleanly popped between queries, matching IMC's own mIndexedConstantsWorkerScript.
+	// safe because scopes are always cleanly popped between queries.
 	private final Map<String, Term> mIndexedConstantsWorkerScript = new HashMap<>();
+
+	private PcTransitionSystem<STATE> mSystem;
+	private final List<Term> mStepTerms = new ArrayList<>();
+	private StepVars mConstants;
+	// pc node of a loop head -> its invariant, over the program variables' term variables
+	private final Map<Integer, Term> mInjectedInvariants = new LinkedHashMap<>();
+	private final Map<Integer, Map<IProgramVar, TermVariable>> mInjectedInvariantVars = new LinkedHashMap<>();
 
 	public KInduction(final IUltimateServiceProvider services, final ILogger logger,
 			final TaCheckAndRefinementPreferences<?> prefs, final CfgSmtToolkit csToolkit,
@@ -148,253 +161,288 @@ public class KInduction<LETTER extends IAction, STATE> {
 		run();
 	}
 
-	/**
-	 * Result of checking one INIT-to-FINAL path through the checkpoint graph (see {@link #runPath}).
-	 */
-	private enum PathVerdict {
+	private enum Verdict {
 		SAFE, UNSAFE, UNKNOWN
 	}
 
 	private void run() throws AutomataLibraryException {
 		mWorkerMgdScript.lock(mKILock);
-		mLogger.info("KInduction: starting k-induction (MAX_K=%d)", MAX_K);
+		try {
+			mLogger.info("KInduction: starting k-induction (MAX_K=%d)", MAX_K);
+			final LoopTree<STATE> tree =
+					new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
+			mSystem = new PcTransitionSystem<>(tree);
+			mLogger.info("KInduction: transition system with %d pc value(s), %d transition(s), %d variable(s), "
+					+ "%d loop head(s)", mSystem.getNumNodes(), mSystem.getNumTransitions(), mSystem.getVars().size(),
+					mSystem.getHeadNodes().size());
+			mConstants = new ConstantVars();
+			collectInvariants();
 
-		final CheckpointGraph<STATE> graph =
-				new CheckpointGraphFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
-		final List<List<Checkpoint<STATE>>> paths = graph.enumeratePaths();
-		mLogger.info("KInduction: checkpoint graph ready (%d loop head(s)), %d path(s) to check",
-				graph.getLoopHeads().size(), paths.size());
-
-		boolean unsafe = false;
-		boolean unknown = false;
-		for (final List<Checkpoint<STATE>> path : paths) {
-			mLogger.info("KInduction: checking path %s", path);
-			final PathVerdict verdict = runPath(graph, path);
-			mLogger.info("KInduction: path %s - verdict %s", path, verdict);
-			if (verdict == PathVerdict.UNSAFE) {
-				unsafe = true;
-				break;
+			final Verdict verdict = kInduction();
+			mSafe = verdict == Verdict.SAFE;
+			mSolverReturnedUnknown = verdict == Verdict.UNKNOWN;
+			if (mSafe) {
+				learnInvariants();
 			}
-			if (verdict == PathVerdict.UNKNOWN) {
-				unknown = true;
-			}
+		} finally {
+			mWorkerMgdScript.unlock(mKILock);
 		}
-
-		mSafe = !unsafe && !unknown;
-		mSolverReturnedUnknown = !unsafe && unknown;
-
-		mWorkerMgdScript.unlock(mKILock);
 		mLogger.info("is safe " + (mSafe && !mSolverReturnedUnknown));
 		mLogger.info("solver returned unknown: " + mSolverReturnedUnknown);
 	}
 
-	/**
-	 * Checks one INIT-to-FINAL path through the checkpoint graph. If the path has no loop head at all, this is a
-	 * single plain SAT check on its one edge formula. Otherwise the loop heads on the path are processed in order,
-	 * one phase per loop head: phase {@code p} sweeps {@code k = 1..MAX_K} for loop head {@code p}, with every
-	 * earlier loop head on the path frozen at its own stabilized iteration count ({@code frozenPrefix}, grown across
-	 * phases) and every later loop head on the path taken exactly one mandatory pass ({@link #buildTail}) - the same
-	 * phase structure {@code InterpolationBasedModelChecking} uses, just validated by base/step SAT checks
-	 * ({@link #checkStepCase}) instead of interpolant-sequence stabilization.
-	 */
-	private PathVerdict runPath(final CheckpointGraph<STATE> graph, final List<Checkpoint<STATE>> path) {
-		final List<STATE> loopHeadsOnPath = new ArrayList<>();
-		for (final Checkpoint<STATE> checkpoint : path) {
-			if (checkpoint.isLoopHead()) {
-				loopHeadsOnPath.add(checkpoint.getLoopHead());
+	private Verdict kInduction() {
+		for (int k = 1; k <= MAX_K; k++) {
+			final LBool base = checkBase(k);
+			mLogger.info("KInduction: k=%d - base case: %s", k, base);
+			if (base == LBool.SAT) {
+				return Verdict.UNSAFE;
 			}
+			if (base == LBool.UNKNOWN) {
+				return Verdict.UNKNOWN;
+			}
+			final LBool step = checkStep(k);
+			mLogger.info("KInduction: k=%d - step case: %s", k, step);
+			if (step == LBool.UNSAT) {
+				mProvedK = k;
+				return Verdict.SAFE;
+			}
+			if (step == LBool.UNKNOWN) {
+				return Verdict.UNKNOWN;
+			}
+			// step case SAT: not yet inductive, unroll once more
 		}
-
-		if (loopHeadsOnPath.isEmpty()) {
-			final List<UnmodifiableTransFormula> regions = List.of(graph.getEdge(Checkpoint.init(), Checkpoint.fin()));
-			mWorkerMgdScript.push(mKILock, 1);
-			assertRegionSequence(regions, 0);
-			final LBool sat = mWorkerMgdScript.checkSat(mKILock);
-			mWorkerMgdScript.pop(mKILock, 1);
-			if (sat == LBool.SAT) {
-				return PathVerdict.UNSAFE;
-			}
-			return sat == LBool.UNKNOWN ? PathVerdict.UNKNOWN : PathVerdict.SAFE;
-		}
-
-		final List<UnmodifiableTransFormula> frozenPrefix = new ArrayList<>();
-		frozenPrefix.add(graph.getEdge(Checkpoint.init(), Checkpoint.loopHead(loopHeadsOnPath.get(0))));
-
-		for (int p = 0; p < loopHeadsOnPath.size(); p++) {
-			final STATE loopHead = loopHeadsOnPath.get(p);
-			final List<UnmodifiableTransFormula> tail = buildTail(graph, loopHeadsOnPath, p);
-			final UnmodifiableTransFormula loopBody = graph.getLoopBody(loopHead);
-
-			boolean inductive = false;
-			for (int k = 1; k <= MAX_K; k++) {
-				final List<UnmodifiableTransFormula> baseRegions = new ArrayList<>(frozenPrefix);
-				baseRegions.addAll(Collections.nCopies(k, loopBody));
-				baseRegions.addAll(tail);
-
-				mWorkerMgdScript.push(mKILock, 1);
-				assertRegionSequence(baseRegions, 0);
-				final LBool baseSat = mWorkerMgdScript.checkSat(mKILock);
-				mWorkerMgdScript.pop(mKILock, 1);
-				mLogger.info("KInduction: path %s, loop head %s, k=%d - base case: %s", path, loopHead, k, baseSat);
-
-				if (baseSat == LBool.SAT) {
-					return PathVerdict.UNSAFE;
-				}
-				if (baseSat == LBool.UNKNOWN) {
-					return PathVerdict.UNKNOWN;
-				}
-
-				final LBool stepSat = checkStepCase(loopHead, loopBody, tail, k);
-				mLogger.info("KInduction: path %s, loop head %s, k=%d - step case: %s", path, loopHead, k, stepSat);
-
-				if (stepSat == LBool.UNKNOWN) {
-					return PathVerdict.UNKNOWN;
-				}
-				if (stepSat == LBool.UNSAT) {
-					frozenPrefix.addAll(Collections.nCopies(k, loopBody));
-					final Checkpoint<STATE> next =
-							p + 1 < loopHeadsOnPath.size() ? Checkpoint.loopHead(loopHeadsOnPath.get(p + 1))
-									: Checkpoint.fin();
-					frozenPrefix.add(graph.getEdge(Checkpoint.loopHead(loopHead), next));
-					inductive = true;
-					break;
-				}
-				// stepSat == SAT: not yet inductive at this k, grow k and retry both checks.
-			}
-			if (!inductive) {
-				mLogger.info("KInduction: path %s, loop head %s - reached MAX_K=%d without an inductive step", path,
-						loopHead, MAX_K);
-				return PathVerdict.UNKNOWN;
-			}
-		}
-		return PathVerdict.SAFE;
+		mLogger.info("KInduction: reached MAX_K=%d without an inductive step", MAX_K);
+		return Verdict.UNKNOWN;
 	}
 
 	/**
-	 * The fixed continuation of {@code path} after phase {@code phaseIndex}'s loop head: one mandatory pass through
-	 * every later loop head on the path, followed by the edge into FINAL. Identical in shape to
-	 * {@code InterpolationBasedModelChecking#buildTail}.
+	 * Is {@code pc = FINAL} reachable from {@code pc = INIT} in {@code k} transitions?
 	 */
-	private List<UnmodifiableTransFormula> buildTail(final CheckpointGraph<STATE> graph,
-			final List<STATE> loopHeadsOnPath, final int phaseIndex) {
-		final List<UnmodifiableTransFormula> tail = new ArrayList<>();
-		STATE current = loopHeadsOnPath.get(phaseIndex);
-		for (int q = phaseIndex + 1; q < loopHeadsOnPath.size(); q++) {
-			final STATE next = loopHeadsOnPath.get(q);
-			tail.add(graph.getEdge(Checkpoint.loopHead(current), Checkpoint.loopHead(next)));
-			tail.add(graph.getLoopBody(next));
-			current = next;
-		}
-		tail.add(graph.getEdge(Checkpoint.loopHead(current), Checkpoint.fin()));
-		return tail;
-	}
-
-	/**
-	 * Checks whether "no violation reachable" is inductive at {@code k} for {@code loopHead}: starting from a free,
-	 * unconstrained loop-head state at index {@code 0} (deliberately not tied to {@code init}, unlike the base
-	 * case's concrete {@code frozenPrefix}), {@code k} copies of {@code loopBody} are chained, asserting at each of
-	 * the {@code k} resulting intermediate loop-head states ({@code assertNoViolationHypothesis}) that {@code tail}
-	 * - the mandatory continuation to FINAL, composed into one relation via
-	 * {@link TransFormulaUtils#sequentialComposition} - is not satisfiable from there. "Not satisfiable from a free
-	 * state" cannot be expressed as a plain conjunct the way the base case's fully concrete chain can (there is no
-	 * single witness value for {@code tail}'s own out/aux vars that works for every model of the free state), so it
-	 * is asserted as an explicit universal quantifier over exactly those variables. One further copy of
-	 * {@code loopBody} is then chained and {@code tail} is asserted existentially - exactly like the base case's own
-	 * final region - from the resulting {@code (k+1)}th state.
-	 * <p>
-	 * If {@link #mInvariantSupplier} has an invariant for {@code loopHead}, it is asserted as an extra hypothesis at
-	 * every one of the {@code k+1} loop-head states (indices {@code 0..k}): sound because a real invariant already
-	 * over-approximates everything reachable at {@code loopHead}, so assuming it without re-proving it can only
-	 * prune this search, never introduce unsoundness.
-	 *
-	 * @return {@link LBool#UNSAT} if the step is inductive at {@code k}; {@link LBool#SAT} if not yet inductive at
-	 *         this {@code k} (try a larger {@code k}); {@link LBool#UNKNOWN} if the solver gave up.
-	 */
-	private LBool checkStepCase(final STATE loopHead, final UnmodifiableTransFormula loopBody,
-			final List<UnmodifiableTransFormula> tail, final int k) {
-		final UnmodifiableTransFormula tailRelation = tail.size() == 1 ? tail.get(0)
-				: TransFormulaUtils.sequentialComposition(mLogger, mServices, mWorkerMgdScript, false, false, false,
-						SimplificationTechnique.NONE, tail);
-
+	private LBool checkBase(final int k) {
+		final Script script = mWorkerMgdScript.getScript();
+		final List<Term> invariants = prepare(k);
 		mWorkerMgdScript.push(mKILock, 1);
-
-		assertInvariantHypothesis(loopHead, loopBody, 0);
-		for (int j = 1; j <= k; j++) {
-			assertRegionIndexed(loopBody, j - 1, j);
-			assertInvariantHypothesis(loopHead, loopBody, j);
-			assertNoViolationHypothesis(tailRelation, j);
+		mWorkerMgdScript.assertTerm(mKILock,
+				SmtUtils.binaryEquality(script, mConstants.pc(0), PcTransitionSystem.pcValue(script, PcTransitionSystem.INIT)));
+		assertSteps(k);
+		mWorkerMgdScript.assertTerm(mKILock, SmtUtils.binaryEquality(script, mConstants.pc(k),
+				PcTransitionSystem.pcValue(script, PcTransitionSystem.FINAL)));
+		for (final Term invariant : invariants) {
+			mWorkerMgdScript.assertTerm(mKILock, invariant);
 		}
-		assertRegionIndexed(loopBody, k, k + 1);
-		assertRegionIndexed(tailRelation, k + 1, k + 2);
-
 		final LBool result = mWorkerMgdScript.checkSat(mKILock);
 		mWorkerMgdScript.pop(mKILock, 1);
 		return result;
 	}
 
 	/**
-	 * Asserts {@code region}[{@code idxInVar} -> {@code idxOutVar}] via the same
-	 * {@link PredicateUtils#formulaWithIndexedVars} SSA-indexing machinery
-	 * {@code InterpolationBasedModelChecking#assertRegionSequenceNamed} uses (indexing both in- and out-vars via a
-	 * shared indexed-constant cache, so consecutive regions' matching vars land on the same constant automatically),
-	 * minus the {@code :named} partitioning IMC needs for interpolation - k-induction never interpolates.
+	 * Can {@code k} transitions from an arbitrary non-INIT state, with no error in the first {@code k} states,
+	 * reach an error? UNSAT means the step is inductive.
 	 */
-	private void assertRegionIndexed(final UnmodifiableTransFormula region, final int idxInVar, final int idxOutVar) {
-		final Set<IProgramVar> assignedVars = new HashSet<>();
-		final Term ssaFormula = PredicateUtils.formulaWithIndexedVars(region, idxInVar, idxOutVar, assignedVars,
-				mIndexedConstantsWorkerScript, mWorkerMgdScript.getScript());
-		mWorkerMgdScript.assertTerm(mKILock, ssaFormula);
+	private LBool checkStep(final int k) {
+		final Script script = mWorkerMgdScript.getScript();
+		final List<Term> invariants = prepare(k);
+		mWorkerMgdScript.push(mKILock, 1);
+		mWorkerMgdScript.assertTerm(mKILock, SmtUtils.distinct(script, mConstants.pc(0),
+				PcTransitionSystem.pcValue(script, PcTransitionSystem.INIT)));
+		assertSteps(k);
+		for (int j = 0; j < k; j++) {
+			mWorkerMgdScript.assertTerm(mKILock, SmtUtils.distinct(script, mConstants.pc(j),
+					PcTransitionSystem.pcValue(script, PcTransitionSystem.FINAL)));
+		}
+		mWorkerMgdScript.assertTerm(mKILock, SmtUtils.binaryEquality(script, mConstants.pc(k),
+				PcTransitionSystem.pcValue(script, PcTransitionSystem.FINAL)));
+		for (final Term invariant : invariants) {
+			mWorkerMgdScript.assertTerm(mKILock, invariant);
+		}
+		final LBool result = mWorkerMgdScript.checkSat(mKILock);
+		mWorkerMgdScript.pop(mKILock, 1);
+		return result;
 	}
 
-	private void assertRegionSequence(final List<UnmodifiableTransFormula> regions, final int startIndex) {
-		for (int s = 0; s < regions.size(); s++) {
-			assertRegionIndexed(regions.get(s), startIndex + s, startIndex + s + 1);
+	/**
+	 * Builds everything that declares constants (the steps up to {@code k}, the pc constants and the invariants).
+	 * This has to happen before the {@code push} of a query: constants declared inside are forgotten by the solver
+	 * on {@code pop}, but stay in {@link #mIndexedConstantsWorkerScript}.
+	 *
+	 * @return the invariant assertions for the states {@code 0..k}
+	 */
+	private List<Term> prepare(final int k) {
+		while (mStepTerms.size() < k) {
+			mStepTerms.add(mSystem.step(mStepTerms.size(), mConstants, mWorkerMgdScript));
+		}
+		for (int j = 0; j <= k; j++) {
+			mConstants.pc(j);
+		}
+		return invariantAssertions(k);
+	}
+
+	private void assertSteps(final int k) {
+		for (int j = 0; j < k; j++) {
+			mWorkerMgdScript.assertTerm(mKILock, mStepTerms.get(j));
+		}
+	}
+
+	// ------------------------------------------------------------------------------------------------------------
+	// Invariant injection
+	// ------------------------------------------------------------------------------------------------------------
+
+	/**
+	 * Asks the supplier for an invariant of every loop head and keeps those that only mention variables of the
+	 * transition system.
+	 */
+	private void collectInvariants() {
+		final Map<TermVariable, IProgramVar> varOfTermVariable = new HashMap<>();
+		for (final IProgramVar pv : mSystem.getVars()) {
+			varOfTermVariable.put(pv.getTermVariable(), pv);
+		}
+		for (final Map.Entry<STATE, Integer> head : mSystem.getHeadNodes().entrySet()) {
+			final Optional<Term> invariant = mInvariantSupplier.getInvariant(head.getKey(), mWorkerMgdScript);
+			if (invariant.isEmpty()) {
+				continue;
+			}
+			final Map<IProgramVar, TermVariable> used = new LinkedHashMap<>();
+			boolean usable = true;
+			for (final TermVariable tv : invariant.get().getFreeVars()) {
+				final IProgramVar pv = varOfTermVariable.get(tv);
+				if (pv == null) {
+					usable = false;
+					mLogger.info("KInduction: ignoring invariant of loop head %s, it mentions %s which occurs in "
+							+ "no transition", head.getKey(), tv);
+					break;
+				}
+				used.put(pv, tv);
+			}
+			if (usable) {
+				mInjectedInvariants.put(head.getValue(), invariant.get());
+				mInjectedInvariantVars.put(head.getValue(), used);
+				mLogger.info("KInduction: using invariant of loop head %s: %s", head.getKey(), invariant.get());
+			}
 		}
 	}
 
 	/**
-	 * Asserts {@code forall (tail's own out/aux vars). !tail[inVars := index idx]} - "no violation is reachable from
-	 * the loop-head state at index {@code idx}." Only {@code tailRelation}'s inVars are substituted (to indexed
-	 * constants, tying it into the chain); its out/aux vars are left as their original {@link TermVariable}s so they
-	 * can be universally bound directly, mirroring exactly which vars {@code tailRelation} itself existentially
-	 * quantifies when asserted normally (see {@link #assertRegionIndexed}).
+	 * For every step {@code 0..k}: if the pc is a loop head with an invariant, the invariant holds. Returns the assertions.
 	 */
-	private void assertNoViolationHypothesis(final UnmodifiableTransFormula tailRelation, final int idx) {
-		final Map<Term, Term> substitution = new HashMap<>();
-		for (final IProgramVar pv : tailRelation.getInVars().keySet()) {
-			final Term constant = pv.isOldvar() ? pv.getDefaultConstant() : PredicateUtils.getIndexedConstant(pv, idx,
-					mIndexedConstantsWorkerScript, mWorkerMgdScript.getScript());
-			substitution.put(tailRelation.getInVars().get(pv), constant);
+	private List<Term> invariantAssertions(final int k) {
+		final List<Term> result = new ArrayList<>();
+		final Script script = mWorkerMgdScript.getScript();
+		for (final Map.Entry<Integer, Term> entry : mInjectedInvariants.entrySet()) {
+			for (int j = 0; j <= k; j++) {
+				final Map<Term, Term> substitution = new HashMap<>();
+				for (final Map.Entry<IProgramVar, TermVariable> var : mInjectedInvariantVars.get(entry.getKey())
+						.entrySet()) {
+					substitution.put(var.getValue(), mConstants.var(var.getKey(), j));
+				}
+				final Term instantiated = PureSubstitution.apply(mWorkerMgdScript, substitution, entry.getValue());
+				final Term atHead = SmtUtils.binaryEquality(script, mConstants.pc(j),
+						PcTransitionSystem.pcValue(script, entry.getKey()));
+				result.add(SmtUtils.implies(script, atHead, instantiated));
+			}
 		}
-		final Term instantiated = PureSubstitution.apply(mWorkerMgdScript, substitution, tailRelation.getFormula());
+		return result;
+	}
 
-		final Set<TermVariable> toQuantify = new HashSet<>(tailRelation.getOutVars().values());
-		toQuantify.addAll(tailRelation.getAuxVars());
-		final Term negation = SmtUtils.not(mWorkerMgdScript.getScript(), instantiated);
-		final Term noViolation = toQuantify.isEmpty() ? negation
-				: SmtUtils.quantifier(mWorkerMgdScript.getScript(), QuantifiedFormula.FORALL, toQuantify, negation);
-		mWorkerMgdScript.assertTerm(mKILock, noViolation);
+	// ------------------------------------------------------------------------------------------------------------
+	// Learned invariants
+	// ------------------------------------------------------------------------------------------------------------
+
+	/**
+	 * For every loop head {@code h}: not (exists a run of {@link #mProvedK} transitions from {@code h} that ends in
+	 * FINAL), over the term variables of the program variables.
+	 */
+	private void learnInvariants() {
+		final Script script = mWorkerMgdScript.getScript();
+		for (final Map.Entry<STATE, Integer> head : mSystem.getHeadNodes().entrySet()) {
+			final FreshVars vars = new FreshVars(head.getValue());
+			final List<Term> conjuncts = new ArrayList<>();
+			for (int j = 0; j < mProvedK; j++) {
+				conjuncts.add(mSystem.step(j, vars, mWorkerMgdScript));
+			}
+			conjuncts.add(SmtUtils.binaryEquality(script, vars.pc(mProvedK),
+					PcTransitionSystem.pcValue(script, PcTransitionSystem.FINAL)));
+			final Term reachError = SmtUtils.quantifier(script, QuantifiedFormula.EXISTS, vars.getFreshVariables(),
+					SmtUtils.and(script, conjuncts));
+			mLearnedInvariants.put(head.getKey(), SmtUtils.not(script, reachError));
+		}
+		mLogger.info("KInduction: learned an invariant for %d loop head(s) from k=%d", mLearnedInvariants.size(),
+				mProvedK);
 	}
 
 	/**
-	 * Asserts {@link #mInvariantSupplier}'s invariant for {@code loopHead} (if any), instantiated at index
-	 * {@code idx} by substituting each of {@code loopBody}'s own inVars - i.e. {@code loopHead}'s live variables -
-	 * from its {@link IProgramVar#getTermVariable()} form (the convention {@link IInvariantSupplier} documents) to
-	 * the matching indexed constant.
+	 * Unrolling with constants, for solver queries. Auxiliary variables are separate constants per transition and
+	 * step, so different steps do not share their values.
 	 */
-	private void assertInvariantHypothesis(final STATE loopHead, final UnmodifiableTransFormula loopBody,
-			final int idx) {
-		final Optional<Term> invariant = mInvariantSupplier.getInvariant(loopHead, mWorkerMgdScript);
-		if (invariant.isEmpty()) {
-			return;
+	private final class ConstantVars implements StepVars {
+		private final Sort mPcSort = PcTransitionSystem.pcValue(mWorkerMgdScript.getScript(), 0).getSort();
+
+		@Override
+		public Term var(final IProgramVar pv, final int idx) {
+			return PredicateUtils.getIndexedConstant(pv, idx, mIndexedConstantsWorkerScript,
+					mWorkerMgdScript.getScript());
 		}
-		final Map<Term, Term> substitution = new HashMap<>();
-		for (final IProgramVar pv : loopBody.getInVars().keySet()) {
-			final Term constant = pv.isOldvar() ? pv.getDefaultConstant() : PredicateUtils.getIndexedConstant(pv, idx,
-					mIndexedConstantsWorkerScript, mWorkerMgdScript.getScript());
-			substitution.put(pv.getTermVariable(), constant);
+
+		@Override
+		public Term pc(final int idx) {
+			return PredicateUtils.getIndexedConstant("kipc", mPcSort, idx, mIndexedConstantsWorkerScript,
+					mWorkerMgdScript.getScript());
 		}
-		mWorkerMgdScript.assertTerm(mKILock, PureSubstitution.apply(mWorkerMgdScript, substitution, invariant.get()));
+
+		@Override
+		public Term aux(final int transitionId, final TermVariable auxVar, final int idx) {
+			return PredicateUtils.getIndexedConstant("kiaux_" + transitionId + "_" + auxVar.getName(),
+					auxVar.getSort(), idx, mIndexedConstantsWorkerScript, mWorkerMgdScript.getScript());
+		}
+	}
+
+	/**
+	 * Unrolling with fresh term variables, for a formula with quantifiers. Step 0 is the loop head {@code node} with
+	 * the program variables' own term variables (the convention of {@link IInvariantSupplier}); all later steps and
+	 * auxiliary variables are fresh and are to be quantified, see {@link #getFreshVariables()}.
+	 */
+	private final class FreshVars implements StepVars {
+		private final int mNode;
+		private final Map<String, TermVariable> mFresh = new LinkedHashMap<>();
+		private final Set<TermVariable> mFreshVariables = new LinkedHashSet<>();
+
+		FreshVars(final int node) {
+			mNode = node;
+		}
+
+		Set<TermVariable> getFreshVariables() {
+			return mFreshVariables;
+		}
+
+		private TermVariable fresh(final String key, final Sort sort) {
+			return mFresh.computeIfAbsent(key, k -> {
+				final TermVariable tv = mWorkerMgdScript.constructFreshTermVariable("ki", sort);
+				mFreshVariables.add(tv);
+				return tv;
+			});
+		}
+
+		@Override
+		public Term var(final IProgramVar pv, final int idx) {
+			if (idx == 0) {
+				return pv.getTermVariable();
+			}
+			return fresh("v_" + pv.getGloballyUniqueId() + "_" + idx, pv.getTermVariable().getSort());
+		}
+
+		@Override
+		public Term pc(final int idx) {
+			final Script script = mWorkerMgdScript.getScript();
+			if (idx == 0) {
+				return PcTransitionSystem.pcValue(script, mNode);
+			}
+			return fresh("pc_" + idx, PcTransitionSystem.pcValue(script, 0).getSort());
+		}
+
+		@Override
+		public Term aux(final int transitionId, final TermVariable auxVar, final int idx) {
+			return fresh("aux_" + transitionId + "_" + auxVar.getName() + "_" + idx, auxVar.getSort());
+		}
 	}
 
 	public boolean isSafe() {
@@ -409,8 +457,27 @@ public class KInduction<LETTER extends IAction, STATE> {
 		return mSolverReturnedUnknown;
 	}
 
+	/**
+	 * @return for every loop head, an invariant learned from the k-induction proof (empty unless the program was
+	 *         proven safe). The terms are native to the worker's {@link ManagedScript}.
+	 */
+	public Map<STATE, Term> getLearnedInvariants() {
+		return Collections.unmodifiableMap(mLearnedInvariants);
+	}
+
+	/**
+	 * @return {@link #getLearnedInvariants()} as a supplier, for use as the invariants of another run.
+	 */
+	public IInvariantSupplier<STATE> getLearnedInvariantSupplier() {
+		return IInvariantSupplier.fromMap(mLearnedInvariants, mWorkerMgdScript);
+	}
+
 	public NestedRun<LETTER, STATE> getCounterexample() {
 		assert !mSafe;
+		if (mCounterexample == null) {
+			throw new UnsupportedOperationException("KInduction found a violation, but extracting a counterexample "
+					+ "run is not implemented yet");
+		}
 		return mCounterexample;
 	}
 
