@@ -655,7 +655,22 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 			}
 		}
 
-		final Scope<STATE> scope = new Scope<>(head, region, children, entry, exit, edges, depth);
+		// The automaton states behind each checkpoint. Built here, from the maps above, rather than re-derived
+		// by a consumer: a re-derivation could drift from what the formulas were actually built from.
+		final Map<Checkpoint<STATE>, Collection<STATE>> checkpointStates = new LinkedHashMap<>(targets);
+		if (isRoot) {
+			final Set<STATE> starts = new LinkedHashSet<>();
+			for (final Pair<UnmodifiableTransFormula, STATE> source : sources) {
+				starts.add(source.getSecond());
+			}
+			checkpointStates.put(Checkpoint.init(), starts);
+		} else {
+			// In a loop scope an edge out of INIT starts AT THE HEAD and takes an entry transition first.
+			checkpointStates.put(Checkpoint.init(), Collections.singleton(head));
+		}
+
+		final Scope<STATE> scope =
+				new Scope<>(head, region, children, entry, exit, edges, depth, checkpointStates, nodes);
 		mLogger.info("LoopTree: scope %s built: %d inner loop(s), %d state(s), %d checkpoint edge(s)",
 				isRoot ? "ROOT" : "loop " + head, children.size(), region.size(), scope.getNumEdges());
 		return scope;
@@ -957,11 +972,14 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 		private final UnmodifiableTransFormula mExit;
 		private final Map<Checkpoint<STATE>, Map<Checkpoint<STATE>, UnmodifiableTransFormula>> mEdges;
 		private final int mDepth;
+		private final Map<Checkpoint<STATE>, Collection<STATE>> mCheckpointStates;
+		private final Set<STATE> mCutGraphNodes;
 
 		Scope(final STATE head, final Set<STATE> region, final List<Scope<STATE>> children,
 				final UnmodifiableTransFormula entry, final UnmodifiableTransFormula exit,
 				final Map<Checkpoint<STATE>, Map<Checkpoint<STATE>, UnmodifiableTransFormula>> edges,
-				final int depth) {
+				final int depth, final Map<Checkpoint<STATE>, Collection<STATE>> checkpointStates,
+				final Set<STATE> cutGraphNodes) {
 			mHead = head;
 			mRegion = region;
 			mChildren = children;
@@ -969,6 +987,26 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 			mExit = exit;
 			mEdges = edges;
 			mDepth = depth;
+			mCheckpointStates = checkpointStates;
+			mCutGraphNodes = cutGraphNodes;
+		}
+
+		/**
+		 * The automaton states a checkpoint stands for, both as the source and as the target of this scope's
+		 * edges: INIT in the root are the initial states inside this scope, INIT in a loop is the head (an edge
+		 * out of INIT starts there and takes an entry transition first), END is the head, LOOP_HEAD(c) is
+		 * {@code c}, FINAL are the accepting states inside this scope, ESCAPE(s) is {@code s}.
+		 *
+		 * @return the states, empty if the checkpoint does not occur in this scope.
+		 */
+		public Collection<STATE> getCheckpointStates(final Checkpoint<STATE> checkpoint) {
+			final Collection<STATE> result = mCheckpointStates.get(checkpoint);
+			return result == null ? Collections.emptyList() : Collections.unmodifiableCollection(result);
+		}
+
+		/** The nodes of this scope's cut graph: the region without the interiors of inner loops, plus the escapes. */
+		public Set<STATE> getCutGraphNodes() {
+			return Collections.unmodifiableSet(mCutGraphNodes);
 		}
 
 		public boolean isRoot() {

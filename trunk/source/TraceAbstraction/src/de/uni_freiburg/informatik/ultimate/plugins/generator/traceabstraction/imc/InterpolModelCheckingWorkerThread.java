@@ -196,8 +196,16 @@ public class InterpolModelCheckingWorkerThread<L extends IIcfgTransition<?>, A e
 			mCounterexample = mNwaCexTransferrer.transferRun(imc.getCounterexample(),
 					TransferBetweenMainAndWorker.TransferMode.MAIN2WORKER);
 			return false;
+		} else if (imc.wasUnkown()) {
+			// IMC does not record whether the solver gave up or the unrolling bound was reached, so we cannot name
+			// the case the way KInduction.Inconclusive does. Still better than claiming a bound that may not have
+			// been hit.
+			throw new UnsupportedOperationException("IMC is inconclusive: either the solver returned unknown or the "
+					+ "unrolling bound was exhausted (IMC does not record which), so the program is neither proved "
+					+ "safe nor refuted");
 		} else {
-			throw new AssertionError("Loop Bound");
+			throw new UnsupportedOperationException("IMC reported the program safe, but the result is an "
+					+ "overapproximation, which is not supported");
 		}
 	}
 

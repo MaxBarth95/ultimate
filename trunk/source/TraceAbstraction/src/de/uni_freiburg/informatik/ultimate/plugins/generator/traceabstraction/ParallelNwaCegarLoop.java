@@ -268,10 +268,25 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				shutDownAndDestroy(mDestroyEverything);
 				throw new AssertionError("Worker Crashed!, Exiting CEGAR loop!");
 			}
+			// A whole-program worker that refuted the program has already registered UNSAFE on mResultBuilder. It
+			// has no subtrahend and no error automaton, so there is nothing to refine with. This must be checked
+			// BEFORE the safe sentinel below, which a refutation would otherwise match (it too has no subtrahend)
+			// and be reported as SAFE.
+			if (workerResult.getAutomatonType() == AutomatonType.ERROR
+					&& (workerResult.mWorkerType.equals(WorkerType.IMC)
+							|| workerResult.mWorkerType.equals(WorkerType.KINDUCTION))) {
+				mLogger.info("Main: %s refuted the program", workerResult.mWorkerType);
+				// Fills only the error locations that have no result yet; the refuted one keeps its UNSAFE.
+				mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
+				shutDownAndDestroy(mDestroyEverything);
+				updateAndPrintStatistics(true);
+				return true;
+			}
 			// IMC and k-induction prove the whole program safe at once, they have no subtrahend to refine with.
+			// The null automaton type is what distinguishes that sentinel from the refutation above.
 			if ((workerResult.mWorkerType.equals(WorkerType.IMC)
 					|| workerResult.mWorkerType.equals(WorkerType.KINDUCTION))
-					&& (workerResult.getSubtrahend() == null)) {
+					&& (workerResult.getSubtrahend() == null) && (workerResult.getAutomatonType() == null)) {
 				mAbstraction = new NestedWordAutomaton(new AutomataLibraryServices(getServices()),
 						mAbstraction.getVpAlphabet(), mPredicateFactoryInterpolantAutomata);
 				mResultBuilder.addResultForAllRemaining(Result.SAFE);
@@ -279,7 +294,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				return true;
 			}
 			// If Error automaton terminate immediately
-			if (mPref.stopAfterFirstViolation() && workerResult.getAutomatonType().equals(AutomatonType.ERROR)) {
+			if (mPref.stopAfterFirstViolation() && workerResult.getAutomatonType() == AutomatonType.ERROR) {
 				shutDownAndDestroy(mDestroyEverything);
 				updateAndPrintStatistics(true);
 				return true;

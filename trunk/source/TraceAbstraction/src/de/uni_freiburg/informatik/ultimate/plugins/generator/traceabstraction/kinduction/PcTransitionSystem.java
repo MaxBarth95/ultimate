@@ -29,6 +29,7 @@ package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.k
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -75,11 +76,13 @@ public class PcTransitionSystem<STATE> {
 	public static final int INIT = 0;
 	public static final int FINAL = 1;
 
-	private final List<Transition> mTransitions = new ArrayList<>();
+	private final List<Transition<STATE>> mTransitions = new ArrayList<>();
 	private final Map<STATE, Integer> mHeadNodes = new LinkedHashMap<>();
 	private final Map<STATE, Integer> mWaypointNodes = new LinkedHashMap<>();
 	private final Set<IProgramVar> mVars = new LinkedHashSet<>();
+	private final Set<IProgramVar> mOldVars = new LinkedHashSet<>();
 	private int mNumNodes = 2;
+	private int mStutterTransitionId = -1;
 
 	/**
 	 * Supplies the terms for one unrolling of the system, either constants (for a solver query) or term variables
@@ -94,20 +97,103 @@ public class PcTransitionSystem<STATE> {
 
 		/** The auxiliary variable of transition {@code transitionId}, as used between step {@code idx} and the next. */
 		Term aux(int transitionId, TermVariable auxVar, int idx);
+
+		/**
+		 * A term that names which transition is taken between step {@code idx} and the next, so that a model can
+		 * be asked for it. {@code null}, the default, encodes no selector at all and leaves {@link #step} exactly
+		 * as it was.
+		 */
+		default Term sel(final int idx) {
+			return null;
+		}
 	}
 
-	private static final class Transition {
-		final int mId;
-		final int mFrom;
-		final int mTo;
+	/**
+	 * One transition of the system: an edge of one scope's checkpoint graph, or the stutter self loop of
+	 * {@link #FINAL}. Besides the pc nodes it remembers the automaton states the two checkpoints stand for, which
+	 * is what lets a counterexample be reconstructed from a model.
+	 */
+	public static final class Transition<STATE> {
+		private final int mId;
+		private final int mFrom;
+		private final int mTo;
 		// null: identity (stutter)
-		final UnmodifiableTransFormula mFormula;
+		private final UnmodifiableTransFormula mFormula;
+		// null for the stutter
+		private final Scope<STATE> mScope;
+		private final Checkpoint<STATE> mFromCheckpoint;
+		private final Checkpoint<STATE> mToCheckpoint;
+		private final Collection<STATE> mSourceStates;
+		private final Collection<STATE> mTargetStates;
 
-		Transition(final int id, final int from, final int to, final UnmodifiableTransFormula formula) {
+		Transition(final int id, final int from, final int to, final UnmodifiableTransFormula formula,
+				final Scope<STATE> scope, final Checkpoint<STATE> fromCheckpoint,
+				final Checkpoint<STATE> toCheckpoint, final Collection<STATE> sourceStates,
+				final Collection<STATE> targetStates) {
 			mId = id;
 			mFrom = from;
 			mTo = to;
 			mFormula = formula;
+			mScope = scope;
+			mFromCheckpoint = fromCheckpoint;
+			mToCheckpoint = toCheckpoint;
+			mSourceStates = sourceStates;
+			mTargetStates = targetStates;
+		}
+
+		public int getId() {
+			return mId;
+		}
+
+		public int getFromNode() {
+			return mFrom;
+		}
+
+		public int getToNode() {
+			return mTo;
+		}
+
+		/** The transition relation, {@code null} for the stutter self loop of {@link PcTransitionSystem#FINAL}. */
+		public UnmodifiableTransFormula getFormula() {
+			return mFormula;
+		}
+
+		/** The scope this edge came from, {@code null} for the stutter. */
+		public Scope<STATE> getScope() {
+			return mScope;
+		}
+
+		/** The source checkpoint, {@code null} for the stutter. */
+		public Checkpoint<STATE> getFromCheckpoint() {
+			return mFromCheckpoint;
+		}
+
+		/** The target checkpoint, {@code null} for the stutter. */
+		public Checkpoint<STATE> getToCheckpoint() {
+			return mToCheckpoint;
+		}
+
+		/** The automaton states a letter path realising this transition can start in. */
+		public Collection<STATE> getSourceStates() {
+			return mSourceStates;
+		}
+
+		/** The automaton states a letter path realising this transition can end in. */
+		public Collection<STATE> getTargetStates() {
+			return mTargetStates;
+		}
+
+		public boolean isStutter() {
+			return mFormula == null;
+		}
+
+		@Override
+		public String toString() {
+			if (isStutter()) {
+				return "t" + mId + ": FINAL -> FINAL (stutter)";
+			}
+			return "t" + mId + ": " + mFrom + " -> " + mTo + " (" + mScope + ", " + mFromCheckpoint + " -> "
+					+ mToCheckpoint + ")";
 		}
 	}
 
@@ -122,24 +208,28 @@ public class PcTransitionSystem<STATE> {
 			for (final Map.Entry<Checkpoint<STATE>, Map<Checkpoint<STATE>, UnmodifiableTransFormula>> from : scope
 					.getEdges().entrySet()) {
 				for (final Map.Entry<Checkpoint<STATE>, UnmodifiableTransFormula> to : from.getValue().entrySet()) {
-					addTransition(nodeOf(scope, from.getKey()), nodeOf(scope, to.getKey()), to.getValue());
+					addTransition(scope, from.getKey(), to.getKey(), to.getValue());
 				}
 			}
 		}
-		addTransition(FINAL, FINAL, null);
+		mStutterTransitionId = mTransitions.size();
+		mTransitions.add(new Transition<>(mStutterTransitionId, FINAL, FINAL, null, null, null, null,
+				Collections.emptyList(), Collections.emptyList()));
 	}
 
-	private void addTransition(final int from, final int to, final UnmodifiableTransFormula formula) {
-		mTransitions.add(new Transition(mTransitions.size(), from, to, formula));
-		if (formula != null) {
-			collectVars(formula.getInVars().keySet());
-			collectVars(formula.getOutVars().keySet());
-		}
+	private void addTransition(final Scope<STATE> scope, final Checkpoint<STATE> from, final Checkpoint<STATE> to,
+			final UnmodifiableTransFormula formula) {
+		mTransitions.add(new Transition<>(mTransitions.size(), nodeOf(scope, from), nodeOf(scope, to), formula,
+				scope, from, to, scope.getCheckpointStates(from), scope.getCheckpointStates(to)));
+		collectVars(formula.getInVars().keySet());
+		collectVars(formula.getOutVars().keySet());
 	}
 
 	private void collectVars(final Set<IProgramVar> vars) {
 		for (final IProgramVar pv : vars) {
-			if (!pv.isOldvar()) {
+			if (pv.isOldvar()) {
+				mOldVars.add(pv);
+			} else {
 				mVars.add(pv);
 			}
 		}
@@ -176,6 +266,32 @@ public class PcTransitionSystem<STATE> {
 		return Collections.unmodifiableSet(mVars);
 	}
 
+	/**
+	 * The old variables that occur in some transition. They are not part of the state: {@link #instantiate} maps
+	 * them to {@link IProgramVar#getDefaultConstant()}, which is shared by every step.
+	 */
+	public Set<IProgramVar> getOldVars() {
+		return Collections.unmodifiableSet(mOldVars);
+	}
+
+	/** The pc value of each "waypoint", a state outside a loop that a break out of the loop can jump to. */
+	public Map<STATE, Integer> getWaypointNodes() {
+		return Collections.unmodifiableMap(mWaypointNodes);
+	}
+
+	public Transition<STATE> getTransition(final int id) {
+		if (id < 0 || id >= mTransitions.size()) {
+			throw new IllegalArgumentException(
+					"no transition with id " + id + ", the system has " + mTransitions.size());
+		}
+		return mTransitions.get(id);
+	}
+
+	/** The id of the stutter self loop of {@link #FINAL}, the only transition leaving FINAL. */
+	public int getStutterTransitionId() {
+		return mStutterTransitionId;
+	}
+
 	public int getNumTransitions() {
 		return mTransitions.size();
 	}
@@ -189,6 +305,11 @@ public class PcTransitionSystem<STATE> {
 		return SmtUtils.constructIntValue(script, BigInteger.valueOf(node));
 	}
 
+	/** The term that names transition {@code id} in a step selector, see {@link StepVars#sel(int)}. */
+	public static Term transitionIdValue(final Script script, final int id) {
+		return SmtUtils.constructIntValue(script, BigInteger.valueOf(id));
+	}
+
 	/**
 	 * The relation between step {@code idx} and step {@code idx + 1}: some transition is taken, i.e. pc and variables
 	 * of the two steps fit to one of the transitions.
@@ -196,10 +317,16 @@ public class PcTransitionSystem<STATE> {
 	public Term step(final int idx, final StepVars sv, final ManagedScript mgdScript) {
 		final Script script = mgdScript.getScript();
 		final List<Term> disjuncts = new ArrayList<>();
-		for (final Transition t : mTransitions) {
+		final Term selector = sv.sel(idx);
+		for (final Transition<STATE> t : mTransitions) {
 			final List<Term> conjuncts = new ArrayList<>();
 			conjuncts.add(SmtUtils.binaryEquality(script, sv.pc(idx), pcValue(script, t.mFrom)));
 			conjuncts.add(SmtUtils.binaryEquality(script, sv.pc(idx + 1), pcValue(script, t.mTo)));
+			if (selector != null) {
+				// Pins a fresh, otherwise unconstrained constant to this disjunct's transition id, so a model
+				// names the transition that was taken. Satisfiability is unchanged in both directions.
+				conjuncts.add(SmtUtils.binaryEquality(script, selector, transitionIdValue(script, t.mId)));
+			}
 			final Set<IProgramVar> assigned = new LinkedHashSet<>();
 			if (t.mFormula != null) {
 				conjuncts.add(instantiate(t, idx, sv, mgdScript, assigned));
@@ -214,8 +341,8 @@ public class PcTransitionSystem<STATE> {
 		return SmtUtils.or(script, disjuncts);
 	}
 
-	private Term instantiate(final Transition t, final int idx, final StepVars sv, final ManagedScript mgdScript,
-			final Set<IProgramVar> assigned) {
+	private Term instantiate(final Transition<STATE> t, final int idx, final StepVars sv,
+			final ManagedScript mgdScript, final Set<IProgramVar> assigned) {
 		final UnmodifiableTransFormula tf = t.mFormula;
 		final Map<Term, Term> substitution = new HashMap<>();
 		for (final Map.Entry<IProgramVar, TermVariable> in : tf.getInVars().entrySet()) {

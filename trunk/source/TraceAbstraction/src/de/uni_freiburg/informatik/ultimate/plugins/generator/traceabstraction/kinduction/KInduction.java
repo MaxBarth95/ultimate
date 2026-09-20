@@ -51,6 +51,7 @@ import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.PureSubstitution;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
 import de.uni_freiburg.informatik.ultimate.logic.QuantifiedFormula;
+import de.uni_freiburg.informatik.ultimate.logic.Rational;
 import de.uni_freiburg.informatik.ultimate.logic.Script;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Sort;
@@ -109,9 +110,11 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private final ManagedScript mWorkerMgdScript;
 	private final KILock mKILock = new KILock();
 
-	// TODO: on SAT, a concrete witness path is not yet extracted; left unset. See run(). Same gap as IMC's own
-	// mCounterexample.
+	// Set by run() when the base case is satisfiable, reconstructed from mWitness by
+	// KInductionCounterexampleBuilder.
 	NestedRun<LETTER, STATE> mCounterexample;
+	// What the model of the satisfiable base case said. Read in checkBase before its pop, null unless UNSAFE.
+	private KInductionWitness mWitness;
 
 	private final CfgSmtToolkit mCsToolkit;
 	private final ILogger mLogger;
@@ -120,6 +123,9 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private boolean mSolverReturnedUnknown;
 	private boolean mSafe;
 	private int mProvedK = -1;
+	private Inconclusive mInconclusive;
+	// The solver's answer to :reason-unknown for the most recent query that returned UNKNOWN.
+	private String mLastReasonUnknown;
 	private final Map<STATE, Term> mLearnedInvariants = new LinkedHashMap<>();
 
 	// Mirrors IMC's own worker-thread integration parameters, kept for structural consistency between the two
@@ -187,6 +193,11 @@ public class KInduction<LETTER extends IAction, STATE> {
 			mSolverReturnedUnknown = verdict == Verdict.UNKNOWN;
 			if (mSafe) {
 				learnInvariants();
+			} else if (verdict == Verdict.UNSAFE) {
+				// Still under the lock, but after the base case's pop: reconstruction asserts terms, which would
+				// invalidate the model we are working from. mWitness already holds everything we need from it.
+				mCounterexample = new KInductionCounterexampleBuilder<>(mServices, mLogger, mWorkerMgdScript,
+						mKILock, mAbstraction, mSystem, mWitness).build();
 			}
 		} finally {
 			mWorkerMgdScript.unlock(mKILock);
@@ -198,26 +209,49 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private Verdict kInduction() {
 		for (int k = 1; k <= MAX_K; k++) {
 			final LBool base = checkBase(k);
-			mLogger.info("KInduction: k=%d - base case: %s", k, base);
+			mLogger.info("KInduction: k=%d - base case: %s%s", k, base, reasonSuffix(base));
 			if (base == LBool.SAT) {
 				return Verdict.UNSAFE;
 			}
 			if (base == LBool.UNKNOWN) {
+				mInconclusive = Inconclusive.solverUnknown(k, "base", mLastReasonUnknown);
 				return Verdict.UNKNOWN;
 			}
 			final LBool step = checkStep(k);
-			mLogger.info("KInduction: k=%d - step case: %s", k, step);
+			mLogger.info("KInduction: k=%d - step case: %s%s", k, step, reasonSuffix(step));
 			if (step == LBool.UNSAT) {
 				mProvedK = k;
 				return Verdict.SAFE;
 			}
 			if (step == LBool.UNKNOWN) {
+				mInconclusive = Inconclusive.solverUnknown(k, "step", mLastReasonUnknown);
 				return Verdict.UNKNOWN;
 			}
 			// step case SAT: not yet inductive, unroll once more
 		}
-		mLogger.info("KInduction: reached MAX_K=%d without an inductive step", MAX_K);
+		mInconclusive = Inconclusive.boundExhausted(MAX_K);
+		mLogger.info("KInduction: " + mInconclusive);
 		return Verdict.UNKNOWN;
+	}
+
+	private String reasonSuffix(final LBool result) {
+		return result == LBool.UNKNOWN ? " (solver reason: " + mLastReasonUnknown + ")" : "";
+	}
+
+	/**
+	 * Asks the solver why it answered {@code unknown}. Must be called before the {@code pop} of the query it refers
+	 * to, because the answer describes the last check. Values are solver specific; z3 reports for example
+	 * {@code timeout}, {@code memout}, {@code canceled} or {@code (incomplete (theory arithmetic))}, which is the
+	 * only way to tell a resource limit apart from an undecidable fragment - the two need opposite remedies.
+	 */
+	private String reasonUnknown() {
+		final Script script = mWorkerMgdScript.getScript();
+		try {
+			return String.valueOf(script.getInfo(":reason-unknown"));
+		} catch (final UnsupportedOperationException e) {
+			// Not every solver implements :reason-unknown. Report that explicitly instead of implying we know.
+			return "not reported (" + script.getClass().getSimpleName() + " does not support :reason-unknown)";
+		}
 	}
 
 	/**
@@ -235,9 +269,63 @@ public class KInduction<LETTER extends IAction, STATE> {
 		for (final Term invariant : invariants) {
 			mWorkerMgdScript.assertTerm(mKILock, invariant);
 		}
-		final LBool result = mWorkerMgdScript.checkSat(mKILock);
+		final LBool result = checkSat();
+		if (result == LBool.SAT) {
+			// The model dies with this scope, so it has to be read now. The constants themselves were declared by
+			// prepare(k), i.e. outside the push, and survive the pop.
+			mWitness = extractWitness(k);
+			mLogger.info("KInduction: violation found, model says %s", mWitness);
+		}
 		mWorkerMgdScript.pop(mKILock, 1);
 		return result;
+	}
+
+	/**
+	 * Reads the model of a satisfiable base case. Must be called after {@code checkSat} returned {@code sat} and
+	 * before the {@code pop} of that query.
+	 */
+	private KInductionWitness extractWitness(final int k) {
+		final List<Term> queried = new ArrayList<>();
+		for (int j = 0; j <= k; j++) {
+			queried.add(mConstants.pc(j));
+		}
+		for (int j = 0; j < k; j++) {
+			queried.add(mConstants.sel(j));
+		}
+
+		final Map<Term, Term> model;
+		try {
+			// Not ManagedScript.getValue: SmtUtils normalizes what the solver returns, e.g. z3's (- 1) to -1.
+			model = SmtUtils.getValues(mWorkerMgdScript.getScript(), queried);
+		} catch (final UnsupportedOperationException e) {
+			throw new UnsupportedOperationException("k-induction found a violation but the solver cannot produce a "
+					+ "model, so no counterexample can be extracted. The worker's solver needs a mode that sets "
+					+ ":produce-models (e.g. External_ModelsAndUnsatCoreMode, the default).", e);
+		}
+
+		final int[] pcValues = new int[k + 1];
+		for (int j = 0; j <= k; j++) {
+			pcValues[j] = intValue(model, mConstants.pc(j), "pc_" + j);
+		}
+		final int[] transitionIds = new int[k];
+		for (int j = 0; j < k; j++) {
+			transitionIds[j] = intValue(model, mConstants.sel(j), "selector_" + j);
+		}
+		return new KInductionWitness(k, pcValues, transitionIds);
+	}
+
+	/**
+	 * The pc and the transition selector are integers by construction, so anything else here means the model does
+	 * not fit the encoding, which is a bug rather than an unsupported case.
+	 */
+	private static int intValue(final Map<Term, Term> model, final Term term, final String description) {
+		final Term value = model.get(term);
+		final Rational rational = value == null ? null : SmtUtils.tryToConvertToLiteral(value);
+		if (rational == null || !rational.isIntegral()) {
+			throw new AssertionError("the k-induction model gives " + value + " for " + description
+					+ ", which is not an integer literal");
+		}
+		return rational.numerator().intValueExact();
 	}
 
 	/**
@@ -260,8 +348,19 @@ public class KInduction<LETTER extends IAction, STATE> {
 		for (final Term invariant : invariants) {
 			mWorkerMgdScript.assertTerm(mKILock, invariant);
 		}
-		final LBool result = mWorkerMgdScript.checkSat(mKILock);
+		final LBool result = checkSat();
 		mWorkerMgdScript.pop(mKILock, 1);
+		return result;
+	}
+
+	/**
+	 * Runs the query and, if it is inconclusive, records why while the solver can still be asked.
+	 */
+	private LBool checkSat() {
+		final LBool result = mWorkerMgdScript.checkSat(mKILock);
+		if (result == LBool.UNKNOWN) {
+			mLastReasonUnknown = reasonUnknown();
+		}
 		return result;
 	}
 
@@ -398,6 +497,12 @@ public class KInduction<LETTER extends IAction, STATE> {
 			return PredicateUtils.getIndexedConstant("kiaux_" + transitionId + "_" + auxVar.getName(),
 					auxVar.getSort(), idx, mIndexedConstantsWorkerScript, mWorkerMgdScript.getScript());
 		}
+
+		@Override
+		public Term sel(final int idx) {
+			return PredicateUtils.getIndexedConstant("kisel", mPcSort, idx, mIndexedConstantsWorkerScript,
+					mWorkerMgdScript.getScript());
+		}
 	}
 
 	/**
@@ -462,6 +567,78 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
+	 * @return why k-induction ended without a verdict. Only defined if {@link #wasUnkown()}.
+	 */
+	public Inconclusive getInconclusive() {
+		if (mInconclusive == null) {
+			throw new UnsupportedOperationException(
+					"k-induction was not inconclusive, so there is no reason to report");
+		}
+		return mInconclusive;
+	}
+
+	/**
+	 * Why k-induction stopped without proving or refuting the program. The two possibilities are kept apart because
+	 * they call for opposite remedies: an exhausted unrolling bound means the search was cut short and a larger
+	 * bound might still decide it, whereas a solver that answers {@code unknown} will keep doing so until the query
+	 * itself changes (fewer variables, a different encoding, an injected invariant, or a higher resource limit).
+	 */
+	public static final class Inconclusive {
+		private final int mK;
+		private final String mCase;
+		private final String mSolverReason;
+
+		private Inconclusive(final int k, final String theCase, final String solverReason) {
+			mK = k;
+			mCase = theCase;
+			mSolverReason = solverReason;
+		}
+
+		static Inconclusive solverUnknown(final int k, final String theCase, final String solverReason) {
+			return new Inconclusive(k, theCase, solverReason);
+		}
+
+		static Inconclusive boundExhausted(final int maxK) {
+			return new Inconclusive(maxK, null, null);
+		}
+
+		/**
+		 * @return true if the unrolling bound was reached, false if the solver gave up first.
+		 */
+		public boolean isBoundExhausted() {
+			return mCase == null;
+		}
+
+		public int getK() {
+			return mK;
+		}
+
+		/**
+		 * @return "base" or "step". Only defined unless {@link #isBoundExhausted()}.
+		 */
+		public String getCase() {
+			return mCase;
+		}
+
+		/**
+		 * @return the solver's {@code :reason-unknown}. Only defined unless {@link #isBoundExhausted()}.
+		 */
+		public String getSolverReason() {
+			return mSolverReason;
+		}
+
+		@Override
+		public String toString() {
+			if (isBoundExhausted()) {
+				return "k-induction reached the unrolling bound MAX_K=" + mK
+						+ " without an inductive step; neither a proof nor a violation was found";
+			}
+			return "k-induction is inconclusive: the solver returned unknown for the " + mCase + " case at k=" + mK
+					+ " (solver reason: " + mSolverReason + "), so the program is neither proved safe nor refuted";
+		}
+	}
+
+	/**
 	 * @return for every loop head, an invariant learned from the k-induction proof (empty unless the program was
 	 *         proven safe). The terms are native to the worker's {@link ManagedScript}.
 	 */
@@ -476,11 +653,18 @@ public class KInduction<LETTER extends IAction, STATE> {
 		return IInvariantSupplier.fromMap(mLearnedInvariants, mWorkerMgdScript);
 	}
 
+	/**
+	 * @return a run of the abstraction that reaches an accepting state and is feasible, i.e. a genuine
+	 *         counterexample. Only defined if k-induction refuted the program.
+	 */
 	public NestedRun<LETTER, STATE> getCounterexample() {
-		assert !mSafe;
+		if (mSafe || mSolverReturnedUnknown) {
+			throw new UnsupportedOperationException("k-induction did not refute the program, so there is no "
+					+ "counterexample");
+		}
 		if (mCounterexample == null) {
-			throw new UnsupportedOperationException("KInduction found a violation, but extracting a counterexample "
-					+ "run is not implemented yet");
+			throw new IllegalStateException("k-induction refuted the program but no counterexample was built; "
+					+ "KInductionCounterexampleBuilder must either return a run or throw");
 		}
 		return mCounterexample;
 	}
