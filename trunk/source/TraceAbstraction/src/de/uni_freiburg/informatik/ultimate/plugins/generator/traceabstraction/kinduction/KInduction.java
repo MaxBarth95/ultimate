@@ -166,15 +166,19 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	private void run() throws AutomataLibraryException {
+		mLogger.info("KInduction: starting k-induction (MAX_K=%d)", MAX_K);
+		// Building the loop tree composes transition formulas, which declares constants for their aux vars and thus
+		// locks the script itself. So the tree has to be complete before we take the lock for the solver queries.
+		final LoopTree<STATE> tree =
+				new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
+		mSystem = new PcTransitionSystem<>(tree);
+		mLogger.info(
+				"KInduction: transition system with %d pc value(s), %d transition(s), %d variable(s), %d loop head(s)",
+				mSystem.getNumNodes(), mSystem.getNumTransitions(), mSystem.getVars().size(),
+				mSystem.getHeadNodes().size());
+
 		mWorkerMgdScript.lock(mKILock);
 		try {
-			mLogger.info("KInduction: starting k-induction (MAX_K=%d)", MAX_K);
-			final LoopTree<STATE> tree =
-					new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
-			mSystem = new PcTransitionSystem<>(tree);
-			mLogger.info("KInduction: transition system with %d pc value(s), %d transition(s), %d variable(s), "
-					+ "%d loop head(s)", mSystem.getNumNodes(), mSystem.getNumTransitions(), mSystem.getVars().size(),
-					mSystem.getHeadNodes().size());
 			mConstants = new ConstantVars();
 			collectInvariants();
 

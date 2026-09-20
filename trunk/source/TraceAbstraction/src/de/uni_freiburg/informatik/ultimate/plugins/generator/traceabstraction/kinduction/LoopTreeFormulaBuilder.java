@@ -99,9 +99,10 @@ import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
  * <h2>How to use</h2>
  *
  * Construct the builder, call {@link #build()} once, and read the formulas off the scopes of the resulting
- * {@link LoopTree}. All formulas live in the {@link ManagedScript} passed to the constructor; lock it before using
- * them in a solver. Every {@code getEdge} returns {@code null} if there is no such path, which is normal and not an
- * error.
+ * {@link LoopTree}. All formulas live in the {@link ManagedScript} passed to the constructor. That script must
+ * <b>not</b> be locked while {@link #build()} runs: composing transition formulas declares constants for their aux
+ * vars and therefore acquires the lock itself. Lock the script afterwards, once all formulas exist, to use them in a
+ * solver. Every {@code getEdge} returns {@code null} if there is no such path, which is normal and not an error.
  *
  * <pre>{@code
  * final LoopTreeFormulaBuilder<LETTER, STATE> builder =
