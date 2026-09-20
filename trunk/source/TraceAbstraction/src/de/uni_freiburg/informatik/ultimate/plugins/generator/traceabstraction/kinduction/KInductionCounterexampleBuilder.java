@@ -113,6 +113,14 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 */
 	private static final int MAX_EXPANSIONS = 100_000;
 
+	private static final String CALL_RETURN_RESTRICTION =
+			"k-induction counterexamples are restricted to internal transitions, because the nesting relation of a "
+					+ "run cannot be recovered from the pc transition system, whose formulas treat a call and a "
+					+ "return like any other edge. That treatment is only sound for inlined procedures "
+					+ "(see LoopTreeFormulaBuilder), so on a program whose procedures were not inlined the "
+					+ "k-induction verdict itself rests on an assumption that does not hold here - not just the "
+					+ "counterexample. Inline the procedures, or teach the pc transition system about calls.";
+
 	private final IUltimateServiceProvider mServices;
 	private final ILogger mLogger;
 	private final ManagedScript mMgdScript;
@@ -163,6 +171,20 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 *             if the violation cannot be expressed as a run of the abstraction.
 	 */
 	public NestedRun<LETTER, STATE> build() {
+		// Checked before anything else, because on a call-bearing abstraction the verdict we are asked to witness
+		// is itself unsound: LoopTreeFormulaBuilder gives a call and a return edge the transition formula of the
+		// call resp. the return and then treats them like ordinary edges, so the transition system admits paths
+		// that leave through one call site and come back at another. Such a spliced path skips whatever lies
+		// between the two sites, which is how a satisfiable base case can appear for a program that never reaches
+		// an error. Searching for a run that realises it would fail anyway, but with a message about the search
+		// rather than about the reason.
+		final STATE withCall = findCallOrReturn();
+		if (withCall != null) {
+			throw new KInductionCounterexampleException("k-induction reported a violation at k=" + mWitness.getK()
+					+ " (" + mWitness + "), but the abstraction has call and return transitions (for example at "
+					+ withCall + "), so that verdict cannot be trusted and no counterexample is reported. "
+					+ CALL_RETURN_RESTRICTION);
+		}
 		checkWitnessShape();
 		mLogger.info("KInduction: reconstructing a counterexample for %d pc step(s) of %s", mSteps, mWitness);
 
@@ -181,9 +203,9 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 				mStates.clear();
 				mCurrent.clear();
 			}
-			throw new KInductionCounterexampleException("no counterexample run starts in any of the initial states "
-					+ first.getSourceStates() + " of " + first + "; k-induction reported a violation at k="
-					+ mWitness.getK() + " with " + mWitness);
+			throw noRunFound("no counterexample run starts in any of the initial states " + first.getSourceStates()
+					+ " of " + first + ", although k-induction reported a violation at k=" + mWitness.getK()
+					+ " (" + mWitness + ")");
 		} finally {
 			// A search that succeeded returns with every scope it pushed still on the stack, so unwind by depth
 			// rather than by a fixed count.
@@ -373,19 +395,48 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 * path the model took and report a violation as unreconstructible for the wrong reason.
 	 */
 	private Iterable<OutgoingInternalTransition<LETTER, STATE>> internalSuccessors(final STATE state) {
-		if (mAbstraction.callSuccessors(state).iterator().hasNext()) {
-			throw new KInductionCounterexampleException("state " + state + " has a call transition. k-induction "
-					+ "counterexamples are restricted to internal transitions, because the nesting relation of a "
-					+ "run cannot be recovered from the pc transition system. This program needs its procedures "
-					+ "inlined.");
-		}
-		if (mAbstraction.returnSuccessors(state).iterator().hasNext()) {
-			throw new KInductionCounterexampleException("state " + state + " has a return transition. k-induction "
-					+ "counterexamples are restricted to internal transitions, because the nesting relation of a "
-					+ "run cannot be recovered from the pc transition system. This program needs its procedures "
-					+ "inlined.");
+		if (hasCallOrReturn(state)) {
+			throw new KInductionCounterexampleException(
+					"state " + state + " has a call or return transition. " + CALL_RETURN_RESTRICTION);
 		}
 		return mAbstraction.internalSuccessors(state);
+	}
+
+	private boolean hasCallOrReturn(final STATE state) {
+		return mAbstraction.callSuccessors(state).iterator().hasNext()
+				|| mAbstraction.returnSuccessors(state).iterator().hasNext();
+	}
+
+	/**
+	 * The first state with a call or a return transition, or {@code null} if the abstraction has none.
+	 * <p>
+	 * Only used to explain a failed search. The search itself walks internal transitions and prunes with an
+	 * internal-only reachability check, so a counterexample that needs a call is not merely missed at the state
+	 * that has the call - the pruning can rule out every successor long before that state is reached, and the
+	 * search then ends with nothing to point at. Without this, such a run is reported as "no path found", which
+	 * sends the reader looking for a bug in the search instead of at the real cause.
+	 */
+	private STATE findCallOrReturn() {
+		for (final STATE state : mAbstraction.getStates()) {
+			if (hasCallOrReturn(state)) {
+				return state;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Turns a failed search into the most specific explanation available.
+	 */
+	private KInductionCounterexampleException noRunFound(final String what) {
+		final STATE withCall = findCallOrReturn();
+		if (withCall != null) {
+			return new KInductionCounterexampleException(what + ". The abstraction has call and return transitions "
+					+ "(for example at " + withCall + "), so this is expected: " + CALL_RETURN_RESTRICTION);
+		}
+		return new KInductionCounterexampleException(what + ". The abstraction has only internal transitions, so "
+				+ "this is not a restriction of the reconstruction: the pc transition system claims a path that "
+				+ "the letters of the abstraction do not admit, which means the two disagree.");
 	}
 
 	/**
