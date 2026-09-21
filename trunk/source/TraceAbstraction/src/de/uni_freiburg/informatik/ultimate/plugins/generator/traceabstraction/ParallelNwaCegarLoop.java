@@ -33,12 +33,14 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryException;
@@ -79,7 +81,6 @@ import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverB
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder.SolverSettings;
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracecheck.InterpolationTechnique;
 import de.uni_freiburg.informatik.ultimate.logic.Logics;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.Activator;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.preferences.IcfgPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
@@ -99,6 +100,16 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	boolean mComputeHoareAnnotation;
 	final String mDestroyEverything = "destroyEverything";
 
+	/**
+	 * The per-check timeout option of the external solvers we can configure, by the name of their executable: the
+	 * pattern matches the option as it may already appear in the configured command, the format string writes a new
+	 * one. Mirrors {@link SolverBuilder.ExternalSolver}, which spells the same options for its built-in commands.
+	 */
+	private static final Map<String, Entry<Pattern, String>> SOLVER_TIMEOUT_OPTION = Map.of(
+			"z3", Map.entry(Pattern.compile("\\s*-t:\\d+"), " -t:%d"),
+			"cvc4", Map.entry(Pattern.compile("\\s*--tlimit-per=\\d+"), " --tlimit-per=%d"),
+			"cvc5", Map.entry(Pattern.compile("\\s*--tlimit-per=\\d+"), " --tlimit-per=%d"));
+
 	// Parallel Setup
 	private final ExecutorService mExec;
 	private final int mThreadLimit;
@@ -107,6 +118,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private final int mNumSymExecWorkers;
 	private final int mNumKInductionWorkers;
 	private int mRunningThreads = 0;
+	// Workers that finished without a verdict. They are gone from the pool and will produce nothing more.
+	private int mRetiredWorkers = 0;
 
 	// private final CompletionService<WorkerThreadResult<L, A>> mECS;
 	BlockingQueue<WorkerThreadTask<L>> mWorkerTaskQueue = new LinkedBlockingQueue<>();
@@ -268,6 +281,23 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				shutDownAndDestroy(mDestroyEverything);
 				throw new AssertionError("Worker Crashed!, Exiting CEGAR loop!");
 			}
+			// A worker that ran to completion without deciding the program (the solver answered unknown). It has
+			// nothing to refine with, so the only thing to do is retire it and let the remaining workers finish.
+			// If it was the last one, nobody is left to decide and the honest answer is UNKNOWN - not a crash.
+			if (workerResult.noVerdict()) {
+				mRetiredWorkers += 1;
+				mLogger.warn("Main: %s finished without a verdict (%d of %d worker(s) retired)",
+						workerResult.getWorkerType(), mRetiredWorkers, mThreadLimit);
+				if (mRetiredWorkers >= mThreadLimit) {
+					mLogger.warn("Main: every worker finished without a verdict, reporting UNKNOWN");
+					mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
+					shutDownAndDestroy(mDestroyEverything);
+					updateAndPrintStatistics(true);
+					return true;
+				}
+				workerResult = mWorkerResultQueue.poll();
+				continue;
+			}
 			// A whole-program worker that refuted the program has already registered UNSAFE on mResultBuilder. It
 			// has no subtrahend and no error automaton, so there is nothing to refine with. This must be checked
 			// BEFORE the safe sentinel below, which a refutation would otherwise match (it too has no subtrahend)
@@ -356,7 +386,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(
 				new AutomataLibraryServices(mServices), mLogger, mCsToolkit.getManagedScript(), iterationServices,
-				getSolverSettings(iterationServices,
+				getSolverSettings(workerType,
 						getIteration() + mRunningThreads + mCounterexample.getWord().asList().hashCode() + "parallel"),
 				mCsToolkit);
 
@@ -698,35 +728,46 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	/**
-	 * @param services
+	 * The solver settings of one worker script. They come from the TraceAbstraction preference page, not from
+	 * IcfgBuilder's: the workers do trace abstraction, and a user who configures a solver for TraceAbstraction
+	 * expects that solver here. (Reading IcfgBuilder's page instead used to impose its per-query timeout, which for
+	 * a long-running k-induction worker silently turned proofs into {@code unknown}.)
+	 *
+	 * @param workerType
+	 *            the kind of worker this script is for; {@link WorkerType#KINDUCTION} may carry its own per-query
+	 *            timeout, see {@link TraceAbstractionPreferenceInitializer#LABEL_KINDUCTION_SOLVER_TIMEOUT}.
 	 * @param filename
+	 *            base name for a dumped SMT script
 	 */
-	private SolverSettings getSolverSettings(final IUltimateServiceProvider services, final String filename) {
+	private SolverSettings getSolverSettings(final WorkerType workerType, final String filename) {
 
-		final IPreferenceProvider prefs = mServices.getPreferenceProvider(Activator.PLUGIN_ID);
+		// Everything that describes the solver comes from the TraceAbstraction page. Only the two benchmark-dump
+		// flags do not exist there, so those keep reading IcfgBuilder's page.
+		final IPreferenceProvider taPrefs = mServices.getPreferenceProvider(Activator.PLUGIN_ID);
+		final IPreferenceProvider icfgPrefs = mServices.getPreferenceProvider(
+				de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.Activator.PLUGIN_ID);
 
-		final SolverMode solverMode = prefs.getEnum(IcfgPreferenceInitializer.LABEL_SOLVER, SolverMode.class);
+		final SolverMode solverMode = mPref.solverMode();
 
 		final boolean fakeNonIncrementalScript =
-				prefs.getBoolean(IcfgPreferenceInitializer.LABEL_FAKE_NON_INCREMENTAL_SCRIPT);
+				taPrefs.getBoolean(IcfgPreferenceInitializer.LABEL_FAKE_NON_INCREMENTAL_SCRIPT);
 
-		final boolean dumpSmtScriptToFile = prefs.getBoolean(IcfgPreferenceInitializer.LABEL_DUMP_TO_FILE);
-		final boolean compressSmtScript = prefs.getBoolean(IcfgPreferenceInitializer.LABEL_COMPRESS_SMT_DUMP_FILE);
-		final String pathOfDumpedScript = prefs.getString(IcfgPreferenceInitializer.LABEL_DUMP_PATH);
+		final boolean dumpSmtScriptToFile = mPref.dumpSmtScriptToFile();
+		final boolean compressSmtScript = mPref.compressDumpedSmtScript();
+		final String pathOfDumpedScript = mPref.pathOfDumpedScript();
 
-		final String commandExternalSolver = prefs.getString(IcfgPreferenceInitializer.LABEL_EXT_SOLVER_COMMAND);
+		final String commandExternalSolver = externalSolverCommand(workerType);
 
 		final boolean dumpUnsatCoreTrackBenchmark =
-				prefs.getBoolean(IcfgPreferenceInitializer.LABEL_DUMP_UNSAT_CORE_BENCHMARK);
+				icfgPrefs.getBoolean(IcfgPreferenceInitializer.LABEL_DUMP_UNSAT_CORE_BENCHMARK);
 
 		final boolean dumpMainTrackBenchmark =
-				prefs.getBoolean(IcfgPreferenceInitializer.LABEL_DUMP_MAIN_TRACK_BENCHMARK);
+				icfgPrefs.getBoolean(IcfgPreferenceInitializer.LABEL_DUMP_MAIN_TRACK_BENCHMARK);
 
 		final Map<String, String> additionalSmtOptions =
-				prefs.getKeyValueMap(IcfgPreferenceInitializer.LABEL_ADDITIONAL_SMT_OPTIONS);
+				taPrefs.getKeyValueMap(IcfgPreferenceInitializer.LABEL_ADDITIONAL_SMT_OPTIONS);
 
-		final Logics logicForExternalSolver =
-				Logics.valueOf(prefs.getString(IcfgPreferenceInitializer.LABEL_EXT_SOLVER_LOGIC));
+		final Logics logicForExternalSolver = mPref.logicForExternalSolver();
 		final SolverSettings solverSettings =
 				SolverBuilder.constructSolverSettings().setUseFakeIncrementalScript(fakeNonIncrementalScript)
 						.setDumpSmtScriptToFile(dumpSmtScriptToFile, pathOfDumpedScript, filename, compressSmtScript)
@@ -736,6 +777,31 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 						.setSolverMode(solverMode).setAdditionalOptions(additionalSmtOptions);
 
 		return solverSettings;
+	}
+
+	/**
+	 * The external solver command for a worker, with the k-induction per-query timeout applied if one is configured
+	 * and this is a k-induction worker.
+	 */
+	private String externalSolverCommand(final WorkerType workerType) {
+		final String command = mPref.commandExternalSolver().trim();
+		final int timeout = mPref.getKInductionSolverTimeout();
+		if (workerType != WorkerType.KINDUCTION || timeout < 0) {
+			// Inherit whatever the configured command says.
+			return command;
+		}
+		final String executable = command.split("\\s+", 2)[0];
+		final Entry<Pattern, String> option =
+				SOLVER_TIMEOUT_OPTION.get(executable.substring(executable.lastIndexOf('/') + 1));
+		if (option == null) {
+			throw new UnsupportedOperationException("A k-induction SMT timeout of " + timeout
+					+ "ms was configured, but we do not know the per-query timeout option of \"" + executable
+					+ "\". Encode the timeout in the solver command instead, or use one of "
+					+ SOLVER_TIMEOUT_OPTION.keySet() + ".");
+		}
+		// Drop any timeout the command already carries, so the k-induction setting wins rather than silently
+		// losing to it.
+		return option.getKey().matcher(command).replaceAll("").trim() + String.format(option.getValue(), timeout);
 	}
 
 	private void minimizeAbstractionIfEnabled(final PredicateFactoryRefinement stateFactoryForRefinement,

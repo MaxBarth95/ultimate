@@ -102,6 +102,7 @@ public final class TAPreferences {
 	private final int mNumImcWorkers;
 	private final int mNumSymExecWorkers;
 	private final int mNumKInductionWorkers;
+	private final int mKInductionSolverTimeout;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
 	private final int mSearchLoopBound;
@@ -214,6 +215,8 @@ public final class TAPreferences {
 		mNumImcWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_IMC_WORKERS);
 		mNumSymExecWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_SYMEXEC_WORKERS);
 		mNumKInductionWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_KINDUCTION_WORKERS);
+		mKInductionSolverTimeout =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_SOLVER_TIMEOUT);
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY);
 		mMinimizeAbstractionPerWorker =
@@ -614,6 +617,14 @@ public final class TAPreferences {
 
 	public int getNumKInductionWorkers() {
 		return mNumKInductionWorkers;
+	}
+
+	/**
+	 * @return the per-check timeout in ms that the k-induction worker passes to its SMT solver, or -1 to inherit the
+	 *         timeout of the configured external solver command.
+	 */
+	public int getKInductionSolverTimeout() {
+		return mKInductionSolverTimeout;
 	}
 
 	public boolean minimizeAbstractionPerWorker() {

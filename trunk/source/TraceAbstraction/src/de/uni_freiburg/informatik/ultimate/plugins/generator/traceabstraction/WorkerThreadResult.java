@@ -44,6 +44,7 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	private IRun<L, ?> mCounterexample;
 	PredicateFactory mPredicateFactory;
 	private final boolean mWorkerCrashed;
+	private final boolean mNoVerdict;
 	WorkerType mWorkerType;
 
 	public enum WorkerType
@@ -60,6 +61,13 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 			final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahend, final AutomatonType automatonType,
 			final ManagedScript mgdScript, final IRun<L, ?> counterexample, final PredicateFactory predicateFactory,
 			final boolean workerCrashed) {
+		this(workerType, subtrahend, automatonType, mgdScript, counterexample, predicateFactory, workerCrashed, false);
+	}
+
+	private WorkerThreadResult(final WorkerType workerType,
+			final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahend, final AutomatonType automatonType,
+			final ManagedScript mgdScript, final IRun<L, ?> counterexample, final PredicateFactory predicateFactory,
+			final boolean workerCrashed, final boolean noVerdict) {
 		mWorkerType = workerType;
 		mSubtrahend = subtrahend;
 		mAutomatonType = automatonType;
@@ -67,7 +75,16 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 		mCounterexample = counterexample;
 		mPredicateFactory = predicateFactory;
 		mWorkerCrashed = workerCrashed;
+		mNoVerdict = noVerdict;
+	}
 
+	/**
+	 * A worker that ran to completion but neither proved nor refuted the program, for example because the solver
+	 * answered {@code unknown}. It carries nothing to refine with, so the main thread can only retire the worker.
+	 */
+	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
+			noVerdict(final WorkerType workerType) {
+		return new WorkerThreadResult<>(workerType, null, null, null, null, null, false, true);
 	}
 
 	public WorkerType getWorkerType() {
@@ -76,6 +93,13 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 
 	public boolean workerCrashed() {
 		return mWorkerCrashed;
+	}
+
+	/**
+	 * @return true if the worker finished without a verdict, see {@link #noVerdict(WorkerType)}.
+	 */
+	public boolean noVerdict() {
+		return mNoVerdict;
 	}
 
 	public PredicateFactory getPredicateFactory() {

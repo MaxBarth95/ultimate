@@ -151,18 +151,24 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 				mLogger.info("WorkerThread for KInduction Starts");
 				mIteration = 1;
 
-				final boolean safe = runKInduction();
-				if (safe) {
+				switch (runKInduction()) {
+				case SAFE:
 					mBlockingQueueForResults
 							.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null, null, null, null, null, false));
 					return;
+				case UNSAFE:
+					// The violation is already registered on the shared result builder. AutomatonType.ERROR is what
+					// tells the main thread that this is a refutation and not the "safe" sentinel, which carries a
+					// null automaton type; no subtrahend, because there is nothing left to refine.
+					mBlockingQueueForResults.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null,
+							AutomatonType.ERROR, null, null, null, false));
+					return;
+				case NO_VERDICT:
+					mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.KINDUCTION));
+					return;
+				default:
+					throw new AssertionError("unknown k-induction verdict");
 				}
-				// The violation is already registered on the shared result builder. AutomatonType.ERROR is what
-				// tells the main thread that this is a refutation and not the "safe" sentinel, which carries a
-				// null automaton type; no subtrahend, because there is nothing left to refine.
-				mBlockingQueueForResults.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null,
-						AutomatonType.ERROR, null, null, null, false));
-				return;
 
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
@@ -182,25 +188,27 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 		}
 	}
 
-	private boolean runKInduction() throws AutomataLibraryException, InterruptedException {
+	private enum Verdict {
+		SAFE, UNSAFE, NO_VERDICT
+	}
+
+	private Verdict runKInduction() throws AutomataLibraryException, InterruptedException {
 		final KInduction<L, IPredicate> kInduction = new KInduction<>(mServices, mLogger, mTaCheckAndRefinementPrefs,
 				mCfgSmtToolkit, mAbstraction, mTaskIdentifier, this, mPref, mInvariantSupplier);
-		if (kInduction.isSafe() && !kInduction.wasOverapproximated()) {
-			return true;
-		}
-		if (!kInduction.isSafe() && !kInduction.wasUnkown()) {
-			// No transfer: the run is built over the worker's own abstraction with worker-script letters, and the
-			// refinement engine below runs on the worker toolkit, exactly as in CegarNwaWorkerThread.
-			reportCounterexample(kInduction.getCounterexample());
-			return false;
-		}
-		// No verdict. Name the reason: the unrolling bound and a solver that gave up are entirely different
-		// situations and reporting them both as "Loop Bound" hides which one actually happened.
 		if (kInduction.wasUnkown()) {
-			throw new UnsupportedOperationException(kInduction.getInconclusive().toString());
+			// Not a crash: the encoding is fine, the query was just not decided. Retiring this worker leaves the
+			// other workers - and, if there are none, the main thread's UNKNOWN result - to speak for the program.
+			// The unrolling bound and a solver that gave up are entirely different situations, so name which one.
+			mLogger.warn("KInduction: " + kInduction.getInconclusive());
+			return Verdict.NO_VERDICT;
 		}
-		throw new UnsupportedOperationException("k-induction reported the program safe, but the result is an "
-				+ "overapproximation, which is not supported");
+		if (kInduction.isSafe()) {
+			return Verdict.SAFE;
+		}
+		// No transfer: the run is built over the worker's own abstraction with worker-script letters, and the
+		// refinement engine below runs on the worker toolkit, exactly as in CegarNwaWorkerThread.
+		reportCounterexample(kInduction.getCounterexample());
+		return Verdict.UNSAFE;
 	}
 
 	/**

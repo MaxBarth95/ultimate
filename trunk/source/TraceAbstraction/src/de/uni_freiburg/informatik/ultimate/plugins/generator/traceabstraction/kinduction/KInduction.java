@@ -40,6 +40,7 @@ import java.util.Set;
 import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryException;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedRun;
+import de.uni_freiburg.informatik.ultimate.core.lib.exceptions.ToolchainCanceledException;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
@@ -124,8 +125,6 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private boolean mSafe;
 	private int mProvedK = -1;
 	private Inconclusive mInconclusive;
-	// The solver's answer to :reason-unknown for the most recent query that returned UNKNOWN.
-	private String mLastReasonUnknown;
 	private final Map<STATE, Term> mLearnedInvariants = new LinkedHashMap<>();
 
 	// Mirrors IMC's own worker-thread integration parameters, kept for structural consistency between the two
@@ -202,29 +201,32 @@ public class KInduction<LETTER extends IAction, STATE> {
 		} finally {
 			mWorkerMgdScript.unlock(mKILock);
 		}
-		mLogger.info("is safe " + (mSafe && !mSolverReturnedUnknown));
+		mLogger.info("is safe " + mSafe);
 		mLogger.info("solver returned unknown: " + mSolverReturnedUnknown);
 	}
 
 	private Verdict kInduction() {
 		for (int k = 1; k <= MAX_K; k++) {
+			if (!mServices.getProgressMonitorService().continueProcessing()) {
+				throw new ToolchainCanceledException(getClass(), "k-induction at k=" + k);
+			}
 			final LBool base = checkBase(k);
-			mLogger.info("KInduction: k=%d - base case: %s%s", k, base, reasonSuffix(base));
+			mLogger.info("KInduction: k=%d - base case: %s", k, base);
 			if (base == LBool.SAT) {
 				return Verdict.UNSAFE;
 			}
 			if (base == LBool.UNKNOWN) {
-				mInconclusive = Inconclusive.solverUnknown(k, "base", mLastReasonUnknown);
+				mInconclusive = Inconclusive.solverUnknown(k, "base");
 				return Verdict.UNKNOWN;
 			}
 			final LBool step = checkStep(k);
-			mLogger.info("KInduction: k=%d - step case: %s%s", k, step, reasonSuffix(step));
+			mLogger.info("KInduction: k=%d - step case: %s", k, step);
 			if (step == LBool.UNSAT) {
 				mProvedK = k;
 				return Verdict.SAFE;
 			}
 			if (step == LBool.UNKNOWN) {
-				mInconclusive = Inconclusive.solverUnknown(k, "step", mLastReasonUnknown);
+				mInconclusive = Inconclusive.solverUnknown(k, "step");
 				return Verdict.UNKNOWN;
 			}
 			// step case SAT: not yet inductive, unroll once more
@@ -232,26 +234,6 @@ public class KInduction<LETTER extends IAction, STATE> {
 		mInconclusive = Inconclusive.boundExhausted(MAX_K);
 		mLogger.info("KInduction: " + mInconclusive);
 		return Verdict.UNKNOWN;
-	}
-
-	private String reasonSuffix(final LBool result) {
-		return result == LBool.UNKNOWN ? " (solver reason: " + mLastReasonUnknown + ")" : "";
-	}
-
-	/**
-	 * Asks the solver why it answered {@code unknown}. Must be called before the {@code pop} of the query it refers
-	 * to, because the answer describes the last check. Values are solver specific; z3 reports for example
-	 * {@code timeout}, {@code memout}, {@code canceled} or {@code (incomplete (theory arithmetic))}, which is the
-	 * only way to tell a resource limit apart from an undecidable fragment - the two need opposite remedies.
-	 */
-	private String reasonUnknown() {
-		final Script script = mWorkerMgdScript.getScript();
-		try {
-			return String.valueOf(script.getInfo(":reason-unknown"));
-		} catch (final UnsupportedOperationException e) {
-			// Not every solver implements :reason-unknown. Report that explicitly instead of implying we know.
-			return "not reported (" + script.getClass().getSimpleName() + " does not support :reason-unknown)";
-		}
 	}
 
 	/**
@@ -353,15 +335,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 		return result;
 	}
 
-	/**
-	 * Runs the query and, if it is inconclusive, records why while the solver can still be asked.
-	 */
 	private LBool checkSat() {
-		final LBool result = mWorkerMgdScript.checkSat(mKILock);
-		if (result == LBool.UNKNOWN) {
-			mLastReasonUnknown = reasonUnknown();
-		}
-		return result;
+		return mWorkerMgdScript.checkSat(mKILock);
 	}
 
 	/**
@@ -558,10 +533,6 @@ public class KInduction<LETTER extends IAction, STATE> {
 		return mSafe;
 	}
 
-	public boolean wasOverapproximated() {
-		return mSolverReturnedUnknown;
-	}
-
 	public boolean wasUnkown() {
 		return mSolverReturnedUnknown;
 	}
@@ -586,20 +557,18 @@ public class KInduction<LETTER extends IAction, STATE> {
 	public static final class Inconclusive {
 		private final int mK;
 		private final String mCase;
-		private final String mSolverReason;
 
-		private Inconclusive(final int k, final String theCase, final String solverReason) {
+		private Inconclusive(final int k, final String theCase) {
 			mK = k;
 			mCase = theCase;
-			mSolverReason = solverReason;
 		}
 
-		static Inconclusive solverUnknown(final int k, final String theCase, final String solverReason) {
-			return new Inconclusive(k, theCase, solverReason);
+		static Inconclusive solverUnknown(final int k, final String theCase) {
+			return new Inconclusive(k, theCase);
 		}
 
 		static Inconclusive boundExhausted(final int maxK) {
-			return new Inconclusive(maxK, null, null);
+			return new Inconclusive(maxK, null);
 		}
 
 		/**
@@ -620,13 +589,6 @@ public class KInduction<LETTER extends IAction, STATE> {
 			return mCase;
 		}
 
-		/**
-		 * @return the solver's {@code :reason-unknown}. Only defined unless {@link #isBoundExhausted()}.
-		 */
-		public String getSolverReason() {
-			return mSolverReason;
-		}
-
 		@Override
 		public String toString() {
 			if (isBoundExhausted()) {
@@ -634,7 +596,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 						+ " without an inductive step; neither a proof nor a violation was found";
 			}
 			return "k-induction is inconclusive: the solver returned unknown for the " + mCase + " case at k=" + mK
-					+ " (solver reason: " + mSolverReason + "), so the program is neither proved safe nor refuted";
+					+ ", so the program is neither proved safe nor refuted";
 		}
 	}
 
