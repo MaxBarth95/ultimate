@@ -105,10 +105,20 @@ import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
  * is an interior state that is not a node there at all. Taking every entry state as a head is also what keeps the
  * recursion correct, see invariant (I1) at {@code findHeads}.
  * <p>
- * Call and return transitions are treated like internal transitions, with {@code letter.getTransformula()} as their
- * formula. This is only sound because procedures are inlined, i.e. a return always belongs to the one call it
- * follows. Optionally, a scope-restricted mode with precomputed "virtual" call edges (one formula for a whole
- * call-to-return span) is supported, see the second constructor.
+ * <h2>Procedure calls</h2>
+ *
+ * Call and return transitions are <b>not</b> edges of this graph. A call's transition formula is only the
+ * parameter assignment and a return's only the assignment of the result, so using them as ordinary edges gets the
+ * scoping of oldvars, modifiable globals and the callee's locals wrong, and - because the graph has no stack - it
+ * also admits paths that leave through one call site and come back at another, splicing away everything in
+ * between. Both of those are silent unsoundness, so a call or a return that would end up as an edge here is
+ * <b>refused</b> (see {@code rejectUnresolvedCallsAndReturns}).
+ * <p>
+ * Instead, a caller resolves every call site into a "virtual" call edge before building: one formula for a whole
+ * call-to-return span, passed to the scoped constructor. {@link ProcedureSummaries} builds those for k-induction
+ * and {@code InterproceduralImcOrchestrator} for IMC, both with
+ * {@link ProcedureCallGraph#computeVirtualEdge}. A call or a return whose target lies outside the scope is then
+ * simply not an edge of this scope's graph, which is the point: the callee is described by the virtual edge.
  *
  * <h2>How to use</h2>
  *
@@ -190,14 +200,17 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 	private final Set<STATE> mInitStates;
 	private final Collection<STATE> mFinalStates;
 	private final Map<STATE, Map<STATE, UnmodifiableTransFormula>> mVirtualCallEdges;
+	private final Set<STATE> mSealedStates;
 	private final Map<LETTER, UnmodifiableTransFormula> mLetterCache = new HashMap<>();
 
 	private final Map<STATE, List<Pair<Edge<LETTER>, STATE>>> mSuccessors = new HashMap<>();
 	private final Map<STATE, Set<STATE>> mPredecessors = new HashMap<>();
-	private List<STATE> mCallSites;
 
 	/**
-	 * Whole-automaton constructor: no scoping, no virtual call edges.
+	 * Whole-automaton constructor: no scoping, no virtual call edges. Every state is in the scope, so every call
+	 * and every return transition of the abstraction would be an edge of the flat graph; {@link #build()}
+	 * therefore refuses an abstraction that has one. Use the scoped constructor with virtual call edges for a
+	 * program whose procedures are not inlined.
 	 */
 	public LoopTreeFormulaBuilder(final IUltimateServiceProvider services, final ILogger logger,
 			final ManagedScript mgdScript, final INestedWordAutomaton<LETTER, STATE> abstraction) {
@@ -213,6 +226,23 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 			final ManagedScript mgdScript, final INestedWordAutomaton<LETTER, STATE> abstraction,
 			final Set<STATE> scopeStates, final Set<STATE> initStates, final Collection<STATE> finalStates,
 			final Map<STATE, Map<STATE, UnmodifiableTransFormula>> virtualCallEdges) {
+		this(services, logger, mgdScript, abstraction, scopeStates, initStates, finalStates, virtualCallEdges,
+				Collections.emptySet());
+	}
+
+	/**
+	 * Scoped constructor with sealed states: states of {@code scopeStates} that are dead ends here, i.e. whose own
+	 * outgoing transitions are not edges of this graph. That is what a state which is only ever reached through a
+	 * virtual call edge needs - an error state inside a callee, say, which belongs to the callee and whose own
+	 * successors are described nowhere in this scope. Left unsealed, such a state's outgoing return transition
+	 * would become a real edge back into this scope, which is exactly the unscoped call/return treatment this
+	 * class refuses everywhere else.
+	 */
+	public LoopTreeFormulaBuilder(final IUltimateServiceProvider services, final ILogger logger,
+			final ManagedScript mgdScript, final INestedWordAutomaton<LETTER, STATE> abstraction,
+			final Set<STATE> scopeStates, final Set<STATE> initStates, final Collection<STATE> finalStates,
+			final Map<STATE, Map<STATE, UnmodifiableTransFormula>> virtualCallEdges,
+			final Set<STATE> sealedStates) {
 		mServices = services;
 		mLogger = logger;
 		mMgdScript = mgdScript;
@@ -221,6 +251,7 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 		mInitStates = initStates;
 		mFinalStates = finalStates;
 		mVirtualCallEdges = virtualCallEdges;
+		mSealedStates = sealedStates;
 	}
 
 	/**
@@ -228,6 +259,7 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 	 */
 	public LoopTree<STATE> build() {
 		rejectRecursion();
+		rejectUnresolvedCallsAndReturns();
 		final Set<STATE> reachable = computeReachable();
 		for (final STATE state : reachable) {
 			for (final Pair<Edge<LETTER>, STATE> t : successors(state)) {
@@ -246,8 +278,9 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 	// ------------------------------------------------------------------------------------------------------------
 
 	/**
-	 * Call and return transitions are treated as plain edges, which is only sound if procedures can be inlined, i.e.
-	 * without recursion. Throws {@link UnsupportedOperationException} if some procedure can call itself.
+	 * A virtual call edge needs its callee's summary to already exist as a finished formula, which is undefined
+	 * for a cycle in the call graph. Throws {@link UnsupportedOperationException} if some procedure can call
+	 * itself.
 	 */
 	private void rejectRecursion() {
 		final Map<String, Set<String>> calls = new LinkedHashMap<>();
@@ -279,6 +312,47 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 		path.remove(path.size() - 1);
 	}
 
+	/**
+	 * Refuses every call and return transition that would become an edge of this scope's graph, i.e. whose target
+	 * is in the scope, since treating it as a plain edge is unsound (see the class javadoc). A call or return that
+	 * leaves the scope is not refused: it is what a virtual call edge stands for.
+	 * <p>
+	 * A sealed state has no edges at all here, so its transitions cannot become one either.
+	 */
+	private void rejectUnresolvedCallsAndReturns() {
+		final List<STATE> callSites = new ArrayList<>();
+		for (final STATE state : mScopeStates) {
+			if (mAbstraction.callSuccessors(state).iterator().hasNext()) {
+				callSites.add(state);
+			}
+		}
+		for (final STATE state : mScopeStates) {
+			if (mSealedStates.contains(state)) {
+				continue;
+			}
+			for (final OutgoingCallTransition<LETTER, STATE> t : mAbstraction.callSuccessors(state)) {
+				rejectUnresolved(state, t.getLetter(), t.getSucc(), "call");
+			}
+			for (final STATE hier : callSites) {
+				for (final OutgoingReturnTransition<LETTER, STATE> t : mAbstraction.returnSuccessorsGivenHier(state,
+						hier)) {
+					rejectUnresolved(state, t.getLetter(), t.getSucc(), "return");
+				}
+			}
+		}
+	}
+
+	private void rejectUnresolved(final STATE source, final LETTER letter, final STATE target, final String kind) {
+		if (!mScopeStates.contains(target)) {
+			return;
+		}
+		throw new UnsupportedOperationException("The " + kind + " transition " + source + " -" + letter + "-> "
+				+ target + " is inside the scope of this loop tree, so it would become an ordinary edge of the flat "
+				+ "graph. That is unsound: the graph has no call stack, and a " + kind + "'s transition formula "
+				+ "describes only the parameter resp. result assignment. Resolve the call site into a virtual call "
+				+ "edge (see ProcedureSummaries) or hand this builder a scope that the " + kind + " leaves.");
+	}
+
 	private Set<STATE> computeReachable() {
 		final Set<STATE> visited = new LinkedHashSet<>();
 		final Deque<STATE> worklist = new ArrayDeque<>();
@@ -299,29 +373,23 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Every way to leave {@code state} inside the scope: internal, call and return transitions (all treated as plain
-	 * edges, see the class javadoc), plus precomputed virtual call edges. Memoized.
+	 * Every way to leave {@code state} inside the scope: its internal transitions plus the precomputed virtual call
+	 * edges that start here. Call and return transitions are none of them, see the class javadoc. A sealed state
+	 * has no outgoing edge at all. Memoized.
 	 */
 	private List<Pair<Edge<LETTER>, STATE>> successors(final STATE state) {
 		final List<Pair<Edge<LETTER>, STATE>> cached = mSuccessors.get(state);
 		if (cached != null) {
 			return cached;
 		}
+		if (mSealedStates.contains(state)) {
+			mSuccessors.put(state, Collections.emptyList());
+			return Collections.emptyList();
+		}
 		final List<Pair<Edge<LETTER>, STATE>> result = new ArrayList<>();
 		final Set<Pair<LETTER, STATE>> seen = new HashSet<>();
 		for (final OutgoingInternalTransition<LETTER, STATE> t : mAbstraction.internalSuccessors(state)) {
 			addReal(result, seen, t.getLetter(), t.getSucc());
-		}
-		for (final OutgoingCallTransition<LETTER, STATE> t : mAbstraction.callSuccessors(state)) {
-			addReal(result, seen, t.getLetter(), t.getSucc());
-		}
-		// A return needs its hierarchical predecessor; try every call site (unique after inlining, dedupe on
-		// (letter, successor) otherwise).
-		for (final STATE hier : getCallSites()) {
-			for (final OutgoingReturnTransition<LETTER, STATE> t : mAbstraction.returnSuccessorsGivenHier(state,
-					hier)) {
-				addReal(result, seen, t.getLetter(), t.getSucc());
-			}
 		}
 		final Map<STATE, UnmodifiableTransFormula> virtualFromHere = mVirtualCallEdges.get(state);
 		if (virtualFromHere != null) {
@@ -338,18 +406,6 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 		if (mScopeStates.contains(succ) && seen.add(new Pair<>(letter, succ))) {
 			result.add(new Pair<>(Edge.real(letter), succ));
 		}
-	}
-
-	private List<STATE> getCallSites() {
-		if (mCallSites == null) {
-			mCallSites = new ArrayList<>();
-			for (final STATE state : mScopeStates) {
-				if (mAbstraction.callSuccessors(state).iterator().hasNext()) {
-					mCallSites.add(state);
-				}
-			}
-		}
-		return mCallSites;
 	}
 
 	private List<STATE> neighbors(final STATE state, final Set<STATE> within) {

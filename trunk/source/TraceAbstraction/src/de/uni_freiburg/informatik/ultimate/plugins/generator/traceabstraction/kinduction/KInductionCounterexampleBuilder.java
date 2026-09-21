@@ -43,11 +43,18 @@ import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutoma
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWord;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Accepts;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingCallTransition;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingInternalTransition;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingReturnTransition;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IAction;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.ICallAction;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IReturnAction;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.ILocalProgramVar;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramOldVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
@@ -57,6 +64,7 @@ import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.PcTransitionSystem.Transition;
+import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
 
 /**
  * Turns a {@link KInductionWitness} - what the solver's model of a satisfiable base case said - into a concrete
@@ -67,9 +75,10 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ki
  * A step of the {@link PcTransitionSystem} is not a single letter. Each of its transitions is one edge of one
  * scope's checkpoint graph, and {@link LoopTreeFormulaBuilder} built that edge by composing whole <em>paths</em> of
  * letters: {@code sequentialComposition} for concatenation, {@code parallelComposition} for the union of
- * alternatives. The union is built without branch indicators, so the composed formula does not record which
- * alternative a model took, and the letters themselves are gone. The model therefore pins down the program state at
- * every checkpoint, but not the way between two of them; that has to be searched for.
+ * alternatives, and, at a call site, a whole call-to-return span ({@link ProcedureSummaries}). The union is built
+ * without branch indicators, so the composed formula does not record which alternative a model took, and the
+ * letters themselves are gone. The model therefore pins down the program state at every checkpoint, but not the
+ * way between two of them; that has to be searched for.
  *
  * <h2>What the search may and may not assume</h2>
  *
@@ -90,13 +99,32 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ki
  * the encoding were ever to over-approximate and report a violation that does not exist, no feasible path would be
  * found and this class would throw rather than invent one.
  *
+ * <h2>Calls</h2>
+ *
+ * A pc transition can be a whole call-to-return span, so the search walks call and return transitions as well, with
+ * a stack of the call sites it has entered; a return is only ever taken with the hierarchical predecessor that
+ * stack names, which is what makes the reconstructed word properly nested. The SSA mirrors what
+ * {@code TransFormulaUtils.sequentialCompositionWithCallAndReturn} did to the formula the model was produced from:
+ * at a call the parameter assignment is asserted, every oldvar of a global the callee may modify is set to that
+ * global's current value, and every local of the callee that is not an inparam becomes an unconstrained fresh
+ * constant (it is arbitrary at procedure entry); at the return the assignment of the result is asserted and the
+ * callee's scope - those oldvars and locals - is restored to what the caller saw. An oldvar that no call on the
+ * stack assigns keeps {@code getDefaultConstant()}, exactly as {@code PcTransitionSystem.instantiate} uses it.
+ * <p>
+ * A step ends where the pc transition's target states are, which is back in the caller, i.e. with an empty stack -
+ * except for a violation <em>inside</em> a callee: {@link ProcedureSummaries} resolves that into an edge into the
+ * callee's error state, so the run ends there with the call still pending, and the nested word gets an unmatched
+ * call position.
+ *
  * <h2>How far the search may wander</h2>
  *
  * Per step the letter path is <b>simple, except that its last state may equal its first</b>. A cut graph is
  * acyclic, and all of a scope's own heads and the heads of its inner loops are sealed in it - they are nodes but
  * have no outgoing edges - so such a state can only ever be a path's last. The exception is what a loop body needs:
  * {@code INIT(h) -> END(h)} in a loop scope runs from the head back to the head. Restricting the search to simple
- * paths alone would drop exactly those, and restricting it no further keeps the search finite.
+ * paths alone would drop exactly those, and restricting it no further keeps the search finite. A state visited
+ * inside a call is a different search node from the same state visited outside it, since the two differ in what
+ * the run may do next, so "simple" is meant with respect to the call stack.
  * <p>
  * A loop that is entered at several heads also has the steps {@code INIT(h1) -> END(h2)}, whose path runs between
  * two <em>different</em> sealed states and is therefore plainly simple. On such a program the search may leave the
@@ -120,28 +148,27 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 */
 	private static final int MAX_EXPANSIONS = 100_000;
 
-	private static final String CALL_RETURN_RESTRICTION =
-			"k-induction counterexamples are restricted to internal transitions, because the nesting relation of a "
-					+ "run cannot be recovered from the pc transition system, whose formulas treat a call and a "
-					+ "return like any other edge. That treatment is only sound for inlined procedures "
-					+ "(see LoopTreeFormulaBuilder), so on a program whose procedures were not inlined the "
-					+ "k-induction verdict itself rests on an assumption that does not hold here - not just the "
-					+ "counterexample. Inline the procedures, or teach the pc transition system about calls.";
-
 	private final IUltimateServiceProvider mServices;
 	private final ILogger mLogger;
 	private final ManagedScript mMgdScript;
 	private final Object mLockOwner;
+	private final CfgSmtToolkit mCsToolkit;
 	private final INestedWordAutomaton<LETTER, STATE> mAbstraction;
 	private final PcTransitionSystem<STATE> mSystem;
 	private final KInductionWitness mWitness;
+	/** The error states that lie inside a callee, see {@link ProcedureSummaries#getPendingErrorTargets()}. */
+	private final Set<STATE> mPendingErrorTargets;
 
 	/** The number of pc steps to reconstruct: everything after it is the FINAL stutter self loop. */
 	private final int mSteps;
 
-	// The run being built. Both are undone on backtracking.
+	// The run being built. All three are undone on backtracking.
 	private final List<LETTER> mLetters = new ArrayList<>();
 	private final List<STATE> mStates = new ArrayList<>();
+	private final List<Integer> mNesting = new ArrayList<>();
+
+	/** The calls the search has entered and not yet left. */
+	private final Deque<Frame> mStack = new ArrayDeque<>();
 
 	// SSA state: the constant that currently holds each variable's value, and the counters behind those constants.
 	private final Map<IProgramVar, Term> mCurrent = new HashMap<>();
@@ -154,21 +181,85 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	/** How many scopes we have pushed. A successful search returns with its whole stack standing; see build(). */
 	private int mPushDepth;
 
-	// state -> states reachable from it over internal transitions, computed lazily per transition id
+	// state -> states reachable from it, computed lazily per transition id
 	private final Map<Integer, Set<STATE>> mCanReachTarget = new HashMap<>();
-	private Map<STATE, List<STATE>> mInternalPredecessors;
+	private Map<STATE, List<STATE>> mPredecessors;
+
+	/**
+	 * One entered call: where it was made, which letter position it is, and the SSA entries it overwrote (the
+	 * callee's locals and the oldvars of the globals it may modify), so that the return can put the caller's view
+	 * back.
+	 */
+	private final class Frame {
+		private final STATE mCallSite;
+		private final int mCallPosition;
+		private final Map<IProgramVar, Term> mCalleeScope;
+
+		private Frame(final STATE callSite, final int callPosition, final Map<IProgramVar, Term> calleeScope) {
+			mCallSite = callSite;
+			mCallPosition = callPosition;
+			mCalleeScope = calleeScope;
+		}
+	}
+
+	/** What stays fixed while the letter path of one pc step is searched for. */
+	private final class Step {
+		private final int mIndex;
+		private final Transition<STATE> mTransition;
+		/** The state the step started in; the only state the path may return to, and only as its last. */
+		private final STATE mFirst;
+		/** The search nodes (state plus open calls) already on this step's path. */
+		private final Set<Object> mVisited = new LinkedHashSet<>();
+		/** The states from which a target of the transition is still reachable. */
+		private final Set<STATE> mUseful;
+
+		private Step(final int index, final Transition<STATE> transition, final STATE first) {
+			mIndex = index;
+			mTransition = transition;
+			mFirst = first;
+			mUseful = canReachATargetOf(transition);
+			mVisited.add(nodeAfter(first, null, false));
+		}
+	}
+
+	/** One letter the search could take next, with everything taking it would do to the SSA and the run. */
+	private final class Candidate {
+		private final LETTER mLetter;
+		private final STATE mSucc;
+		/** The search node the letter leads to, i.e. the successor plus the calls open after it. */
+		private final Object mNode;
+		/** Non-null exactly for a call: the hierarchical predecessor its return will need. */
+		private final STATE mCallSite;
+		private final Map<IProgramVar, Term> mUpdates = new LinkedHashMap<>();
+		private Term mSsa;
+		/**
+		 * This position's entry in the nesting relation: {@link NestedWord#INTERNAL_POSITION},
+		 * {@link NestedWord#PLUS_INFINITY} for a call (replaced by the return's position once it is matched), or
+		 * the position of the matching call for a return.
+		 */
+		private int mNesting;
+
+		private Candidate(final LETTER letter, final STATE succ, final Object node, final STATE callSite) {
+			mLetter = letter;
+			mSucc = succ;
+			mNode = node;
+			mCallSite = callSite;
+		}
+	}
 
 	public KInductionCounterexampleBuilder(final IUltimateServiceProvider services, final ILogger logger,
-			final ManagedScript mgdScript, final Object lockOwner,
+			final ManagedScript mgdScript, final Object lockOwner, final CfgSmtToolkit csToolkit,
 			final INestedWordAutomaton<LETTER, STATE> abstraction, final PcTransitionSystem<STATE> system,
-			final KInductionWitness witness) {
+			final KInductionWitness witness, final Set<STATE> pendingErrorTargets) {
 		mServices = services;
 		mLogger = logger;
 		mMgdScript = mgdScript;
 		mLockOwner = lockOwner;
+		mCsToolkit = csToolkit;
 		mAbstraction = abstraction;
 		mSystem = system;
 		mWitness = witness;
+		mPendingErrorTargets = pendingErrorTargets;
 		mSteps = witness.getFirstFinalStep();
 	}
 
@@ -178,20 +269,6 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 *             if the violation cannot be expressed as a run of the abstraction.
 	 */
 	public NestedRun<LETTER, STATE> build() {
-		// Checked before anything else, because on a call-bearing abstraction the verdict we are asked to witness
-		// is itself unsound: LoopTreeFormulaBuilder gives a call and a return edge the transition formula of the
-		// call resp. the return and then treats them like ordinary edges, so the transition system admits paths
-		// that leave through one call site and come back at another. Such a spliced path skips whatever lies
-		// between the two sites, which is how a satisfiable base case can appear for a program that never reaches
-		// an error. Searching for a run that realises it would fail anyway, but with a message about the search
-		// rather than about the reason.
-		final STATE withCall = findCallOrReturn();
-		if (withCall != null) {
-			throw new KInductionCounterexampleException("k-induction reported a violation at k=" + mWitness.getK()
-					+ " (" + mWitness + "), but the abstraction has call and return transitions (for example at "
-					+ withCall + "), so that verdict cannot be trusted and no counterexample is reported. "
-					+ CALL_RETURN_RESTRICTION);
-		}
 		checkWitnessShape();
 		mLogger.info("KInduction: reconstructing a counterexample for %d pc step(s) of %s", mSteps, mWitness);
 
@@ -208,6 +285,8 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 				}
 				mLetters.clear();
 				mStates.clear();
+				mNesting.clear();
+				mStack.clear();
 				mCurrent.clear();
 			}
 			throw noRunFound("no counterexample run starts in any of the initial states " + first.getSourceStates()
@@ -266,105 +345,223 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		if (!transition.getSourceStates().contains(state)) {
 			return false;
 		}
-		return extend(step, transition, state, state, new LinkedHashSet<>(Set.of(state)), 0);
+		return extend(new Step(step, transition, state), state, 0);
 	}
 
 	/**
 	 * Depth-first search for the letter path of one pc step.
 	 *
-	 * @param first
-	 *            the state the step started in; the only state the path may return to, and only as its last.
-	 * @param visited
-	 *            the states already on this step's path.
 	 * @param length
 	 *            how many letters of this step have been taken.
 	 */
-	private boolean extend(final int step, final Transition<STATE> transition, final STATE current,
-			final STATE first, final Set<STATE> visited, final int length) {
+	private boolean extend(final Step step, final STATE current, final int length) {
 		checkBudget();
 
 		// Can this step end here? A zero-length step is legitimate: an edge whose path expression is Epsilon
 		// composes to the trivial transition formula.
-		if (transition.getTargetStates().contains(current) && solveFrom(step + 1, current)) {
+		if (canEndStep(step, current) && solveFrom(step.mIndex + 1, current)) {
 			return true;
 		}
 
 		// A path that has come back to its own start is complete by construction and must not run on.
-		if (current.equals(first) && length > 0) {
+		if (mStack.isEmpty() && current.equals(step.mFirst) && length > 0) {
 			return false;
 		}
 
-		final Set<STATE> useful = canReachATargetOf(transition);
-		for (final OutgoingInternalTransition<LETTER, STATE> out : internalSuccessors(current)) {
-			final STATE succ = out.getSucc();
-			if (visited.contains(succ) && !succ.equals(first)) {
+		for (final OutgoingInternalTransition<LETTER, STATE> out : mAbstraction.internalSuccessors(current)) {
+			final Candidate candidate = candidate(step, out.getLetter(), out.getSucc(), null, false);
+			if (candidate == null) {
 				continue;
 			}
-			if (!useful.contains(succ)) {
-				continue;
-			}
-			final Map<IProgramVar, Term> restore = new LinkedHashMap<>();
 			// Built before the push on purpose: it declares constants, and a declaration made inside a scope is
 			// forgotten when that scope is popped while the cache would happily hand the stale term out again.
-			final Term ssa = ssaOfLetter(out.getLetter(), restore);
-			push();
-			mMgdScript.assertTerm(mLockOwner, ssa);
-			if (mMgdScript.checkSat(mLockOwner) != LBool.UNSAT) {
-				mLetters.add(out.getLetter());
-				mStates.add(succ);
-				// succ may be `first`, which is already in visited; do not drop it again on backtracking.
-				final boolean newlyVisited = visited.add(succ);
-				if (extend(step, transition, succ, first, visited, length + 1)) {
+			candidate.mSsa = ssaOfTransFormula(out.getLetter().getTransformula(), candidate.mUpdates);
+			candidate.mNesting = NestedWord.INTERNAL_POSITION;
+			if (tryLetter(step, candidate, length)) {
+				return true;
+			}
+		}
+		for (final OutgoingCallTransition<LETTER, STATE> call : mAbstraction.callSuccessors(current)) {
+			final Candidate candidate = candidate(step, call.getLetter(), call.getSucc(), current, false);
+			if (candidate == null) {
+				continue;
+			}
+			candidate.mSsa = ssaOfCall(asCallAction(call.getLetter()),
+					call.getLetter().getSucceedingProcedure(), candidate.mUpdates);
+			candidate.mNesting = NestedWord.PLUS_INFINITY;
+			if (tryLetter(step, candidate, length)) {
+				return true;
+			}
+		}
+		if (!mStack.isEmpty()) {
+			final Frame frame = mStack.peek();
+			for (final OutgoingReturnTransition<LETTER, STATE> ret : mAbstraction.returnSuccessorsGivenHier(current,
+					frame.mCallSite)) {
+				final Candidate candidate = candidate(step, ret.getLetter(), ret.getSucc(), null, true);
+				if (candidate == null) {
+					continue;
+				}
+				candidate.mSsa =
+						ssaOfTransFormula(asReturnAction(ret.getLetter()).getAssignmentOfReturn(),
+								candidate.mUpdates);
+				// The callee's variables go out of scope with the return, after its outparams were read above.
+				candidate.mUpdates.putAll(frame.mCalleeScope);
+				candidate.mNesting = frame.mCallPosition;
+				if (tryLetter(step, candidate, length)) {
 					return true;
 				}
-				if (newlyVisited) {
-					visited.remove(succ);
-				}
-				mStates.remove(mStates.size() - 1);
-				mLetters.remove(mLetters.size() - 1);
 			}
-			pop();
-			restoreCurrent(restore);
 		}
 		return false;
 	}
 
-	/** Undoes what one {@link #ssaOfLetter} call changed; a null value means the variable had no constant yet. */
-	private void restoreCurrent(final Map<IProgramVar, Term> restore) {
-		for (final Map.Entry<IProgramVar, Term> entry : restore.entrySet()) {
+	/**
+	 * A letter the search could take next, or {@code null} if it is pruned: because no target of the step is
+	 * reachable behind it, or because this step's path has already been here with the same calls open.
+	 *
+	 * @param entered
+	 *            the state the call is made in, if the letter is a call
+	 * @param leavesCall
+	 *            whether the letter is a return
+	 */
+	private Candidate candidate(final Step step, final LETTER letter, final STATE succ, final STATE entered,
+			final boolean leavesCall) {
+		if (!step.mUseful.contains(succ)) {
+			return null;
+		}
+		final Object node = nodeAfter(succ, entered, leavesCall);
+		if (step.mVisited.contains(node) && !succ.equals(step.mFirst)) {
+			return null;
+		}
+		return new Candidate(letter, succ, node, entered);
+	}
+
+	/**
+	 * Takes one letter if the solver still finds the run feasible, and continues the search behind it. Everything
+	 * it changed - the run, the SSA, the call stack and the solver scope - is undone if the search comes back.
+	 */
+	private boolean tryLetter(final Step step, final Candidate candidate, final int length) {
+		final Map<IProgramVar, Term> undo = applyUpdates(candidate.mUpdates);
+		push();
+		mMgdScript.assertTerm(mLockOwner, candidate.mSsa);
+		if (mMgdScript.checkSat(mLockOwner) != LBool.UNSAT) {
+			final int position = mLetters.size();
+			mLetters.add(candidate.mLetter);
+			mStates.add(candidate.mSucc);
+			mNesting.add(candidate.mNesting);
+			Frame returned = null;
+			if (candidate.mCallSite != null) {
+				// The frame remembers the caller's view of everything the call overwrote, which is what its
+				// return puts back.
+				mStack.push(new Frame(candidate.mCallSite, position, undo));
+			} else if (candidate.mNesting != NestedWord.INTERNAL_POSITION) {
+				returned = mStack.pop();
+				// The call is no longer pending: it is matched by this return.
+				mNesting.set(returned.mCallPosition, position);
+			}
+			// The successor may be the state the step started in, which is already visited; do not drop it again
+			// on backtracking.
+			final boolean newlyVisited = step.mVisited.add(candidate.mNode);
+			if (extend(step, candidate.mSucc, length + 1)) {
+				return true;
+			}
+			if (newlyVisited) {
+				step.mVisited.remove(candidate.mNode);
+			}
+			if (candidate.mCallSite != null) {
+				mStack.pop();
+			} else if (returned != null) {
+				mNesting.set(returned.mCallPosition, NestedWord.PLUS_INFINITY);
+				mStack.push(returned);
+			}
+			mNesting.remove(mNesting.size() - 1);
+			mStates.remove(mStates.size() - 1);
+			mLetters.remove(mLetters.size() - 1);
+		}
+		pop();
+		applyUpdates(undo);
+		return false;
+	}
+
+	/**
+	 * Where a pc step may end: at one of the transition's target states, with no call left open - the summary of a
+	 * call-to-return span is one edge, so a step never ends in the middle of a call. The exception is a violation
+	 * inside a callee, which {@link ProcedureSummaries} turned into an edge to that callee's error state; the call
+	 * then stays pending and nothing can follow, so this must be the last step.
+	 */
+	private boolean canEndStep(final Step step, final STATE current) {
+		if (!step.mTransition.getTargetStates().contains(current)) {
+			return false;
+		}
+		if (mStack.isEmpty()) {
+			return true;
+		}
+		return mPendingErrorTargets.contains(current) && step.mIndex + 1 == mSteps;
+	}
+
+	/**
+	 * The search node a letter leads to: the state together with the call sites that are open once the letter has
+	 * been taken. That is what "already visited on this step's path" has to mean, because the same state inside
+	 * and outside a call differ in what the run may do next.
+	 *
+	 * @param entered
+	 *            the call site, if the letter is a call
+	 * @param leavesCall
+	 *            whether the letter is a return
+	 */
+	private Object nodeAfter(final STATE state, final STATE entered, final boolean leavesCall) {
+		final List<STATE> context = new ArrayList<>(mStack.size() + 1);
+		for (final Frame frame : mStack) {
+			// An ArrayDeque used as a stack iterates from its top, so the innermost call comes first.
+			context.add(frame.mCallSite);
+		}
+		if (entered != null) {
+			context.add(0, entered);
+		} else if (leavesCall) {
+			context.remove(0);
+		}
+		return context.isEmpty() ? state : new Pair<>(state, context);
+	}
+
+	/**
+	 * Applies {@code updates} to the SSA, a {@code null} value meaning "the variable has no constant". Returns what
+	 * the entries were before, so that the same method undoes it.
+	 */
+	private Map<IProgramVar, Term> applyUpdates(final Map<IProgramVar, Term> updates) {
+		final Map<IProgramVar, Term> previous = new LinkedHashMap<>();
+		for (final Map.Entry<IProgramVar, Term> entry : updates.entrySet()) {
+			previous.put(entry.getKey(), mCurrent.get(entry.getKey()));
 			if (entry.getValue() == null) {
 				mCurrent.remove(entry.getKey());
 			} else {
 				mCurrent.put(entry.getKey(), entry.getValue());
 			}
 		}
+		return previous;
 	}
 
 	/**
-	 * The letter's transition formula over the SSA constants, following {@code PcTransitionSystem.instantiate}
-	 * exactly - in particular old variables go to their default constant, which is what the k-induction encoding
-	 * assumes and what {@link #build()} pinned once at the top.
+	 * A transition formula over the SSA constants, following {@code PcTransitionSystem.instantiate}: a variable is
+	 * read at the constant that currently holds it and written to a fresh one.
 	 *
-	 * @param restore
-	 *            filled with the entries of {@link #mCurrent} this call overwrites, so it can be undone.
+	 * @param updates
+	 *            filled with the new constant of every variable the formula assigns. Not applied here - the
+	 *            formula reads the old values, and the caller applies the updates once it has the term.
 	 */
-	private Term ssaOfLetter(final LETTER letter, final Map<IProgramVar, Term> restore) {
-		final UnmodifiableTransFormula tf = letter.getTransformula();
+	private Term ssaOfTransFormula(final UnmodifiableTransFormula tf, final Map<IProgramVar, Term> updates) {
 		final Map<Term, Term> substitution = new HashMap<>();
 		for (final Map.Entry<IProgramVar, TermVariable> in : tf.getInVars().entrySet()) {
-			final IProgramVar pv = in.getKey();
-			substitution.put(in.getValue(), pv.isOldvar() ? pv.getDefaultConstant() : current(pv));
+			substitution.put(in.getValue(), current(in.getKey()));
 		}
-		final Map<IProgramVar, Term> updates = new LinkedHashMap<>();
 		for (final Map.Entry<IProgramVar, TermVariable> out : tf.getOutVars().entrySet()) {
 			final IProgramVar pv = out.getKey();
 			if (tf.getInVars().get(pv) == out.getValue()) {
 				continue;
 			}
 			if (pv.isOldvar()) {
-				throw new KInductionCounterexampleException("letter " + letter + " assigns the old variable " + pv
-						+ ". Only a procedure call's modifies clause does that, and k-induction counterexamples "
-						+ "are restricted to internal transitions.");
+				throw new KInductionCounterexampleException("the transition formula " + tf + " assigns the old "
+						+ "variable " + pv + ". Only the oldvar assignment of a call does that, which this class "
+						+ "applies itself rather than as a letter.");
 			}
 			final Term next = nextConstant(pv);
 			substitution.put(out.getValue(), next);
@@ -375,15 +572,52 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 			substitution.put(aux, PredicateUtils.getIndexedConstant("kicexaux_" + aux.getName(), aux.getSort(),
 					mAuxCounter++, mCexConstants, script()));
 		}
-		final Term result = PureSubstitution.apply(mMgdScript, substitution, tf.getFormula());
-		for (final IProgramVar pv : updates.keySet()) {
-			restore.put(pv, mCurrent.get(pv));
+		return PureSubstitution.apply(mMgdScript, substitution, tf.getFormula());
+	}
+
+	/**
+	 * What entering {@code callee} does to the SSA, mirroring the call/oldvars/globals part of
+	 * {@code TransFormulaUtils.sequentialCompositionWithCallAndReturn}: the parameter assignment (the returned
+	 * term), {@code old(g) := g} for every global the callee may modify, and an arbitrary value for every local of
+	 * the callee that the call does not assign.
+	 *
+	 * @param updates
+	 *            filled with all of that; the caller applies it, and the matching return undoes everything but the
+	 *            parameter assignment.
+	 */
+	private Term ssaOfCall(final ICallAction callAction, final String callee,
+			final Map<IProgramVar, Term> updates) {
+		final UnmodifiableTransFormula localVarsAssignment = callAction.getLocalVarsAssignment();
+		final Term result = ssaOfTransFormula(localVarsAssignment, updates);
+		final UnmodifiableTransFormula oldVarsAssignment =
+				mCsToolkit.getOldVarsAssignmentCache().getOldVarsAssignment(callee);
+		for (final IProgramVar assigned : oldVarsAssignment.getAssignedVars()) {
+			if (!(assigned instanceof IProgramOldVar)) {
+				throw new KInductionCounterexampleException("the oldvar assignment of " + callee + " assigns "
+						+ assigned + ", which is not an old variable");
+			}
+			updates.put(assigned, current(((IProgramOldVar) assigned).getNonOldVar()));
 		}
-		mCurrent.putAll(updates);
+		for (final ILocalProgramVar local : mCsToolkit.getSymbolTable().getLocals(callee)) {
+			if (!localVarsAssignment.getAssignedVars().contains(local)) {
+				updates.put(local, nextConstant(local));
+			}
+		}
 		return result;
 	}
 
+	/**
+	 * The constant that currently holds {@code pv}. An oldvar that no call on the stack assigned has none and uses
+	 * its default constant, which is what the k-induction encoding does with oldvars outside a call.
+	 */
 	private Term current(final IProgramVar pv) {
+		final Term existing = mCurrent.get(pv);
+		if (existing != null) {
+			return existing;
+		}
+		if (pv.isOldvar()) {
+			return pv.getDefaultConstant();
+		}
 		return mCurrent.computeIfAbsent(pv, this::nextConstant);
 	}
 
@@ -396,63 +630,40 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 				pv.getTermVariable().getSort(), mSsaCounter++, mCexConstants, script());
 	}
 
-	/**
-	 * The internal successors of {@code state}. A call or a return here is refused rather than skipped: the
-	 * checkpoint formulas were built from those edges too, so ignoring one could make the search miss the very
-	 * path the model took and report a violation as unreconstructible for the wrong reason.
-	 */
-	private Iterable<OutgoingInternalTransition<LETTER, STATE>> internalSuccessors(final STATE state) {
-		if (hasCallOrReturn(state)) {
-			throw new KInductionCounterexampleException(
-					"state " + state + " has a call or return transition. " + CALL_RETURN_RESTRICTION);
+	private ICallAction asCallAction(final LETTER letter) {
+		if (!(letter instanceof ICallAction)) {
+			throw new KInductionCounterexampleException("the call letter " + letter + " is a "
+					+ letter.getClass().getSimpleName() + ", not an ICallAction, so its parameter assignment is "
+					+ "unknown");
 		}
-		return mAbstraction.internalSuccessors(state);
+		return (ICallAction) letter;
 	}
 
-	private boolean hasCallOrReturn(final STATE state) {
-		return mAbstraction.callSuccessors(state).iterator().hasNext()
-				|| mAbstraction.returnSuccessors(state).iterator().hasNext();
-	}
-
-	/**
-	 * The first state with a call or a return transition, or {@code null} if the abstraction has none.
-	 * <p>
-	 * Only used to explain a failed search. The search itself walks internal transitions and prunes with an
-	 * internal-only reachability check, so a counterexample that needs a call is not merely missed at the state
-	 * that has the call - the pruning can rule out every successor long before that state is reached, and the
-	 * search then ends with nothing to point at. Without this, such a run is reported as "no path found", which
-	 * sends the reader looking for a bug in the search instead of at the real cause.
-	 */
-	private STATE findCallOrReturn() {
-		for (final STATE state : mAbstraction.getStates()) {
-			if (hasCallOrReturn(state)) {
-				return state;
-			}
+	private IReturnAction asReturnAction(final LETTER letter) {
+		if (!(letter instanceof IReturnAction)) {
+			throw new KInductionCounterexampleException("the return letter " + letter + " is a "
+					+ letter.getClass().getSimpleName() + ", not an IReturnAction, so its assignment of the return "
+					+ "value is unknown");
 		}
-		return null;
+		return (IReturnAction) letter;
 	}
 
 	/**
 	 * Turns a failed search into the most specific explanation available.
 	 */
 	private KInductionCounterexampleException noRunFound(final String what) {
-		final STATE withCall = findCallOrReturn();
-		if (withCall != null) {
-			return new KInductionCounterexampleException(what + ". The abstraction has call and return transitions "
-					+ "(for example at " + withCall + "), so this is expected: " + CALL_RETURN_RESTRICTION);
-		}
-		return new KInductionCounterexampleException(what + ". The abstraction has only internal transitions, so "
-				+ "this is not a restriction of the reconstruction: the pc transition system claims a path that "
-				+ "the letters of the abstraction do not admit, which means the two disagree.");
+		return new KInductionCounterexampleException(what + ". The pc transition system claims a path that the "
+				+ "letters of the abstraction do not admit, which means the two disagree.");
 	}
 
 	/**
 	 * The states from which some target of {@code transition} is still reachable. Prunes the search away from
-	 * parts of the automaton that cannot end this step at all.
+	 * parts of the automaton that cannot end this step at all. Call and return transitions count as edges here:
+	 * over-approximating reachability only weakens the pruning, it can never rule out a real path.
 	 */
 	private Set<STATE> canReachATargetOf(final Transition<STATE> transition) {
 		return mCanReachTarget.computeIfAbsent(transition.getId(), id -> {
-			final Map<STATE, List<STATE>> predecessors = internalPredecessors();
+			final Map<STATE, List<STATE>> predecessors = predecessors();
 			final Set<STATE> result = new HashSet<>(transition.getTargetStates());
 			final Deque<STATE> worklist = new ArrayDeque<>(result);
 			while (!worklist.isEmpty()) {
@@ -466,16 +677,26 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		});
 	}
 
-	private Map<STATE, List<STATE>> internalPredecessors() {
-		if (mInternalPredecessors == null) {
-			mInternalPredecessors = new HashMap<>();
+	private Map<STATE, List<STATE>> predecessors() {
+		if (mPredecessors == null) {
+			mPredecessors = new HashMap<>();
 			for (final STATE state : mAbstraction.getStates()) {
 				for (final OutgoingInternalTransition<LETTER, STATE> out : mAbstraction.internalSuccessors(state)) {
-					mInternalPredecessors.computeIfAbsent(out.getSucc(), k -> new ArrayList<>()).add(state);
+					addPredecessor(out.getSucc(), state);
+				}
+				for (final OutgoingCallTransition<LETTER, STATE> out : mAbstraction.callSuccessors(state)) {
+					addPredecessor(out.getSucc(), state);
+				}
+				for (final OutgoingReturnTransition<LETTER, STATE> out : mAbstraction.returnSuccessors(state)) {
+					addPredecessor(out.getSucc(), state);
 				}
 			}
 		}
-		return mInternalPredecessors;
+		return mPredecessors;
+	}
+
+	private void addPredecessor(final STATE successor, final STATE predecessor) {
+		mPredecessors.computeIfAbsent(successor, k -> new ArrayList<>()).add(predecessor);
 	}
 
 	private void checkBudget() {
@@ -490,16 +711,23 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		}
 	}
 
+	@SuppressWarnings("unchecked")
 	private NestedRun<LETTER, STATE> assemble() {
 		if (mLetters.isEmpty()) {
 			throw new KInductionCounterexampleException("the reconstructed counterexample is empty; an initial "
 					+ "state of the abstraction is also accepting, which no consumer of a counterexample supports");
 		}
-		// Only internal letters get here, see internalSuccessors, so every position is an internal one.
-		NestedWord<LETTER> word = new NestedWord<>();
-		for (final LETTER letter : mLetters) {
-			word = word.concatenate(new NestedWord<>(letter, NestedWord.INTERNAL_POSITION));
+		final int[] nestingRelation = new int[mNesting.size()];
+		for (int i = 0; i < nestingRelation.length; i++) {
+			nestingRelation[i] = mNesting.get(i);
 		}
+		// LETTER erases to IAction, so the array has to be an IAction[] - an Object[], which NestedWord uses for
+		// its own unbounded letter type, fails the cast at runtime.
+		final IAction[] letters = new IAction[mLetters.size()];
+		for (int i = 0; i < letters.length; i++) {
+			letters[i] = mLetters.get(i);
+		}
+		final NestedWord<LETTER> word = new NestedWord<>((LETTER[]) letters, nestingRelation);
 		final NestedRun<LETTER, STATE> run = new NestedRun<>(word, new ArrayList<>(mStates));
 
 		final STATE last = mStates.get(mStates.size() - 1);
@@ -513,9 +741,21 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		} catch (final Exception e) {
 			throw new AssertionError("could not check the reconstructed run against the abstraction: " + e, e);
 		}
-		mLogger.info("KInduction: reconstructed a counterexample of %d letter(s) after %d expansion(s)",
-				mLetters.size(), mExpansions);
+		mLogger.info("KInduction: reconstructed a counterexample of %d letter(s), %d of them call(s), after %d "
+				+ "expansion(s)", mLetters.size(), countCalls(), mExpansions);
 		return run;
+	}
+
+	/** How many positions of the reconstructed word are calls, matched or still pending. */
+	private int countCalls() {
+		int result = 0;
+		for (int i = 0; i < mNesting.size(); i++) {
+			final int nesting = mNesting.get(i);
+			if (nesting == NestedWord.PLUS_INFINITY || nesting > i) {
+				result++;
+			}
+		}
+		return result;
 	}
 
 	private Script script() {

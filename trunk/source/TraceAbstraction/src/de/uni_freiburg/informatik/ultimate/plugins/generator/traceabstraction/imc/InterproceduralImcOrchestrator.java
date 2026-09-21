@@ -19,12 +19,12 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.I
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IReturnAction;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.TransFormulaUtils;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramNonOldVar;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils.SimplificationTechnique;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.Checkpoint;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.Scope;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.ProcedureCallGraph;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolationBasedModelChecking.PathResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolationBasedModelChecking.PathVerdict;
 
@@ -83,7 +83,8 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 		mLogger.info("IMC: call graph ready, %d procedure(s), processing order %s", proceduresCalleeFirst.size(),
 				proceduresCalleeFirst);
 
-		final Map<String, Set<STATE>> statesByProcedure = groupStatesByProcedure();
+		final Map<String, Set<STATE>> statesByProcedure =
+				ProcedureCallGraph.groupStatesByProcedure(mAbstraction.getStates());
 		final Map<String, Set<STATE>> callTargetsByProcedure = new HashMap<>();
 		final Map<String, Set<STATE>> callSitesByCallee = new HashMap<>();
 		for (final STATE state : mAbstraction.getStates()) {
@@ -101,14 +102,14 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 			final Set<STATE> scopeStates = statesByProcedure.getOrDefault(procedure, Set.of());
 			final boolean isEntry = callGraph.getEntryProcedures().contains(procedure);
 			final Set<STATE> initStates =
-					isEntry ? intersect(mAbstraction.getInitialStates(), scopeStates)
+					isEntry ? ProcedureCallGraph.intersect(mAbstraction.getInitialStates(), scopeStates)
 							: callTargetsByProcedure.getOrDefault(procedure, Set.of());
 			final Map<STATE, Map<STATE, UnmodifiableTransFormula>> virtualCallEdges =
 					buildVirtualCallEdges(scopeStates, statesByProcedure, summaries);
 
 			mLogger.info("IMC: checking procedure %s (%d state(s), entry=%s)", procedure, scopeStates.size(), isEntry);
 
-			final Set<STATE> errorStates = intersect(mAbstraction.getFinalStates(), scopeStates);
+			final Set<STATE> errorStates = ProcedureCallGraph.intersect(mAbstraction.getFinalStates(), scopeStates);
 			final Scope<STATE> errorGraph = new LoopTreeFormulaBuilder<LETTER, STATE>(mServices,
 					mLogger, mWorkerMgdScript, mAbstraction, scopeStates, initStates, errorStates, virtualCallEdges)
 							.build().getRoot();
@@ -125,8 +126,8 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 				continue;
 			}
 
-			final Set<STATE> exitStates =
-					computeExitStates(scopeStates, callSitesByCallee.getOrDefault(procedure, Set.of()));
+			final Set<STATE> exitStates = ProcedureCallGraph.computeExitStates(mAbstraction, scopeStates,
+					callSitesByCallee.getOrDefault(procedure, Set.of()));
 			final Scope<STATE> exitGraph = new LoopTreeFormulaBuilder<LETTER, STATE>(mServices,
 					mLogger, mWorkerMgdScript, mAbstraction, scopeStates, initStates, exitStates, virtualCallEdges)
 							.build().getRoot();
@@ -217,8 +218,9 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 					for (final OutgoingReturnTransition<LETTER, STATE> returnTrans : mAbstraction
 							.returnSuccessorsGivenHier(calleeState, callSite)) {
 						final IReturnAction returnAction = (IReturnAction) returnTrans.getLetter();
-						final UnmodifiableTransFormula virtualEdge = computeVirtualEdge(callAction, callee,
-								calleeSummary, returnAction.getAssignmentOfReturn());
+						final UnmodifiableTransFormula virtualEdge =
+								ProcedureCallGraph.computeVirtualEdge(mServices, mLogger, mCsToolkit, mWorkerMgdScript,
+										callAction, callee, calleeSummary, returnAction.getAssignmentOfReturn());
 						final Map<STATE, UnmodifiableTransFormula> fromHere =
 								result.computeIfAbsent(callSite, k -> new HashMap<>());
 						final UnmodifiableTransFormula existing = fromHere.putIfAbsent(returnTrans.getSucc(), virtualEdge);
@@ -231,53 +233,4 @@ final class InterproceduralImcOrchestrator<LETTER extends IAction, STATE> {
 		return result;
 	}
 
-	private UnmodifiableTransFormula computeVirtualEdge(final ICallAction callAction, final String callee,
-			final UnmodifiableTransFormula calleeSummary, final UnmodifiableTransFormula returnTf) {
-		final UnmodifiableTransFormula oldVarsAssignment =
-				mCsToolkit.getOldVarsAssignmentCache().getOldVarsAssignment(callee);
-		final UnmodifiableTransFormula globalVarsAssignment =
-				mCsToolkit.getOldVarsAssignmentCache().getGlobalVarsAssignment(callee);
-		final Set<IProgramNonOldVar> modifiableGlobals = mCsToolkit.getModifiableGlobalsTable().getModifiedBoogieVars(callee);
-		return TransFormulaUtils.sequentialCompositionWithCallAndReturn(mWorkerMgdScript, false, false, false,
-				callAction.getLocalVarsAssignment(), oldVarsAssignment, globalVarsAssignment, calleeSummary, returnTf,
-				mLogger, mServices, SimplificationTechnique.NONE, mCsToolkit.getSymbolTable(), modifiableGlobals);
-	}
-
-	/**
-	 * States in {@code scopeStates} with an outgoing return transition to at least one of {@code callSites} - a
-	 * procedure's own normal-return points, call-site-agnostic (reused as the FINAL set for every caller's virtual
-	 * edge into this procedure). {@code callSites} is every call site anywhere in the automaton that is known (from
-	 * {@link ProcedureCallGraph}) to call this procedure, so this is sound and complete without needing to query the
-	 * automaton for "any return transition regardless of hier", which its API does not expose directly.
-	 */
-	private Set<STATE> computeExitStates(final Set<STATE> scopeStates, final Set<STATE> callSites) {
-		final Set<STATE> result = new HashSet<>();
-		for (final STATE state : scopeStates) {
-			for (final STATE callSite : callSites) {
-				if (mAbstraction.returnSuccessorsGivenHier(state, callSite).iterator().hasNext()) {
-					result.add(state);
-					break;
-				}
-			}
-		}
-		return result;
-	}
-
-	private Map<String, Set<STATE>> groupStatesByProcedure() {
-		final Map<String, Set<STATE>> result = new HashMap<>();
-		for (final STATE state : mAbstraction.getStates()) {
-			result.computeIfAbsent(ProcedureCallGraph.procedureOf(state), k -> new HashSet<>()).add(state);
-		}
-		return result;
-	}
-
-	private static <STATE> Set<STATE> intersect(final Iterable<STATE> a, final Set<STATE> b) {
-		final Set<STATE> result = new HashSet<>();
-		for (final STATE s : a) {
-			if (b.contains(s)) {
-				result.add(s);
-			}
-		}
-		return result;
-	}
 }

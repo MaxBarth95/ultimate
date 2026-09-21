@@ -84,6 +84,12 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tr
  * several and for nested loops; there is no per-loop or per-path approximation. The only incompleteness is
  * {@link #MAX_K} and the solver returning unknown.
  * <p>
+ * <b>Procedures.</b> The transition system is flat and has no call stack, so it never contains a call or a
+ * return. If the abstraction has any, {@link ProcedureSummaries} first replaces every call site by one edge for
+ * the whole call-to-return span (and one edge per error state inside the callee, for a call that never returns),
+ * and the loop tree is then built for the entry procedure alone. Recursion, and a callee that itself contains a
+ * loop, are refused there.
+ * <p>
  * <b>Invariant injection.</b> The {@link IInvariantSupplier} may return a trusted invariant for any loop head, also
  * a nested one. It is assumed in every unrolled state where {@code pc} is that loop head, in the base and the step
  * case. This only prunes the search and can make a loop inductive that is not k-inductive on its own, but a wrong
@@ -142,6 +148,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private final Map<String, Term> mIndexedConstantsWorkerScript = new HashMap<>();
 
 	private PcTransitionSystem<STATE> mSystem;
+	// null unless the abstraction has calls, in which case it holds the resolved call sites
+	private ProcedureSummaries<LETTER, STATE> mSummaries;
 	private final List<Term> mStepTerms = new ArrayList<>();
 	private StepVars mConstants;
 	// pc node of a loop head -> its invariant, over the program variables' term variables
@@ -174,8 +182,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 		mLogger.info("KInduction: starting k-induction (MAX_K=%d)", MAX_K);
 		// Building the loop tree composes transition formulas, which declares constants for their aux vars and thus
 		// locks the script itself. So the tree has to be complete before we take the lock for the solver queries.
-		final LoopTree<STATE> tree =
-				new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
+		final LoopTree<STATE> tree = buildLoopTree();
 		mSystem = new PcTransitionSystem<>(tree);
 		mLogger.info(
 				"KInduction: transition system with %d pc value(s), %d transition(s), %d variable(s), %d loop head(s)",
@@ -195,14 +202,40 @@ public class KInduction<LETTER extends IAction, STATE> {
 			} else if (verdict == Verdict.UNSAFE) {
 				// Still under the lock, but after the base case's pop: reconstruction asserts terms, which would
 				// invalidate the model we are working from. mWitness already holds everything we need from it.
-				mCounterexample = new KInductionCounterexampleBuilder<>(mServices, mLogger, mWorkerMgdScript,
-						mKILock, mAbstraction, mSystem, mWitness).build();
+				mCounterexample = new KInductionCounterexampleBuilder<LETTER, STATE>(mServices, mLogger,
+						mWorkerMgdScript, mKILock, mCsToolkit, mAbstraction, mSystem, mWitness,
+						mSummaries == null ? Collections.emptySet() : mSummaries.getPendingErrorTargets()).build();
 			}
 		} finally {
 			mWorkerMgdScript.unlock(mKILock);
 		}
 		mLogger.info("is safe " + mSafe);
 		mLogger.info("solver returned unknown: " + mSolverReturnedUnknown);
+	}
+
+	/**
+	 * The loop tree of the program. If the abstraction has no call transition it is the whole automaton, as it
+	 * always was. Otherwise every call site is first resolved into a virtual call edge by
+	 * {@link ProcedureSummaries}, and the tree is built for the entry procedure's states alone - the flat graph
+	 * has no call stack, so a call that stayed in it would be unsound, see {@link LoopTreeFormulaBuilder}.
+	 */
+	private LoopTree<STATE> buildLoopTree() {
+		if (!hasCallTransitions()) {
+			return new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
+		}
+		mSummaries = new ProcedureSummaries<>(mServices, mLogger, mCsToolkit, mWorkerMgdScript, mAbstraction);
+		return new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction,
+				mSummaries.getScopeStates(), mSummaries.getInitStates(), mSummaries.getFinalStates(),
+				mSummaries.getVirtualCallEdges(), mSummaries.getPendingErrorTargets()).build();
+	}
+
+	private boolean hasCallTransitions() {
+		for (final STATE state : mAbstraction.getStates()) {
+			if (mAbstraction.callSuccessors(state).iterator().hasNext()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private Verdict kInduction() {

@@ -63,7 +63,9 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ki
  * </ul>
  * Every edge of every scope of the tree is one transition, from the node of its source checkpoint to the node of its
  * target checkpoint, labelled with the edge's formula. Every program execution is a sequence of such transitions,
- * because it is cut at each visit of a loop head.
+ * because it is cut at each visit of a loop head. One transition can stand for many letters, and at a call site for
+ * a whole call-to-return span (see {@link ProcedureSummaries}); {@link KInductionCounterexampleBuilder} is what
+ * turns a transition back into letters.
  * <p>
  * {@link #step} builds the relation between step {@code idx} and step {@code idx + 1}. Variables a transition does
  * not assign are explicitly kept equal (frame), and auxiliary variables are instantiated separately for every
