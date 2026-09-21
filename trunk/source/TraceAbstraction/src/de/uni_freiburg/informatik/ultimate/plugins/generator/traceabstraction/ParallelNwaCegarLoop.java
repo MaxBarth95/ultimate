@@ -31,11 +31,12 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -46,14 +47,12 @@ import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryException;
 import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryServices;
 import de.uni_freiburg.informatik.ultimate.automata.AutomataOperationCanceledException;
 import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
-import de.uni_freiburg.informatik.ultimate.automata.IRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.IDoubleDeckerAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INwaOutgoingLetterAndTransitionProvider;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Difference;
-import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.IsEmpty;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.PowersetDeterminizer;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.oldapi.IOpWithDelayedDeadEndRemoval;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.senwa.DifferenceSenwa;
@@ -96,19 +95,30 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	// Parallel Setup
 	private final ExecutorService mExec;
 	private int mThreadLimit;
-	private int mRunningThreads = 0;
 
-	// private final CompletionService<WorkerThreadResult<L, A>> mECS;
-	BlockingQueue<IRun<L, ?>> mWorkerTaskQueue = new LinkedBlockingQueue<>();
+	/** Workers still alive (i.e. not crashed). Main thread only. */
+	private int mLiveWorkers = 0;
+	/** Ids of workers currently parked because their search found nothing. Main thread only. */
+	private final Set<Integer> mParkedWorkers = new HashSet<>();
+	/** How often we let every worker resync and retry before giving up with UNKNOWN. */
+	private static final int MAX_RESYNC_ROUNDS = 2;
+
+	private final Object mParkLock = new Object();
+	private int mResyncGeneration = 0;
+
 	BlockingQueue<WorkerThreadResult<L, A>> mWorkerResultQueue = new LinkedBlockingQueue<>();
 
-	// need global program cache, but worker need to get copy otherwise we
-	// synchronize
-	private final PathProgramCache<L> mProgramCache = new PathProgramCache<>(mLogger);
-
 	// Strategies
-	public final HashMap<Integer, NestedRun<L, ?>> mActiveCounterexamples = new HashMap<>();
-	private final Set<Integer> mCounterexamplesToBeRemovedFromActiveCexMap = new HashSet<>();
+	/**
+	 * Counterexamples claimed by some worker. Entries are added via an atomic claim and are *never*
+	 * removed: that is what guarantees no two workers ever analyse the same trace.
+	 *
+	 * Keys are trace.hashCode(). That key is script-independent because CodeBlock.hashCode() is the
+	 * serial number and TransferBetweenMainAndWorker preserves serial numbers when it rebuilds
+	 * letters for a worker script — which is what lets workers with different SMT scripts share one
+	 * set. Preserve that property when touching transferEdge.
+	 */
+	private final ConcurrentMap<Integer, NestedRun<L, ?>> mActiveCounterexamples = new ConcurrentHashMap<>();
 	protected InterpolationTechnique mInterpolationTechnique;
 
 	protected Class<L> mTransitionClazz;
@@ -171,8 +181,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(
 				new AutomataLibraryServices(mServices), mLogger, mCsToolkit.getManagedScript(), iterationServices,
-				getSolverSettings(iterationServices,
-						getIteration() + mRunningThreads + mCounterexample.getWord().asList().hashCode() + "parallel"),
+				getSolverSettings(iterationServices, "worker" + id + "parallel"),
 				mCsToolkit);
 
 		final CfgSmtToolkit freshToolKit = transferUtils.getWorkerCfgSmtToolKit();
@@ -201,8 +210,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		// initialize worker
 		return new CegarNwaWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
 				predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
-				stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
-				transferUtils);
+				stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, transferUtils);
 	}
 
 	/*
@@ -213,112 +221,121 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 * we continue with the loop. If no worker is done, continue with the loop. If no thread is available and no worker
 	 * is done we sleep.
 	 */
+	/*
+	 * Parallel CEGAR loop. Each worker searches for its own counterexamples, claims them in the
+	 * shared set, and analyses them. Main does not search at all any more: it drains the result
+	 * queue, applies each worker result to the global abstraction, and decides when we are done.
+	 */
 	@Override
 	protected void iterate() throws AutomataLibraryException {
 		// TODO manage time and timeout
-		boolean didntFindCexLastIteration = false;
-		final IcfgLocation currentErrorLoc = getErrorLocFromCounterexample();
-		final IUltimateServiceProvider iterationServices = createIterationTimer(currentErrorLoc);
+		final IUltimateServiceProvider iterationServices = createIterationTimer(getErrorLocFromCounterexample());
 		for (int i = 0; i < mThreadLimit; i++) {
 			try {
 				mExec.submit(setUpContinuesWorker(iterationServices, i));
 			} catch (final InterruptedException e) {
+				Thread.currentThread().interrupt();
 				throw new AssertionError("Interrupted during worker setup " + e);
 			}
 		}
+		mLiveWorkers = mThreadLimit;
+		// Main no longer owns a "current" counterexample; workers each have their own.
+		mCounterexample = null;
 
-		// start worker for initial cex:
-		startWorker();
-
+		int resyncRounds = 0;
 		for (mIteration = 1; mIteration <= mPref.maxIterations(); mIteration++) {
 			abortIfTimeout();
-			boolean abstractionWasRefined = false;
 			mLogger.info(String.format("=== Iteration %s ===", getIteration()));
 
+			final WorkerThreadResult<L, A> workerResult;
 			try {
-				// we sleep if not: thread or counterexample is available
-				WorkerThreadResult<L, A> workerResult = getWorkerResult(didntFindCexLastIteration);
+				mLogger.info("Main: waiting for a worker result.");
+				workerResult = mWorkerResultQueue.take();
+			} catch (final InterruptedException ie) {
+				Thread.currentThread().interrupt();
+				mLogger.warn("Main was interrupted! " + ie);
+				break;
+			}
 
-				// go through all done workerResult
-				while (workerResult != null) {
-					final long time = System.nanoTime() / 1000000000;
-					try {
-						mLogger.info("Main: A Thread is Done");
-						if (workerResult.workerCrashed()) {
-							mLogger.error("Main: Worker Crashed! exiting CEGAR loop.");
-							// TODO we can try to recover, and restart the worker.
-							// It might be that just this counterexample crashes our worker and we can still prove the
-							// program correct
-							shutDownAndDestroy(mDestroyEverything);
-							throw new AssertionError("Worker Crashed!, Exiting CEGAR loop!");
-						}
-						// If Error automaton terminate immediately
-						if (mPref.stopAfterFirstViolation()
-								&& workerResult.getAutomatonType().equals(AutomatonType.ERROR)) {
-							shutDownAndDestroy(mDestroyEverything);
-							updateAndPrintStatistics(true);
-							return;
-						}
-
-						mLogger.info("Worker Automaton Type: " + workerResult.getAutomatonType());
-						mLogger.info("Refining Abstraction");
-						refinement(workerResult);
-						mRefinementsDone += 1;
-						abstractionWasRefined = true;
-						// Not sure if necessary
-						workerResult.garbageCollect();
-						// If new abstraction is empty terminate immediately
-						if (isSafeThenTerminate()) {
-							updateAndPrintStatistics(true);
-							return;
-						}
-
-					} catch (final CancellationException e) {
-						mLogger.warn("Worker was cancelled! " + e);
-					} catch (final Exception e) {
-						mLogger.warn("Worker Failed! " + e);
-						throw e;
-					} finally {
-
-					}
-					workerResult = mWorkerResultQueue.poll();
-					mRefinementTime += ((System.nanoTime() / 1000000000) - time);
+			if (workerResult.workerCrashed()) {
+				// A crashed worker never parks and is never counted again, so drop it from the live
+				// count or all-parked detection could never be reached and main would hang.
+				mLiveWorkers -= 1;
+				mLogger.error("Main: Worker Crashed! %s workers left.", mLiveWorkers);
+				if (mLiveWorkers <= 0) {
+					shutDownAndDestroy(mDestroyEverything);
+					throw new AssertionError("All workers crashed, exiting CEGAR loop!");
 				}
-				mLogger.info("No more worker results to process");
-				assert workerResult == null;
+				mIteration -= 1; // a crash is not a refinement
+				continue;
+			}
 
+			if (workerResult.noCounterexampleFound()) {
+				mParkedWorkers.add(workerResult.getWorkerId());
+				mLogger.info("Main: worker %s parked (%s of %s parked).", workerResult.getWorkerId(),
+						mParkedWorkers.size(), mLiveWorkers);
+				if (mParkedWorkers.size() >= mLiveWorkers && mWorkerResultQueue.isEmpty()) {
+					if (isSafeThenTerminate()) {
+						updateAndPrintStatistics(true);
+						return;
+					}
+					// A worker's abstraction can be a strict under-approximation of main's (see
+					// TransferBetweenMainAndWorker.transferAutomaton, which may drop transitions),
+					// and IsEmptyParallel also gives up on a timeout or its recursion limit. So
+					// "nobody found anything" does not prove the global abstraction is empty.
+					resyncRounds += 1;
+					if (resyncRounds > MAX_RESYNC_ROUNDS) {
+						mLogger.warn("No worker can find a counterexample but the abstraction is not empty.");
+						mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
+						shutDownAndDestroy(mDestroyEverything);
+						updateAndPrintStatistics(true);
+						return;
+					}
+					mLogger.warn("All workers parked but abstraction is not empty; resync round %s", resyncRounds);
+					wakeParkedWorkers();
+				}
+				mIteration -= 1; // parking is not a refinement
+				continue;
+			}
+
+			// If Error automaton terminate immediately
+			if (mPref.stopAfterFirstViolation() && workerResult.getAutomatonType().equals(AutomatonType.ERROR)) {
+				shutDownAndDestroy(mDestroyEverything);
+				updateAndPrintStatistics(true);
+				return;
+			}
+
+			final long time = System.nanoTime() / 1000000000;
+			try {
+				mLogger.info("Worker Automaton Type: " + workerResult.getAutomatonType());
+				mLogger.info("Refining Abstraction");
+				refinement(workerResult);
+				mRefinementsDone += 1;
+				mCounterexamplesChecked += 1;
+				workerResult.garbageCollect();
+			} catch (final CancellationException e) {
+				mLogger.warn("Worker was cancelled! " + e);
 			} catch (final ToolchainCanceledException e) {
 				mLogger.warn("Worker Failed! " + e);
 				throw e;
-			} catch (final InterruptedException ie) {
-				ie.printStackTrace();
-				mLogger.warn("Worker was interrupted! " + ie);
-			}
-			if (abstractionWasRefined && !mPref.minimizeAbstractionPerWorker()) {
-				// uses NWA CEGAR loop
-				// When do we minimize how often?
-				minimizeAbstractionIfEnabled();
-			}
-			if (abstractionWasRefined) {
-				// If we didnt find one we wait until we refine the abstraction
-				didntFindCexLastIteration = false;
+			} finally {
+				mRefinementTime += ((System.nanoTime() / 1000000000) - time);
 			}
 
-			/*
-			 * In the first iteration we search via BFS, then we use IsEmptyParallel
-			 */
-			boolean firstIteration = true;
-			while (mRunningThreads < mThreadLimit && !didntFindCexLastIteration) {
-				assert mRunningThreads >= 0;
-				mCounterexample = searchForErrorTrace(!firstIteration);
-				if (mCounterexample == null) {
-					didntFindCexLastIteration = true;
-					break;
-				}
-				if (mCounterexample != null) {
-					startWorker();
-				}
-				firstIteration = false;
+			if (!mPref.minimizeAbstractionPerWorker()) {
+				// uses NWA CEGAR loop
+				minimizeAbstractionIfEnabled();
+			}
+			// If new abstraction is empty terminate immediately
+			if (isSafeThenTerminate()) {
+				updateAndPrintStatistics(true);
+				return;
+			}
+
+			// The global abstraction changed, so a parked worker may make progress after resyncing.
+			resyncRounds = 0;
+			if (!mParkedWorkers.isEmpty()) {
+				wakeParkedWorkers();
 			}
 			updateAndPrintStatistics(false);
 		}
@@ -328,14 +345,14 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	private void updateAndPrintStatistics(final boolean printStatistics) {
-
-		if (mRunningThreads > maxActiveThreads) {
-			maxActiveThreads = mRunningThreads;
+		final int activeWorkers = mLiveWorkers - mParkedWorkers.size();
+		if (activeWorkers > maxActiveThreads) {
+			maxActiveThreads = activeWorkers;
 		}
-		if (mRunningThreads == mThreadLimit) {
+		if (activeWorkers == mThreadLimit) {
 			mIterationsWithMaxThreads += 1;
 		}
-		if (mRunningThreads == 1) {
+		if (activeWorkers == 1) {
 			mIterationsWithOneThread += 1;
 		}
 		if (printStatistics) {
@@ -373,38 +390,36 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		return false;
 	}
 
-	/*
-	 * When we reach this method, we will always start at least one new worker.
+	/**
+	 * Generation counter that a worker reads *before* it starts searching. Handing the value back to
+	 * {@link #awaitResync(int)} closes the lost-wakeup window: if main bumped the generation while
+	 * the worker was still searching, the worker does not park at all.
 	 */
-	private void startWorker() {
-		mWorkerTaskQueue.add(mCounterexample);
-		mProgramCache.addRun(mCounterexample.getWord());
-		final long time = System.nanoTime() / 1000000000;
-		mLogger.info("Main: Starting Thread");
-		final IcfgLocation currentErrorLoc = getErrorLocFromCounterexample();
-		final IUltimateServiceProvider iterationServices = createIterationTimer(currentErrorLoc);
-		mServices = iterationServices;
-		mRunningThreads += 1;
-		mCounterexamplesChecked += 1;
-		// add mCounterexample to list such that we dont get it twice in our search
-		addCounterexampleToSet((NestedRun<L, ?>) mCounterexample);
-		mWorkerSetUpTime += ((System.nanoTime() / 1000000000) - time);
+	public int getResyncGeneration() {
+		synchronized (mParkLock) {
+			return mResyncGeneration;
+		}
 	}
 
-	private WorkerThreadResult<L, A> getWorkerResult(final boolean didntFindCexLastIteration)
-			throws InterruptedException {
-		WorkerThreadResult<L, A> doneFuture = null;
-
-		if (mRunningThreads >= mThreadLimit || didntFindCexLastIteration) {
-			assert mRunningThreads > 0;
-			mLogger.info("All threads busy, going to sleep.");
-			// No busy waiting via BlockingQueue
-			doneFuture = mWorkerResultQueue.take();
-			mLogger.info("Waking up, a worker is done.");
-		} else {
-			doneFuture = mWorkerResultQueue.poll();
+	/**
+	 * Park the calling worker until main asks it to resync its abstraction from main and search
+	 * again. A worker must enqueue its idle marker *before* calling this, otherwise main can block
+	 * on an empty result queue forever.
+	 */
+	public void awaitResync(final int generationBeforeSearch) throws InterruptedException {
+		synchronized (mParkLock) {
+			while (mResyncGeneration == generationBeforeSearch) {
+				mParkLock.wait();
+			}
 		}
-		return doneFuture;
+	}
+
+	private void wakeParkedWorkers() {
+		mParkedWorkers.clear();
+		synchronized (mParkLock) {
+			mResyncGeneration++;
+			mParkLock.notifyAll();
+		}
 	}
 
 	private void shutDownAndDestroy(final Object marker) {
@@ -420,8 +435,6 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			throws AutomataOperationCanceledException, AutomataLibraryException {
 		// mInterations equals the amount of refinements
 		mCegarLoopBenchmark.announceNextIteration();
-
-		removeCounterexampleFromSet(threadResult.getCounterexample());
 
 		final Set<IcfgLocation> hoareAnnotationLocs;
 		// TODO support for HoareAnnotations
@@ -440,39 +453,27 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			minimizeAbstractionIfEnabled(stateFactoryForRefinement,
 					new PredicateFactoryResultChecking(mPredicateFactory));
 		}
-		mRunningThreads -= 1;
 		mLogger.info("Main: Refinement done.");
 	}
 
-	/*
-	 * Only add a counterexample if it is being checked by a thread otherwise we are unsound
+	/**
+	 * Atomically claim a counterexample for the calling worker. Returns true iff the caller won and
+	 * may analyse this trace.
+	 *
+	 * A false return is an *expected* race between two concurrently searching workers, not an error:
+	 * the loser simply searches again. Claims are never released.
 	 */
-	private void addCounterexampleToSet(final NestedRun<L, ?> counterexample) {
-		final List<L> trace = counterexample.getWord().asList();
-		final int traceHash = trace.hashCode();
-		if (mActiveCounterexamples.containsKey(traceHash)) {
-			throw new AssertionError("IsEmpty(Parallel) Found the same counterexample twice!");
-		}
-		mActiveCounterexamples.put(traceHash, counterexample);
+	public boolean claimCounterexample(final NestedRun<L, ?> counterexample) {
+		final int traceHash = counterexample.getWord().asList().hashCode();
+		return mActiveCounterexamples.putIfAbsent(traceHash, counterexample) == null;
 	}
 
-	/*
-	 * OnlyActive means only countereamples actively being checked by workers. The alternative is all previously found
-	 * counterexamples.
+	/**
+	 * The shared claim set, handed to IsEmptyParallel so that a worker's search diverges from every
+	 * trace already claimed by any worker.
 	 */
-	private void removeCounterexampleFromSet(final IRun<L, ?> cex) {
-		final List<L> trace = cex.getWord().asList();
-		final int traceHash = trace.hashCode();
-		mLogger.info("Subtrahend traceHash: " + traceHash);
-		// Only remove after the counterexample is no longer in the abstraction
-		if (mPref.considerOnlyActiveCounterexamplesInIsEmptyParallel()) {
-			mActiveCounterexamples.remove(traceHash);
-		} else {
-			if (mCounterexamplesToBeRemovedFromActiveCexMap == null) {
-				return;
-			}
-			mCounterexamplesToBeRemovedFromActiveCexMap.add(traceHash);
-		}
+	public Map<Integer, NestedRun<L, ?>> getActiveCounterexamples() {
+		return mActiveCounterexamples;
 	}
 
 	/*
@@ -481,73 +482,6 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 */
 	public INestedWordAutomaton<L, IPredicate> getAbstraction() {
 		return mAbstraction;
-	}
-
-	private IsEmpty<L, IPredicate> getSearch(final IsEmpty.SearchStrategy strategy,
-			final Set<IPredicate> possibleEndPoints) throws AutomataOperationCanceledException {
-		switch (strategy) {
-		case PARALLEL:
-			return new IsEmptyParallel<>(new AutomataLibraryServices(mServices), mAbstraction,
-					mAbstraction.getInitialStates(), Collections.emptySet(), possibleEndPoints,
-					possibleEndPoints == null, IsEmpty.SearchStrategy.BFS, mActiveCounterexamples,
-					mPref.getSearchLoopBound());
-		default:
-			return new IsEmpty<>(new AutomataLibraryServices(getServices()), mAbstraction, strategy);
-		}
-	}
-
-	// If search was BFS, the counterexample might not be fresh.
-	private boolean isSearchCorrectAndTraceFresh(final IsEmpty<L, IPredicate> search) {
-		boolean correct = false;
-		boolean fresh = true;
-		try {
-			correct = search.checkResult(mStateFactoryForRefinement);
-		} catch (final AutomataLibraryException e) {
-			e.printStackTrace();
-			assert false;
-		}
-
-		final NestedRun<L, IPredicate> run = search.getNestedRun();
-		if (run != null) {
-			final List<L> trace = run.getWord().asList();
-			final int traceHash = trace.hashCode();
-			if (mActiveCounterexamples.containsKey(traceHash)) {
-				fresh = false;
-			}
-			return correct && fresh;
-		}
-		return false;
-	}
-
-	/*
-	 * Search for an error trace in the current mAbstraction. First time with a new abstraction we try BFS, then
-	 * IsEmptyParallel
-	 */
-	private NestedRun<L, IPredicate> searchForErrorTrace(final boolean onlyDoIsEmptyParallel)
-			throws AutomataOperationCanceledException {
-		final long time = System.nanoTime() / 1000000000;
-		final Set<IPredicate> possibleEndPoints = null;
-
-		IsEmpty<L, IPredicate> search;
-		if (!onlyDoIsEmptyParallel) {
-			search = getSearch(IsEmpty.SearchStrategy.BFS, possibleEndPoints);
-			if (isSearchCorrectAndTraceFresh(search)) {
-				mCountBfsFoundCex += 1;
-				mLogger.info("Found new Counterexample via BFS!");
-				return search.getNestedRun();
-			}
-		}
-		search = getSearch(IsEmpty.SearchStrategy.PARALLEL, possibleEndPoints);
-		if (isSearchCorrectAndTraceFresh(search)) {
-			mLogger.info("Found new Counterexample via IsEmptyParallel!");
-			return search.getNestedRun();
-		}
-		mLogger.info("Did not Find a Counterexample!");
-		mCountFailedToFindCex += 1;
-		assert mRunningThreads > 0;
-
-		mSearchTime += ((System.nanoTime() / 1000000000) - time);
-		return null;
 	}
 
 	@Override
@@ -730,18 +664,14 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		}
 	}
 
-	// worker use this method to access the programcache shared across all workers + main
-	public PathProgramCache<L> getCurrentProgramCache() {
-		return mProgramCache;
-	}
-
-	public void reportFailedContinuesWorkerThread() {
-		final IcfgLocation currentErrorLoc = getErrorLocFromCounterexample();
-		final IUltimateServiceProvider iterationServices = createIterationTimer(currentErrorLoc);
-		try {
-			setUpContinuesWorker(iterationServices, 0);
-		} catch (final InterruptedException e) {
-			e.printStackTrace();
-		}
-	}
+	/*
+	 * Each worker now owns its PathProgramCache. The shared cache that used to live here was handed
+	 * to workers by reference (PathProgramCache.copyProgramCache aliases rather than copies) and is
+	 * not synchronized, so sharing it became a race once workers run continuously.
+	 *
+	 * reportFailedContinuesWorkerThread() was removed with it: it built a replacement worker but
+	 * never submitted it to the executor, so it only ever wasted a solver, and it read
+	 * mCounterexample, which main no longer owns. A crashed worker is now handled by iterate(),
+	 * which drops it from mLiveWorkers so that all-parked detection stays reachable.
+	 */
 }

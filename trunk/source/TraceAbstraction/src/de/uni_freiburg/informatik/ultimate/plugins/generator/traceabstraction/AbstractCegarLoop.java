@@ -788,14 +788,24 @@ public abstract class AbstractCegarLoop<L extends IIcfgTransition<?>, A extends 
 
 	}
 
+	/**
+	 * Collects the per-error-location results of a CEGAR run.
+	 *
+	 * All public methods are synchronized: in the parallel CEGAR loop this builder is written
+	 * concurrently from worker threads (see CegarNwaWorkerThread.processFeasibilityCheckResult) as
+	 * well as from the main thread, and the backing LinkedHashMap is not thread-safe. Synchronizing
+	 * the whole method matters for addResultForAllRemaining, whose containsKey-filter-then-add must
+	 * not interleave with another writer. The methods are reentrant, so the delegation between them
+	 * is safe.
+	 */
 	protected final class CegarLoopResultBuilder {
 		private final Map<IcfgLocation, CegarLoopLocalResult<L>> mResults = new LinkedHashMap<>();
 
-		public CegarLoopResultBuilder addResultForAllRemaining(final Result result) {
+		public synchronized CegarLoopResultBuilder addResultForAllRemaining(final Result result) {
 			return addResultForAllRemaining(result, null, null, null);
 		}
 
-		public CegarLoopResultBuilder addResultForAllRemaining(final Result result,
+		public synchronized CegarLoopResultBuilder addResultForAllRemaining(final Result result,
 				final IProgramExecution<L, Term> rcfgProgramExecution, final IRunningTaskStackProvider rtsp,
 				final UnprovabilityReason reasonUnknown) {
 			mErrorLocs.stream().filter(elem -> !mResults.containsKey(elem))
@@ -803,7 +813,7 @@ public abstract class AbstractCegarLoop<L extends IIcfgTransition<?>, A extends 
 			return this;
 		}
 
-		public CegarLoopResultBuilder addResultForProgramExecution(final Result result,
+		public synchronized CegarLoopResultBuilder addResultForProgramExecution(final Result result,
 				final IProgramExecution<L, Term> programExecution, final IRunningTaskStackProvider rtsp,
 				final UnprovabilityReason reasonUnknown) {
 			final AtomicTraceElement<L> lastElem = programExecution.getTraceElement(programExecution.getLength() - 1);
@@ -812,7 +822,7 @@ public abstract class AbstractCegarLoop<L extends IIcfgTransition<?>, A extends 
 
 		}
 
-		public CegarLoopResultBuilder addResult(final IcfgLocation loc, final Result result,
+		public synchronized CegarLoopResultBuilder addResult(final IcfgLocation loc, final Result result,
 				final IProgramExecution<L, Term> rcfgProgramExecution, final IRunningTaskStackProvider rtsp,
 				final UnprovabilityReason reasonUnknown) {
 			mLogger.info("Registering result %s for location %s (%s of %s remaining)", result, loc,
@@ -868,7 +878,7 @@ public abstract class AbstractCegarLoop<L extends IIcfgTransition<?>, A extends 
 
 		}
 
-		public CegarLoopResult<L> getResult() {
+		public synchronized CegarLoopResult<L> getResult() {
 			final IStatisticsDataProvider cegarLoopBenchmarkGenerator = getCegarLoopBenchmark();
 
 			final List<Pair<AbstractInterpolantAutomaton<L>, IPredicateUnifier>> floydHoareAutomata;
@@ -881,7 +891,7 @@ public abstract class AbstractCegarLoop<L extends IIcfgTransition<?>, A extends 
 			return new CegarLoopResult<>(mResults, cegarLoopBenchmarkGenerator, getArtifact(), floydHoareAutomata);
 		}
 
-		public int remainingErrorLocs() {
+		public synchronized int remainingErrorLocs() {
 			return mErrorLocs.size() - mResults.size();
 		}
 	}

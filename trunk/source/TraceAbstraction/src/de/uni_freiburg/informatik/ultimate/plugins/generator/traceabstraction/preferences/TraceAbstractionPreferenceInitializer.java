@@ -578,10 +578,9 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 			"Minimize the abstraction everytime a worker is done, or only once per CEGAR iteration.";
 	// Parallel CEGAR counterexample search stragies
 	// ========================================================================
-	public static final String LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY = "Consider only active in Search Strategy";
-	private static final boolean DEF_PARALLELSEARCH_ACTIVE_CEX_ONLY = true;
-	private static final String DESC_PARALLELSEARCH_ACTIVE_CEX_ONLY =
-			"IsEmptyParallel must diverge from any previous counterexample (false) or only from counterexamples activley analysed by a worker. ";
+	// Counterexamples claimed by a worker are never released, so IsEmptyParallel always diverges
+	// from every counterexample found so far. The switch that used to select between "only the
+	// actively analysed ones" and "all of them" no longer has a meaning and was removed.
 	public static final String LABEL_SEARCH_LOOP_BOUND = "search loop bound";
 	private static final String DESC_SEARCH_LOOP_BOUND =
 			"Limits how often the IsEmptyParallel search is allowed to visit the same transition letter pair. Default -1 means infinetly often";
@@ -897,8 +896,6 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						new IUltimatePreferenceItemValidator.IntegerValidator(0, 1_0000_000)),
 				new UltimatePreferenceItem<>(LABEL_SEARCH_LOOP_BOUND, DEF_SEARCH_LOOP_BOUND, DESC_SEARCH_LOOP_BOUND,
 						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(-1, 1_0000_000)),
-				new UltimatePreferenceItem<>(LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY, DEF_PARALLELSEARCH_ACTIVE_CEX_ONLY,
-						DESC_PARALLELSEARCH_ACTIVE_CEX_ONLY, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_MINIMIZE_ABSTRACTION_PER_WORKER, DEF_MINIMIZE_ABSTRACTION_PER_WORKER,
 						DESC_MINIMIZE_ABSTRACTION_PER_WORKER, PreferenceType.Boolean));
 

@@ -50,6 +50,8 @@ final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IAutomato
 	private IRun<L, ?> mCounterexample;
 	PredicateFactory mPredicateFactory;
 	private final boolean mWorkerCrashed;
+	private final boolean mNoCounterexampleFound;
+	private final int mWorkerId;
 
 	/**
 	 * The object returned by an @ICegarNwaWorkerThread
@@ -71,6 +73,41 @@ final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IAutomato
 		mCounterexample = counterexample;
 		mPredicateFactory = predicateFactory;
 		mWorkerCrashed = workerCrashed;
+		mNoCounterexampleFound = false;
+		mWorkerId = -1;
+	}
+
+	private WorkerThreadResult(final int workerId) {
+		mSubtrahend = null;
+		mAutomatonType = null;
+		mUseErrorAutomaton = false;
+		mEnhanceMode = null;
+		mSubtrahendBeforeEnhancement = null;
+		mExploitSigmaStarConcatOfIa = false;
+		mMgdScript = null;
+		mCounterexample = null;
+		mPredicateFactory = null;
+		mWorkerCrashed = false;
+		mNoCounterexampleFound = true;
+		mWorkerId = workerId;
+	}
+
+	/**
+	 * Marker put on the result queue by a worker that found no fresh counterexample even after
+	 * resyncing its abstraction from main, immediately before it parks. Main uses the worker id to
+	 * track which workers are parked; see ParallelNwaCegarLoop's termination handling.
+	 */
+	static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
+			noCounterexampleFound(final int workerId) {
+		return new WorkerThreadResult<>(workerId);
+	}
+
+	public boolean noCounterexampleFound() {
+		return mNoCounterexampleFound;
+	}
+
+	public int getWorkerId() {
+		return mWorkerId;
 	}
 
 	public boolean workerCrashed() {

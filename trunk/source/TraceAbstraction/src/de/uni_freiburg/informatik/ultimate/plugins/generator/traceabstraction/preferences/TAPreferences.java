@@ -105,7 +105,6 @@ public final class TAPreferences {
 	// Parallel Trace Abstraction Settings
 	private final int mThreadLimit;
 	private final boolean mParallelCegarLoop;
-	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
 	private final int mSearchLoopBound;
 
@@ -224,8 +223,6 @@ public final class TAPreferences {
 
 		mParallelCegarLoop = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLEL_CEGAR_LOOP);
 		mThreadLimit = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_THREADLIMIT);
-		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
-				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY);
 		mMinimizeAbstractionPerWorker =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_MINIMIZE_ABSTRACTION_PER_WORKER);
 		mSearchLoopBound = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_SEARCH_LOOP_BOUND);
@@ -664,10 +661,6 @@ public final class TAPreferences {
 
 	public boolean minimizeAbstractionPerWorker() {
 		return mMinimizeAbstractionPerWorker;
-	}
-
-	public boolean considerOnlyActiveCounterexamplesInIsEmptyParallel() {
-		return mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	}
 
 	public int getSearchLoopBound() {

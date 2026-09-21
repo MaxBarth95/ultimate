@@ -101,7 +101,7 @@ public final class IsEmptyParallel<LETTER, STATE> extends IsEmpty<LETTER, STATE>
 	 * HashMap used for parallel trace abstraction Maps TraceHash to Trace, has an entry for every counterexample
 	 * currently checked by a thread
 	 */
-	private final HashMap<Integer, NestedRun<LETTER, ?>> mActiveCounterexamples;
+	private final Map<Integer, NestedRun<LETTER, ?>> mActiveCounterexamples;
 
 	/**
 	 * Constructor for parallel search strategy. Gets as additional argument the list of all counterexamples currently
@@ -117,7 +117,7 @@ public final class IsEmptyParallel<LETTER, STATE> extends IsEmpty<LETTER, STATE>
 	public IsEmptyParallel(final AutomataLibraryServices services,
 			final INwaOutgoingLetterAndTransitionProvider<LETTER, STATE> operand, final Set<STATE> startStates,
 			final Set<STATE> forbiddenStates, final Set<STATE> goalStates, final boolean goalStateIsAcceptingState,
-			final SearchStrategy strategy, final HashMap<Integer, NestedRun<LETTER, ?>> counterexamples,
+			final SearchStrategy strategy, final Map<Integer, NestedRun<LETTER, ?>> counterexamples,
 			final int loopBound) throws AutomataOperationCanceledException {
 		super(services, operand, startStates, forbiddenStates, goalStates, goalStateIsAcceptingState, strategy, true);
 
@@ -545,10 +545,11 @@ public final class IsEmptyParallel<LETTER, STATE> extends IsEmpty<LETTER, STATE>
 			if (run == null) {
 				return run;
 			}
-			for (final Integer cexHash : mActiveCounterexamples.keySet()) {
-				if (cexHash == run.getWord().asList().hashCode()) {
-					throw new AssertionError("Not a fresh counterexample!");
-				}
+			// Best-effort filter only: the claim set is shared and grows concurrently while we
+			// search, so a run can become stale between discovery and return. The atomic claim
+			// in ParallelNwaCegarLoop is the only authority on freshness.
+			if (mActiveCounterexamples.containsKey(run.getWord().asList().hashCode())) {
+				return null; // already claimed, backtrack and keep looking
 			}
 			return run; // is null if isEmpty fails, leads to backtracking
 		}
@@ -629,10 +630,9 @@ public final class IsEmptyParallel<LETTER, STATE> extends IsEmpty<LETTER, STATE>
 					new DoubleDecker<>(mDummyEmptyStackState, start), startpq.getCounterexamplesUnderConsideration());
 
 			if (runToGoal != null) {
-				for (final Integer cexHash : set) {
-					if (cexHash == runToGoal.getWord().asList().hashCode()) {
-						throw new AssertionError("Not a fresh counterexample!");
-					}
+				// Best-effort filter only; see constructRunFromStateToNextBranch.
+				if (mActiveCounterexamples.containsKey(runToGoal.getWord().asList().hashCode())) {
+					continue; // claimed concurrently, try the next start state
 				}
 				return runToGoal;
 			}
