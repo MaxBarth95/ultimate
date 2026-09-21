@@ -202,6 +202,15 @@ public class InterpolationBasedModelChecking<LETTER extends IAction, STATE> {
 	 * per-phase interpolant-stabilization bound {@code MAX_K} - the same kind of bounded/heuristic limitation
 	 * {@code MAX_K} itself already carries for a single loop, now generalized to every loop head instead of exactly one.
 	 */
+	/**
+	 * Unrolls each loop head on {@code path}. Note that {@link Scope#getLoopBody} throws for a loop that is entered
+	 * at several heads (irreducible control flow): such a loop has no single one-iteration formula, because an
+	 * iteration may enter at one head and come back round to another, so there is nothing to place {@code k} copies
+	 * of here. That is the intended non-verdict for IMC - the same outcome as before loop trees supported several
+	 * heads at all, when building the tree already threw. Do <em>not</em> "fix" it by substituting
+	 * {@code getEdge(init(h), end(h))}: that is a proper subset of one iteration and would under-approximate the
+	 * loop, i.e. prove unsafe programs safe.
+	 */
 	private PathResult runPath(final Scope<STATE> graph, final List<Checkpoint<STATE>> path) {
 		final List<STATE> loopHeadsOnPath = new ArrayList<>();
 		for (final Checkpoint<STATE> checkpoint : path) {

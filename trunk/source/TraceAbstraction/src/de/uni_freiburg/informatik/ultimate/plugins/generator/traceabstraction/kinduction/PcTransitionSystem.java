@@ -57,7 +57,8 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ki
  * <li>{@link #INIT}: program start, has no incoming transition,
  * <li>{@link #FINAL}: the error/accepting states, has only a self loop (stutter), so "an error is reachable within at
  * most k steps" is the same as "{@code pc = FINAL} after exactly k steps",
- * <li>every loop head (all nesting depths),
+ * <li>every head of every loop (all nesting depths): a reducible loop contributes one, a loop with irreducible
+ * control flow one per entry state,
  * <li>every "waypoint": a state outside a loop that a {@code break} out of the loop can jump to.
  * </ul>
  * Every edge of every scope of the tree is one transition, from the node of its source checkpoint to the node of its
@@ -201,7 +202,9 @@ public class PcTransitionSystem<STATE> {
 		final List<Scope<STATE>> scopes = new ArrayList<>();
 		scopes.add(tree.getRoot());
 		for (final Scope<STATE> loop : tree.getLoops()) {
-			mHeadNodes.put(loop.getHead(), mNumNodes++);
+			for (final STATE head : loop.getHeads()) {
+				mHeadNodes.put(head, mNumNodes++);
+			}
 			scopes.add(loop);
 		}
 		for (final Scope<STATE> scope : scopes) {
@@ -219,7 +222,7 @@ public class PcTransitionSystem<STATE> {
 
 	private void addTransition(final Scope<STATE> scope, final Checkpoint<STATE> from, final Checkpoint<STATE> to,
 			final UnmodifiableTransFormula formula) {
-		mTransitions.add(new Transition<>(mTransitions.size(), nodeOf(scope, from), nodeOf(scope, to), formula,
+		mTransitions.add(new Transition<>(mTransitions.size(), nodeOf(from), nodeOf(to), formula,
 				scope, from, to, scope.getCheckpointStates(from), scope.getCheckpointStates(to)));
 		collectVars(formula.getInVars().keySet());
 		collectVars(formula.getOutVars().keySet());
@@ -235,18 +238,18 @@ public class PcTransitionSystem<STATE> {
 		}
 	}
 
-	private int nodeOf(final Scope<STATE> scope, final Checkpoint<STATE> checkpoint) {
-		if (checkpoint.isInit()) {
-			return scope.isRoot() ? INIT : mHeadNodes.get(scope.getHead());
-		}
-		if (checkpoint.isEnd()) {
-			return mHeadNodes.get(scope.getHead());
+	private int nodeOf(final Checkpoint<STATE> checkpoint) {
+		if (checkpoint.isInit() || checkpoint.isEnd()) {
+			// An INIT or END checkpoint names its own head, so a scope with several heads maps to several nodes.
+			// Only the root's INIT has none.
+			final STATE head = checkpoint.getScopeHead();
+			return head == null ? INIT : headNode(head, checkpoint);
 		}
 		if (checkpoint.isFinal()) {
 			return FINAL;
 		}
 		if (checkpoint.isLoopHead()) {
-			return mHeadNodes.get(checkpoint.getLoopHead());
+			return headNode(checkpoint.getLoopHead(), checkpoint);
 		}
 		final STATE state = checkpoint.getEscapeState();
 		final Integer head = mHeadNodes.get(state);
@@ -256,7 +259,20 @@ public class PcTransitionSystem<STATE> {
 		return mWaypointNodes.computeIfAbsent(state, k -> mNumNodes++);
 	}
 
-	/** The pc value of each loop head. */
+	/**
+	 * The pc node of a loop head. A head that was never registered must not fall through to a fresh waypoint node:
+	 * that would split one program point into two pc values and break the cut the whole encoding rests on.
+	 */
+	private int headNode(final STATE head, final Checkpoint<STATE> checkpoint) {
+		final Integer node = mHeadNodes.get(head);
+		if (node == null) {
+			throw new IllegalStateException(
+					"Checkpoint " + checkpoint + " names " + head + ", which is not a head of any loop of the tree");
+		}
+		return node;
+	}
+
+	/** The pc value of each head of each loop. */
 	public Map<STATE, Integer> getHeadNodes() {
 		return Collections.unmodifiableMap(mHeadNodes);
 	}

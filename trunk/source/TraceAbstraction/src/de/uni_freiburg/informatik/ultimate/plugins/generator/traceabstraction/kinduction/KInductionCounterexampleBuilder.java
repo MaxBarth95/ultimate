@@ -93,10 +93,17 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ki
  * <h2>How far the search may wander</h2>
  *
  * Per step the letter path is <b>simple, except that its last state may equal its first</b>. A cut graph is
- * acyclic, and a scope's own head and the heads of its inner loops are sealed in it - they are nodes but have no
- * outgoing edges - so such a state can only ever be a path's last. The exception is what a loop body needs:
- * {@code INIT -> END} in a loop scope runs from the head back to the head. Restricting the search to simple paths
- * alone would drop exactly those, and restricting it no further keeps the search finite.
+ * acyclic, and all of a scope's own heads and the heads of its inner loops are sealed in it - they are nodes but
+ * have no outgoing edges - so such a state can only ever be a path's last. The exception is what a loop body needs:
+ * {@code INIT(h) -> END(h)} in a loop scope runs from the head back to the head. Restricting the search to simple
+ * paths alone would drop exactly those, and restricting it no further keeps the search finite.
+ * <p>
+ * A loop that is entered at several heads also has the steps {@code INIT(h1) -> END(h2)}, whose path runs between
+ * two <em>different</em> sealed states and is therefore plainly simple. On such a program the search may leave the
+ * transition the model named and come back through a third head, so the run it returns need not be the model's.
+ * That is harmless: the path was checked against the solver as it was extended, {@link #assemble} re-checks it with
+ * {@code Accepts}, and {@code KInductionWorkerThread.reportCounterexample} re-runs the ordinary trace check - so
+ * what comes back is a genuine counterexample either way.
  *
  * @param <LETTER>
  *            letter type
