@@ -170,10 +170,18 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	/** See {@code ProcedureSummaries#getStackedProcedures()}; empty for a program with no recursion. */
 	private final Set<String> mStackedProcedures;
 
+	/** Enough of the stuck state's outgoing transitions to see what went wrong, without flooding the log. */
+	private static final int MAX_SUCCESSORS_IN_MESSAGE = 8;
+
 	/** How far the search ever got, for the message of a search that then failed. */
 	private int mDeepestStep = -1;
 	private STATE mDeepestState;
 	private int mDeepestOpenCalls;
+	/** The longest letter path the search ever had asserted, i.e. how far it got inside a step. */
+	private int mFurthestLetters = -1;
+	private STATE mFurthestLetterState;
+	private int mFurthestLetterStep = -1;
+
 
 	/** The number of pc steps to reconstruct: everything after it is the FINAL stutter self loop. */
 	private final int mSteps;
@@ -427,11 +435,17 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 				if (candidate == null) {
 					continue;
 				}
+				final Map<IProgramVar, Term> assignedByReturn = new LinkedHashMap<>();
 				candidate.mSsa =
 						ssaOfTransFormula(asReturnAction(ret.getLetter()).getAssignmentOfReturn(),
-								candidate.mUpdates);
+								assignedByReturn);
 				// The callee's variables go out of scope with the return, after its outparams were read above.
+				// What the return itself assigns belongs to the caller and has to survive that: in a recursive
+				// call the caller's receiving variable and the callee's local are the same IProgramVar, so
+				// restoring the scope on top of the assignment would throw the returned value away and leave the
+				// caller with its own pre-call value.
 				candidate.mUpdates.putAll(frame.mCalleeScope);
+				candidate.mUpdates.putAll(assignedByReturn);
 				candidate.mNesting = frame.mCallPosition;
 				if (tryLetter(step, candidate, length)) {
 					return true;
@@ -471,6 +485,11 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		push();
 		mMgdScript.assertTerm(mLockOwner, candidate.mSsa);
 		if (mMgdScript.checkSat(mLockOwner) != LBool.UNSAT) {
+			if (mLetters.size() + 1 > mFurthestLetters) {
+				mFurthestLetters = mLetters.size() + 1;
+				mFurthestLetterState = candidate.mSucc;
+				mFurthestLetterStep = step.mIndex;
+			}
 			final int position = mLetters.size();
 			mLetters.add(candidate.mLetter);
 			mStates.add(candidate.mSucc);
@@ -508,6 +527,8 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		applyUpdates(undo);
 		return false;
 	}
+
+
 
 	/**
 	 * Where a pc step may end: at a target node of the transition whose state is {@code current} and whose call
@@ -739,9 +760,60 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 				+ " call(s) open, and found no letter path for " + (mDeepestStep < mSteps
 						? mSystem.getTransition(mWitness.getTransitionId(mDeepestStep)).toString()
 						: "the accepting state it has to end in")
-				+ ", whose target(s) are " + describeTargets()
+				+ ", whose source(s) are " + (mDeepestStep < mSteps
+						? statesOf(mSystem.getTransition(mWitness.getTransitionId(mDeepestStep)).getSourceStates())
+								.toString()
+						: "none")
+				+ " and whose target(s) are " + describeTargets() + ". From there the abstraction offers "
+				+ describeSuccessors()
+				+ ". The longest letter path it ever got the solver to accept was " + mFurthestLetters
+				+ " letter(s) long, ending in " + mFurthestLetterState + " during pc step " + mFurthestLetterStep
 				+ ". The pc transition system claims a path that the letters of the abstraction do not admit, "
 				+ "which means the two disagree.");
+	}
+
+	/**
+	 * What the abstraction lets the failed search do next. Without this, "no letter path" leaves open whether the
+	 * step could not start at all or died somewhere along the way.
+	 */
+	private String describeSuccessors() {
+		if (mDeepestState == null) {
+			return "nothing";
+		}
+		final Set<STATE> useful = mDeepestStep < mSteps
+				? canReachATargetOf(mSystem.getTransition(mWitness.getTransitionId(mDeepestStep)))
+				: Set.of();
+		final StringBuilder sb = new StringBuilder();
+		int shown = 0;
+		for (final OutgoingInternalTransition<LETTER, STATE> out : mAbstraction.internalSuccessors(mDeepestState)) {
+			shown = append(sb, shown,
+					"-" + out.getLetter() + "-> " + out.getSucc() + usefulness(useful, out.getSucc()));
+		}
+		for (final OutgoingCallTransition<LETTER, STATE> out : mAbstraction.callSuccessors(mDeepestState)) {
+			shown = append(sb, shown,
+					"-call " + out.getLetter() + "-> " + out.getSucc() + usefulness(useful, out.getSucc()));
+		}
+		for (final OutgoingReturnTransition<LETTER, STATE> out : mAbstraction.returnSuccessors(mDeepestState)) {
+			shown = append(sb, shown, "-return " + out.getLetter() + " over " + out.getHierPred() + "-> "
+					+ out.getSucc() + usefulness(useful, out.getSucc()));
+		}
+		return shown == 0 ? "nothing" : sb.toString();
+	}
+
+	/** Whether the search would even try a successor, i.e. whether a target is still reachable behind it. */
+	private String usefulness(final Set<STATE> useful, final STATE succ) {
+		return useful.contains(succ) ? "" : " [PRUNED: no target of this transition is reachable from it]";
+	}
+
+	private static int append(final StringBuilder sb, final int shown, final String what) {
+		if (shown == MAX_SUCCESSORS_IN_MESSAGE) {
+			sb.append(", ...");
+		}
+		if (shown >= MAX_SUCCESSORS_IN_MESSAGE) {
+			return shown + 1;
+		}
+		sb.append(shown == 0 ? "" : ", ").append(what);
+		return shown + 1;
 	}
 
 	/** The target checkpoints of the transition the failed search got stuck on, with what each one demands. */

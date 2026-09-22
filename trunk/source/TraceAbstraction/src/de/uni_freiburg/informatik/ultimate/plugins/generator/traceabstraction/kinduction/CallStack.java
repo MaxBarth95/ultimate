@@ -103,13 +103,22 @@ public final class CallStack {
 		mMgdScript = mgdScript;
 		mScript = mgdScript.getScript();
 		mIndexSort = SmtSortUtils.getIntSort(mScript);
-		mStackPointer = ProgramVarUtils.constructGlobalProgramVarPair(SP, mIndexSort, mMgdScript, this);
-		mReturnSites = ProgramVarUtils.constructGlobalProgramVarPair(RET,
-				SmtSortUtils.getArraySort(mScript, mIndexSort, mIndexSort), mMgdScript, this);
-		for (final IProgramVar local : locals) {
-			final Sort slotSort = SmtSortUtils.getArraySort(mScript, mIndexSort, local.getTermVariable().getSort());
-			mSlots.put(local, ProgramVarUtils.constructGlobalProgramVarPair(
-					SLOT_PREFIX + local.getGloballyUniqueId(), slotSort, mMgdScript, this));
+		// Minting a program variable declares its default and primed constant, which the ManagedScript only lets
+		// its lock owner do. Unlike ProgramVarUtils#constructConstantForAuxVar, constructGlobalProgramVarPair does
+		// not take the lock itself.
+		mMgdScript.lock(this);
+		try {
+			mStackPointer = ProgramVarUtils.constructGlobalProgramVarPair(SP, mIndexSort, mMgdScript, this);
+			mReturnSites = ProgramVarUtils.constructGlobalProgramVarPair(RET,
+					SmtSortUtils.getArraySort(mScript, mIndexSort, mIndexSort), mMgdScript, this);
+			for (final IProgramVar local : locals) {
+				final Sort slotSort =
+						SmtSortUtils.getArraySort(mScript, mIndexSort, local.getTermVariable().getSort());
+				mSlots.put(local, ProgramVarUtils.constructGlobalProgramVarPair(
+						SLOT_PREFIX + local.getGloballyUniqueId(), slotSort, mMgdScript, this));
+			}
+		} finally {
+			mMgdScript.unlock(this);
 		}
 	}
 

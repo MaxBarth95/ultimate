@@ -788,6 +788,13 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 		// The automaton states behind each checkpoint. Built here, from the maps above, rather than re-derived
 		// by a consumer: a re-derivation could drift from what the formulas were actually built from.
 		final Map<Checkpoint<STATE>, Collection<STATE>> checkpointStates = new LinkedHashMap<>(targets);
+		// A waypoint is only ever an edge *source* in this scope - the inner loop it is escaped to from is what
+		// has it as a target - so it is not in "targets" and would otherwise stand for no state at all. A consumer
+		// that asks which states an edge may start in (KInductionCounterexampleBuilder does, to reconstruct the
+		// letters of a pc step) would get the empty set and conclude that the step cannot start anywhere.
+		for (final STATE waypoint : waypoints) {
+			checkpointStates.putIfAbsent(Checkpoint.escape(waypoint), Collections.singleton(waypoint));
+		}
 		if (isRoot) {
 			final Set<STATE> starts = new LinkedHashSet<>();
 			for (final Pair<UnmodifiableTransFormula, STATE> source : rootSources) {

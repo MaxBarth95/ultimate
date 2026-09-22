@@ -128,6 +128,12 @@ public final class KInductionWitness {
 			sb.append(mPcValues[idx]).append(" -[t").append(mTransitionIds[idx]).append("]-> ");
 		}
 		sb.append(mPcValues[mK]);
+		if (mStackPointers != null) {
+			sb.append(", open activations: ");
+			for (int idx = 0; idx <= mK; idx++) {
+				sb.append(idx == 0 ? "" : " ").append(getOpenActivations(idx));
+			}
+		}
 		return sb.toString();
 	}
 }
