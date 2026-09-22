@@ -119,6 +119,13 @@ import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
  * and {@code InterproceduralImcOrchestrator} for IMC, both with
  * {@link ProcedureCallGraph#computeVirtualEdge}. A call or a return whose target lies outside the scope is then
  * simply not an edge of this scope's graph, which is the point: the callee is described by the virtual edge.
+ * <p>
+ * A callee that contains a loop has no such formula. For it, {@link ProcedureSummaries} instead <em>unfolds</em> a
+ * copy of the callee per call site into the graph, with a virtual edge for the call and one for the return, and
+ * hands this builder an {@link ICallResolvedGraph} whose nodes are {@link CallNode}s rather than plain states. The
+ * copies are distinct nodes, so the splicing above cannot happen, and the callee's loop is found by the ordinary
+ * SCC search as a nested loop of the caller's scope. Nothing below cares which of the two resolutions produced a
+ * node: this class only ever sees a graph with no call and no return transition left.
  *
  * <h2>How to use</h2>
  *
@@ -188,14 +195,16 @@ import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
  * @param <LETTER>
  *            letter type
  * @param <STATE>
- *            state type
+ *            node type of the flat graph. The abstraction's own state type when the graph is the automaton (see
+ *            {@link AutomatonGraph}), a {@link CallNode} when a callee is unfolded into it (see
+ *            {@link UnfoldedGraph}).
  */
 public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 
 	private final IUltimateServiceProvider mServices;
 	private final ILogger mLogger;
 	private final ManagedScript mMgdScript;
-	private final INestedWordAutomaton<LETTER, STATE> mAbstraction;
+	private final ICallResolvedGraph<LETTER, STATE> mGraph;
 	private final Set<STATE> mScopeStates;
 	private final Set<STATE> mInitStates;
 	private final Collection<STATE> mFinalStates;
@@ -243,10 +252,24 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 			final Set<STATE> scopeStates, final Set<STATE> initStates, final Collection<STATE> finalStates,
 			final Map<STATE, Map<STATE, UnmodifiableTransFormula>> virtualCallEdges,
 			final Set<STATE> sealedStates) {
+		this(services, logger, mgdScript, new AutomatonGraph<>(abstraction), scopeStates, initStates, finalStates,
+				virtualCallEdges, sealedStates);
+	}
+
+	/**
+	 * Scoped constructor over an arbitrary {@link ICallResolvedGraph} rather than the automaton itself. This is
+	 * what k-induction uses: its nodes are {@link CallNode}s, so that a callee with a loop can be unfolded into
+	 * one copy per call site instead of being summarized (see {@link ProcedureSummaries}).
+	 */
+	public LoopTreeFormulaBuilder(final IUltimateServiceProvider services, final ILogger logger,
+			final ManagedScript mgdScript, final ICallResolvedGraph<LETTER, STATE> graph,
+			final Set<STATE> scopeStates, final Set<STATE> initStates, final Collection<STATE> finalStates,
+			final Map<STATE, Map<STATE, UnmodifiableTransFormula>> virtualCallEdges,
+			final Set<STATE> sealedStates) {
 		mServices = services;
 		mLogger = logger;
 		mMgdScript = mgdScript;
-		mAbstraction = abstraction;
+		mGraph = graph;
 		mScopeStates = scopeStates;
 		mInitStates = initStates;
 		mFinalStates = finalStates;
@@ -285,7 +308,7 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 	private void rejectRecursion() {
 		final Map<String, Set<String>> calls = new LinkedHashMap<>();
 		for (final STATE state : mScopeStates) {
-			for (final OutgoingCallTransition<LETTER, STATE> t : mAbstraction.callSuccessors(state)) {
+			for (final OutgoingCallTransition<LETTER, STATE> t : mGraph.callSuccessors(state)) {
 				calls.computeIfAbsent(t.getLetter().getPrecedingProcedure(), k -> new LinkedHashSet<>())
 						.add(t.getLetter().getSucceedingProcedure());
 			}
@@ -322,7 +345,7 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 	private void rejectUnresolvedCallsAndReturns() {
 		final List<STATE> callSites = new ArrayList<>();
 		for (final STATE state : mScopeStates) {
-			if (mAbstraction.callSuccessors(state).iterator().hasNext()) {
+			if (mGraph.callSuccessors(state).iterator().hasNext()) {
 				callSites.add(state);
 			}
 		}
@@ -330,11 +353,11 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 			if (mSealedStates.contains(state)) {
 				continue;
 			}
-			for (final OutgoingCallTransition<LETTER, STATE> t : mAbstraction.callSuccessors(state)) {
+			for (final OutgoingCallTransition<LETTER, STATE> t : mGraph.callSuccessors(state)) {
 				rejectUnresolved(state, t.getLetter(), t.getSucc(), "call");
 			}
 			for (final STATE hier : callSites) {
-				for (final OutgoingReturnTransition<LETTER, STATE> t : mAbstraction.returnSuccessorsGivenHier(state,
+				for (final OutgoingReturnTransition<LETTER, STATE> t : mGraph.returnSuccessorsGivenHier(state,
 						hier)) {
 					rejectUnresolved(state, t.getLetter(), t.getSucc(), "return");
 				}
@@ -388,7 +411,7 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 		}
 		final List<Pair<Edge<LETTER>, STATE>> result = new ArrayList<>();
 		final Set<Pair<LETTER, STATE>> seen = new HashSet<>();
-		for (final OutgoingInternalTransition<LETTER, STATE> t : mAbstraction.internalSuccessors(state)) {
+		for (final OutgoingInternalTransition<LETTER, STATE> t : mGraph.internalSuccessors(state)) {
 			addReal(result, seen, t.getLetter(), t.getSucc());
 		}
 		final Map<STATE, UnmodifiableTransFormula> virtualFromHere = mVirtualCallEdges.get(state);

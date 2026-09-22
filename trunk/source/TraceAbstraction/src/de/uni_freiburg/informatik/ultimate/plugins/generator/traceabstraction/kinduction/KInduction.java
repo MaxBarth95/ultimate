@@ -85,10 +85,12 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tr
  * {@link #MAX_K} and the solver returning unknown.
  * <p>
  * <b>Procedures.</b> The transition system is flat and has no call stack, so it never contains a call or a
- * return. If the abstraction has any, {@link ProcedureSummaries} first replaces every call site by one edge for
- * the whole call-to-return span (and one edge per error state inside the callee, for a call that never returns),
- * and the loop tree is then built for the entry procedure alone. Recursion, and a callee that itself contains a
- * loop, are refused there.
+ * return. If the abstraction has any, {@link ProcedureSummaries} resolves every call site first: a callee whose
+ * graph is loop-free becomes one edge for the whole call-to-return span (and one edge per error state inside it,
+ * for a call that never returns), while a callee that contains a loop is unfolded into one copy of its states per
+ * call site, so that its loop becomes an ordinary nested loop of the tree and gets {@code pc} values of its own.
+ * The nodes of the tree are therefore {@link CallNode}s - a state plus the call sites it was reached through - and
+ * a loop head of an unfolded callee is a different head at each of its call sites. Recursion is refused there.
  * <p>
  * <b>Invariant injection.</b> The {@link IInvariantSupplier} may return a trusted invariant for any loop head, also
  * a nested one. It is assumed in every unrolled state where {@code pc} is that loop head, in the base and the step
@@ -131,7 +133,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private boolean mSafe;
 	private int mProvedK = -1;
 	private Inconclusive mInconclusive;
-	private final Map<STATE, Term> mLearnedInvariants = new LinkedHashMap<>();
+	private final Map<CallNode<STATE>, Term> mLearnedInvariants = new LinkedHashMap<>();
 
 	// Mirrors IMC's own worker-thread integration parameters, kept for structural consistency between the two
 	// algorithms (and as a hook for future preference-driven configuration, e.g. bounding MAX_K); not otherwise
@@ -141,13 +143,13 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private final KInductionWorkerThread<?, ?> mKInductionWorkerThread;
 	private final TAPreferences mPref;
 
-	private final IInvariantSupplier<STATE> mInvariantSupplier;
+	private final IInvariantSupplier<CallNode<STATE>> mInvariantSupplier;
 
 	// Shared indexed-constant cache, reused across every push/pop-bracketed SAT query this instance ever issues -
 	// safe because scopes are always cleanly popped between queries.
 	private final Map<String, Term> mIndexedConstantsWorkerScript = new HashMap<>();
 
-	private PcTransitionSystem<STATE> mSystem;
+	private PcTransitionSystem<CallNode<STATE>> mSystem;
 	// null unless the abstraction has calls, in which case it holds the resolved call sites
 	private ProcedureSummaries<LETTER, STATE> mSummaries;
 	private final List<Term> mStepTerms = new ArrayList<>();
@@ -160,7 +162,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 			final TaCheckAndRefinementPreferences<?> prefs, final CfgSmtToolkit csToolkit,
 			final INestedWordAutomaton<LETTER, STATE> abstraction, final TaskIdentifier taskIdentifier,
 			final KInductionWorkerThread<?, ?> kInductionWorkerThread, final TAPreferences preferences,
-			final IInvariantSupplier<STATE> invariantSupplier) throws AutomataLibraryException, InterruptedException {
+			final IInvariantSupplier<CallNode<STATE>> invariantSupplier)
+			throws AutomataLibraryException, InterruptedException {
 		mAbstraction = abstraction;
 		mCsToolkit = csToolkit;
 		mWorkerMgdScript = csToolkit.getManagedScript();
@@ -182,7 +185,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 		mLogger.info("KInduction: starting k-induction (MAX_K=%d)", MAX_K);
 		// Building the loop tree composes transition formulas, which declares constants for their aux vars and thus
 		// locks the script itself. So the tree has to be complete before we take the lock for the solver queries.
-		final LoopTree<STATE> tree = buildLoopTree();
+		final LoopTree<CallNode<STATE>> tree = buildLoopTree();
 		mSystem = new PcTransitionSystem<>(tree);
 		mLogger.info(
 				"KInduction: transition system with %d pc value(s), %d transition(s), %d variable(s), %d loop head(s)",
@@ -204,7 +207,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 				// invalidate the model we are working from. mWitness already holds everything we need from it.
 				mCounterexample = new KInductionCounterexampleBuilder<LETTER, STATE>(mServices, mLogger,
 						mWorkerMgdScript, mKILock, mCsToolkit, mAbstraction, mSystem, mWitness,
-						mSummaries == null ? Collections.emptySet() : mSummaries.getPendingErrorTargets()).build();
+						mSummaries == null ? Collections.emptySet() : mSummaries.getSealedStates()).build();
 			}
 		} finally {
 			mWorkerMgdScript.unlock(mKILock);
@@ -214,19 +217,33 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * The loop tree of the program. If the abstraction has no call transition it is the whole automaton, as it
-	 * always was. Otherwise every call site is first resolved into a virtual call edge by
-	 * {@link ProcedureSummaries}, and the tree is built for the entry procedure's states alone - the flat graph
-	 * has no call stack, so a call that stayed in it would be unsound, see {@link LoopTreeFormulaBuilder}.
+	 * The loop tree of the program. Its nodes are {@link CallNode}s: a state together with the call sites it was
+	 * reached through. If the abstraction has no call transition every node is at depth zero and the tree is the
+	 * whole automaton, as it always was. Otherwise every call site is first resolved by {@link ProcedureSummaries}
+	 * - into a virtual call edge if the callee can be summarized, into an unfolded copy of the callee if it
+	 * contains a loop - and the tree is built for the resulting graph, which has no call and no return transition
+	 * left. A call that stayed in it would be unsound, see {@link LoopTreeFormulaBuilder}.
 	 */
-	private LoopTree<STATE> buildLoopTree() {
+	private LoopTree<CallNode<STATE>> buildLoopTree() {
+		final UnfoldedGraph<LETTER, STATE> graph = new UnfoldedGraph<>(mAbstraction);
 		if (!hasCallTransitions()) {
-			return new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction).build();
+			return new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, graph,
+					roots(mAbstraction.getStates()), roots(mAbstraction.getInitialStates()),
+					roots(mAbstraction.getFinalStates()), Collections.emptyMap(), Collections.emptySet()).build();
 		}
 		mSummaries = new ProcedureSummaries<>(mServices, mLogger, mCsToolkit, mWorkerMgdScript, mAbstraction);
-		return new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mAbstraction,
+		return new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mSummaries.getGraph(),
 				mSummaries.getScopeStates(), mSummaries.getInitStates(), mSummaries.getFinalStates(),
-				mSummaries.getVirtualCallEdges(), mSummaries.getPendingErrorTargets()).build();
+				mSummaries.getVirtualCallEdges(), mSummaries.getSealedStates()).build();
+	}
+
+	/** The given states as nodes with no pending call, for a program in which nothing is ever called. */
+	private Set<CallNode<STATE>> roots(final Iterable<STATE> states) {
+		final Set<CallNode<STATE>> result = new LinkedHashSet<>();
+		for (final STATE state : states) {
+			result.add(CallNode.root(state));
+		}
+		return result;
 	}
 
 	private boolean hasCallTransitions() {
@@ -408,7 +425,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 		for (final IProgramVar pv : mSystem.getVars()) {
 			varOfTermVariable.put(pv.getTermVariable(), pv);
 		}
-		for (final Map.Entry<STATE, Integer> head : mSystem.getHeadNodes().entrySet()) {
+		for (final Map.Entry<CallNode<STATE>, Integer> head : mSystem.getHeadNodes().entrySet()) {
 			final Optional<Term> invariant = mInvariantSupplier.getInvariant(head.getKey(), mWorkerMgdScript);
 			if (invariant.isEmpty()) {
 				continue;
@@ -465,7 +482,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 	 */
 	private void learnInvariants() {
 		final Script script = mWorkerMgdScript.getScript();
-		for (final Map.Entry<STATE, Integer> head : mSystem.getHeadNodes().entrySet()) {
+		for (final Map.Entry<CallNode<STATE>, Integer> head : mSystem.getHeadNodes().entrySet()) {
 			final FreshVars vars = new FreshVars(head.getValue());
 			final List<Term> conjuncts = new ArrayList<>();
 			for (int j = 0; j < mProvedK; j++) {
@@ -637,14 +654,14 @@ public class KInduction<LETTER extends IAction, STATE> {
 	 * @return for every loop head, an invariant learned from the k-induction proof (empty unless the program was
 	 *         proven safe). The terms are native to the worker's {@link ManagedScript}.
 	 */
-	public Map<STATE, Term> getLearnedInvariants() {
+	public Map<CallNode<STATE>, Term> getLearnedInvariants() {
 		return Collections.unmodifiableMap(mLearnedInvariants);
 	}
 
 	/**
 	 * @return {@link #getLearnedInvariants()} as a supplier, for use as the invariants of another run.
 	 */
-	public IInvariantSupplier<STATE> getLearnedInvariantSupplier() {
+	public IInvariantSupplier<CallNode<STATE>> getLearnedInvariantSupplier() {
 		return IInvariantSupplier.fromMap(mLearnedInvariants, mWorkerMgdScript);
 	}
 

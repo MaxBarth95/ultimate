@@ -29,6 +29,7 @@ package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.k
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -111,10 +112,13 @@ import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
  * callee's scope - those oldvars and locals - is restored to what the caller saw. An oldvar that no call on the
  * stack assigns keeps {@code getDefaultConstant()}, exactly as {@code PcTransitionSystem.instantiate} uses it.
  * <p>
- * A step ends where the pc transition's target states are, which is back in the caller, i.e. with an empty stack -
- * except for a violation <em>inside</em> a callee: {@link ProcedureSummaries} resolves that into an edge into the
- * callee's error state, so the run ends there with the call still pending, and the nested word gets an unmatched
- * call position.
+ * A step ends where the pc transition's target nodes are. Each such node carries the call sites it stands for, so
+ * a step over a <em>summarized</em> call ends back in the caller with an empty stack, while a step inside an
+ * <em>unfolded</em> callee ends with exactly that callee's call sites still open - its loop heads are pc values of
+ * their own, so ending there is normal. A violation inside a summarized callee is the one node that says less than
+ * the stack does: {@link ProcedureSummaries} resolves it into an edge into the callee's error state, which names
+ * only the direct call site although the error may lie several summarized levels deeper, so the run ends there with
+ * those calls still pending and the nested word gets unmatched call positions.
  *
  * <h2>How far the search may wander</h2>
  *
@@ -154,10 +158,15 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	private final Object mLockOwner;
 	private final CfgSmtToolkit mCsToolkit;
 	private final INestedWordAutomaton<LETTER, STATE> mAbstraction;
-	private final PcTransitionSystem<STATE> mSystem;
+	private final PcTransitionSystem<CallNode<STATE>> mSystem;
 	private final KInductionWitness mWitness;
-	/** The error states that lie inside a callee, see {@link ProcedureSummaries#getPendingErrorTargets()}. */
-	private final Set<STATE> mPendingErrorTargets;
+	/**
+	 * The nodes that stand for an error inside a <em>summarized</em> callee, see
+	 * {@link ProcedureSummaries#getSealedStates()}. They are the one case in which a pc step may end with calls
+	 * still open that the node itself does not name: the summary of a call-to-return span is a single edge, so an
+	 * error several summarized levels down is reached with that whole chain of calls pending.
+	 */
+	private final Set<CallNode<STATE>> mSummarizedErrorTargets;
 
 	/** The number of pc steps to reconstruct: everything after it is the FINAL stutter self loop. */
 	private final int mSteps;
@@ -205,7 +214,7 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	/** What stays fixed while the letter path of one pc step is searched for. */
 	private final class Step {
 		private final int mIndex;
-		private final Transition<STATE> mTransition;
+		private final Transition<CallNode<STATE>> mTransition;
 		/** The state the step started in; the only state the path may return to, and only as its last. */
 		private final STATE mFirst;
 		/** The search nodes (state plus open calls) already on this step's path. */
@@ -213,7 +222,7 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		/** The states from which a target of the transition is still reachable. */
 		private final Set<STATE> mUseful;
 
-		private Step(final int index, final Transition<STATE> transition, final STATE first) {
+		private Step(final int index, final Transition<CallNode<STATE>> transition, final STATE first) {
 			mIndex = index;
 			mTransition = transition;
 			mFirst = first;
@@ -249,8 +258,9 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 
 	public KInductionCounterexampleBuilder(final IUltimateServiceProvider services, final ILogger logger,
 			final ManagedScript mgdScript, final Object lockOwner, final CfgSmtToolkit csToolkit,
-			final INestedWordAutomaton<LETTER, STATE> abstraction, final PcTransitionSystem<STATE> system,
-			final KInductionWitness witness, final Set<STATE> pendingErrorTargets) {
+			final INestedWordAutomaton<LETTER, STATE> abstraction,
+			final PcTransitionSystem<CallNode<STATE>> system, final KInductionWitness witness,
+			final Set<CallNode<STATE>> summarizedErrorTargets) {
 		mServices = services;
 		mLogger = logger;
 		mMgdScript = mgdScript;
@@ -259,7 +269,7 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		mAbstraction = abstraction;
 		mSystem = system;
 		mWitness = witness;
-		mPendingErrorTargets = pendingErrorTargets;
+		mSummarizedErrorTargets = summarizedErrorTargets;
 		mSteps = witness.getFirstFinalStep();
 	}
 
@@ -274,8 +284,8 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 
 		push();
 		try {
-			final Transition<STATE> first = mSystem.getTransition(mWitness.getTransitionId(0));
-			for (final STATE start : first.getSourceStates()) {
+			final Transition<CallNode<STATE>> first = mSystem.getTransition(mWitness.getTransitionId(0));
+			for (final STATE start : statesOf(first.getSourceStates())) {
 				if (!mAbstraction.isInitial(start)) {
 					continue;
 				}
@@ -289,7 +299,8 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 				mStack.clear();
 				mCurrent.clear();
 			}
-			throw noRunFound("no counterexample run starts in any of the initial states " + first.getSourceStates()
+			throw noRunFound("no counterexample run starts in any of the initial states "
+					+ statesOf(first.getSourceStates())
 					+ " of " + first + ", although k-induction reported a violation at k=" + mWitness.getK()
 					+ " (" + mWitness + ")");
 		} finally {
@@ -341,8 +352,8 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		if (step == mSteps) {
 			return mAbstraction.isFinal(state);
 		}
-		final Transition<STATE> transition = mSystem.getTransition(mWitness.getTransitionId(step));
-		if (!transition.getSourceStates().contains(state)) {
+		final Transition<CallNode<STATE>> transition = mSystem.getTransition(mWitness.getTransitionId(step));
+		if (!statesOf(transition.getSourceStates()).contains(state)) {
 			return false;
 		}
 		return extend(new Step(step, transition, state), state, 0);
@@ -484,19 +495,56 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	}
 
 	/**
-	 * Where a pc step may end: at one of the transition's target states, with no call left open - the summary of a
-	 * call-to-return span is one edge, so a step never ends in the middle of a call. The exception is a violation
-	 * inside a callee, which {@link ProcedureSummaries} turned into an edge to that callee's error state; the call
-	 * then stays pending and nothing can follow, so this must be the last step.
+	 * Where a pc step may end: at a target node of the transition whose state is {@code current} and whose call
+	 * site chain is exactly the calls this search still has open.
+	 * <p>
+	 * For a node of the entry procedure that chain is empty, i.e. no call may be left open - the summary of a
+	 * call-to-return span is one edge, so a step never ends in the middle of a summarized call. For a node of an
+	 * <b>unfolded</b> callee it is the call sites the copy was made for, and the search has walked exactly those
+	 * calls to get here, so ending a step inside a callee is not only allowed but expected: its loop heads are pc
+	 * values of their own.
+	 * <p>
+	 * The one node whose chain says less than the stack is an error imported from a <em>summarized</em> callee: it
+	 * names only the call site of the direct call, while the error may lie several summarized levels deeper. Such
+	 * a node keeps the older, weaker rule - any open calls, and nothing may follow.
 	 */
 	private boolean canEndStep(final Step step, final STATE current) {
-		if (!step.mTransition.getTargetStates().contains(current)) {
+		for (final CallNode<STATE> target : step.mTransition.getTargetStates()) {
+			if (!target.getState().equals(current)) {
+				continue;
+			}
+			if (mSummarizedErrorTargets.contains(target)) {
+				if (step.mIndex + 1 == mSteps) {
+					return true;
+				}
+			} else if (openCallsAre(target.getCallSites())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether the calls the search has open are exactly {@code callSites}, innermost first. */
+	private boolean openCallsAre(final List<STATE> callSites) {
+		if (mStack.size() != callSites.size()) {
 			return false;
 		}
-		if (mStack.isEmpty()) {
-			return true;
+		int i = 0;
+		// An ArrayDeque used as a stack iterates from its top, so the innermost call comes first, as in the chain.
+		for (final Frame frame : mStack) {
+			if (!frame.mCallSite.equals(callSites.get(i++))) {
+				return false;
+			}
 		}
-		return mPendingErrorTargets.contains(current) && step.mIndex + 1 == mSteps;
+		return true;
+	}
+
+	private Set<STATE> statesOf(final Collection<CallNode<STATE>> nodes) {
+		final Set<STATE> result = new LinkedHashSet<>();
+		for (final CallNode<STATE> node : nodes) {
+			result.add(node.getState());
+		}
+		return result;
 	}
 
 	/**
@@ -661,10 +709,10 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 * parts of the automaton that cannot end this step at all. Call and return transitions count as edges here:
 	 * over-approximating reachability only weakens the pruning, it can never rule out a real path.
 	 */
-	private Set<STATE> canReachATargetOf(final Transition<STATE> transition) {
+	private Set<STATE> canReachATargetOf(final Transition<CallNode<STATE>> transition) {
 		return mCanReachTarget.computeIfAbsent(transition.getId(), id -> {
 			final Map<STATE, List<STATE>> predecessors = predecessors();
-			final Set<STATE> result = new HashSet<>(transition.getTargetStates());
+			final Set<STATE> result = new HashSet<>(statesOf(transition.getTargetStates()));
 			final Deque<STATE> worklist = new ArrayDeque<>(result);
 			while (!worklist.isEmpty()) {
 				for (final STATE pred : predecessors.getOrDefault(worklist.pop(), List.of())) {

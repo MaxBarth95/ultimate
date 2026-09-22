@@ -108,7 +108,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	private final BlockingQueue<WorkerThreadTask<L>> mWorkerTaskQueue;
 	private final TransferBetweenMainAndWorker<L, IPredicate> mNwaCexTransferrer;
 	private final TaskIdentifier mTaskIdentifier;
-	private final IInvariantSupplier<IPredicate> mInvariantSupplier;
+	private final IInvariantSupplier<CallNode<IPredicate>> mInvariantSupplier;
 	// Only used to build a refinement strategy for a counterexample; k-induction has no path-program history.
 	private final PathProgramCache<L> mProgramCache;
 
@@ -122,7 +122,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
 			final BlockingQueue<WorkerThreadTask<L>> workerTaskQueue,
 			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils, final TaskIdentifier taskIdentifier,
-			final IInvariantSupplier<IPredicate> invariantSupplier) throws InterruptedException {
+			final IInvariantSupplier<CallNode<IPredicate>> invariantSupplier) throws InterruptedException {
 		mLogger = logger;
 		mPref = pref;
 		mIteration = id;

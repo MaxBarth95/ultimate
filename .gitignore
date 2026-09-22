@@ -336,3 +336,13 @@ trunk/source/WebsiteStatic/webinterface/workers/*.json
 releaseScripts/default/sv-benchmarks
 releaseScripts/default/svcomp/*token
 releaseScripts/default/svcomp/zulip_state.json
+
+# Claude Code workspace config
+/.claude/
+
+# Scratch verification inputs and outputs left behind by local Ultimate runs
+/releaseScripts/default/*.c
+/releaseScripts/default/*.i
+/releaseScripts/default/*.prp
+/releaseScripts/default/*.log
+/releaseScripts/default/*.errorpath
