@@ -167,6 +167,13 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 * error several summarized levels down is reached with that whole chain of calls pending.
 	 */
 	private final Set<CallNode<STATE>> mSummarizedErrorTargets;
+	/** See {@code ProcedureSummaries#getStackedProcedures()}; empty for a program with no recursion. */
+	private final Set<String> mStackedProcedures;
+
+	/** How far the search ever got, for the message of a search that then failed. */
+	private int mDeepestStep = -1;
+	private STATE mDeepestState;
+	private int mDeepestOpenCalls;
 
 	/** The number of pc steps to reconstruct: everything after it is the FINAL stutter self loop. */
 	private final int mSteps;
@@ -260,7 +267,7 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 			final ManagedScript mgdScript, final Object lockOwner, final CfgSmtToolkit csToolkit,
 			final INestedWordAutomaton<LETTER, STATE> abstraction,
 			final PcTransitionSystem<CallNode<STATE>> system, final KInductionWitness witness,
-			final Set<CallNode<STATE>> summarizedErrorTargets) {
+			final Set<CallNode<STATE>> summarizedErrorTargets, final Set<String> stackedProcedures) {
 		mServices = services;
 		mLogger = logger;
 		mMgdScript = mgdScript;
@@ -270,6 +277,7 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		mSystem = system;
 		mWitness = witness;
 		mSummarizedErrorTargets = summarizedErrorTargets;
+		mStackedProcedures = stackedProcedures;
 		mSteps = witness.getFirstFinalStep();
 	}
 
@@ -349,6 +357,13 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 * @return true if the whole remaining counterexample was found; the solver stack is then left as it is.
 	 */
 	private boolean solveFrom(final int step, final STATE state) {
+		if (step > mDeepestStep) {
+			// Only ever grows, so a failed search can say how far it did get. Without it every failure looks like
+			// "the very first step is impossible", which is almost never where the two encodings actually part.
+			mDeepestStep = step;
+			mDeepestState = state;
+			mDeepestOpenCalls = mStack.size();
+		}
 		if (step == mSteps) {
 			return mAbstraction.isFinal(state);
 		}
@@ -517,21 +532,40 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 				if (step.mIndex + 1 == mSteps) {
 					return true;
 				}
-			} else if (openCallsAre(target.getCallSites())) {
+			} else if (openCallsMatch(target.getCallSites(), step.mIndex + 1)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	/** Whether the calls the search has open are exactly {@code callSites}, innermost first. */
-	private boolean openCallsAre(final List<STATE> callSites) {
-		if (mStack.size() != callSites.size()) {
+	/**
+	 * Whether the calls the search has open fit {@code callSites}, the chain of call sites the node was reached
+	 * through, innermost first.
+	 * <p>
+	 * Without recursion the chain is the whole story: a node of an unfolded copy exists once per chain, so the open
+	 * calls have to be exactly it. A stack-encoded procedure's states occur once however deep the recursion goes, so
+	 * its nodes carry no chain at all, and a node of an unfolded copy inside one carries only the part of the chain
+	 * the graph still distinguishes. There the chain is an innermost prefix of the open calls and the rest are the
+	 * activations {@link CallStack} keeps in the state instead of in the graph - which is exactly the information
+	 * the node cannot carry. How many those are is not guesswork either: the witness read the stack pointer off the
+	 * model, so the test stays exact, which matters because the search is a backtracking one and an open-ended
+	 * depth would make it explore every depth at every step boundary.
+	 */
+	private boolean openCallsMatch(final List<STATE> callSites, final int boundary) {
+		// A call into a stack-encoded procedure is the only kind that moves the stack pointer, so the calls open at
+		// a node are exactly its chain plus the activations the stack is holding at this point of the run.
+		final int expected =
+				callSites.size() + (mWitness.knowsOpenActivations() ? mWitness.getOpenActivations(boundary) : 0);
+		if (mStack.size() != expected) {
 			return false;
 		}
 		int i = 0;
 		// An ArrayDeque used as a stack iterates from its top, so the innermost call comes first, as in the chain.
 		for (final Frame frame : mStack) {
+			if (i == callSites.size()) {
+				return true;
+			}
 			if (!frame.mCallSite.equals(callSites.get(i++))) {
 				return false;
 			}
@@ -700,8 +734,37 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 * Turns a failed search into the most specific explanation available.
 	 */
 	private KInductionCounterexampleException noRunFound(final String what) {
-		return new KInductionCounterexampleException(what + ". The pc transition system claims a path that the "
-				+ "letters of the abstraction do not admit, which means the two disagree.");
+		return new KInductionCounterexampleException(what + ". The search got as far as the start of pc step "
+				+ mDeepestStep + " of " + mSteps + ", in state " + mDeepestState + " with " + mDeepestOpenCalls
+				+ " call(s) open, and found no letter path for " + (mDeepestStep < mSteps
+						? mSystem.getTransition(mWitness.getTransitionId(mDeepestStep)).toString()
+						: "the accepting state it has to end in")
+				+ ", whose target(s) are " + describeTargets()
+				+ ". The pc transition system claims a path that the letters of the abstraction do not admit, "
+				+ "which means the two disagree.");
+	}
+
+	/** The target checkpoints of the transition the failed search got stuck on, with what each one demands. */
+	private String describeTargets() {
+		if (mDeepestStep < 0 || mDeepestStep >= mSteps) {
+			return "none";
+		}
+		final StringBuilder sb = new StringBuilder();
+		for (final CallNode<STATE> target : mSystem.getTransition(mWitness.getTransitionId(mDeepestStep))
+				.getTargetStates()) {
+			sb.append(sb.length() == 0 ? "" : ", ").append(target.getState());
+			if (mSummarizedErrorTargets.contains(target)) {
+				sb.append(" (an error imported from a summarized callee)");
+			} else {
+				sb.append(" (reached through ").append(target.getCallSites());
+				if (mWitness.knowsOpenActivations()) {
+					sb.append(" plus ").append(mWitness.getOpenActivations(mDeepestStep + 1))
+							.append(" activation(s)");
+				}
+				sb.append(')');
+			}
+		}
+		return sb.toString();
 	}
 
 	/**

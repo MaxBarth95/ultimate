@@ -43,9 +43,13 @@ import java.util.Objects;
  * equal only if they carry the same state and were reached through the same sequence of call sites.
  * <p>
  * The chain is stored as a link to the <b>call site node</b> in the caller, which is itself a {@code CallNode} and
- * therefore carries the rest of the chain. A node of the procedure the analysis starts in has no such frame. Because
- * recursion is rejected before any unfolding starts (see {@link ProcedureCallGraph#getProceduresCalleeFirst()}), the
- * chain is always finite.
+ * therefore carries the rest of the chain. A node of the procedure the analysis starts in has no such frame.
+ * <p>
+ * The chain is always finite because nothing on a call cycle is ever unfolded: a recursive procedure's activations
+ * are told apart by {@link CallStack} in the state rather than by copies of its states, so its own nodes are
+ * {@link #root} nodes and a node reached through one carries only the part of the chain the graph still
+ * distinguishes. That is why a node does <b>not</b> determine how many calls are open at it, which
+ * {@link KInductionCounterexampleBuilder} has to allow for when it cuts a run into pc steps.
  *
  * <pre>{@code
  * CallNode<STATE> callSite = ...;                  // a state of the caller with an outgoing call transition

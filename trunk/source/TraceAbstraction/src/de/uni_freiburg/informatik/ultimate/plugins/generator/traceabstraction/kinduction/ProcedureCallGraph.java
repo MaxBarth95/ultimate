@@ -1,6 +1,9 @@
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -26,17 +29,20 @@ import de.uni_freiburg.informatik.ultimate.util.scc.StronglyConnectedComponent;
 
 /**
  * Builds the procedure call graph of a nested word automaton (nodes = procedure names, edges = "caller calls
- * callee", derived from the automaton's call transitions) and rejects recursion up front:
- * {@link #getProceduresCalleeFirst()} throws {@link UnsupportedOperationException} if any procedure is
- * (transitively, possibly mutually) reachable from itself via a call, naming the offending call and the full
- * cycle - mirroring {@link LoopTreeFormulaBuilder}'s existing non-nesting-loop check, which fails the same way
- * before any formula-building starts. This is not merely a scope limitation: {@link LoopTreeFormulaBuilder}'s
- * virtual call edges (see its class javadoc) need their callee's summary to already exist as a finished formula,
- * which is undefined for a cycle in the call graph.
+ * callee", derived from the automaton's call transitions) and answers the two questions its interprocedural
+ * consumers ask of it: in which order to process the procedures, and which of them lie on a call cycle.
  * <p>
- * On a non-recursive call graph, {@link #getProceduresCalleeFirst()} also gives the processing order every
- * interprocedural consumer needs: every callee fully processed (and thus already holding a summary, if it needs
- * one) before any of its callers. Both {@code InterproceduralImcOrchestrator} and {@link ProcedureSummaries} use
+ * A call cycle matters because {@link LoopTreeFormulaBuilder}'s virtual call edges (see its class javadoc) need
+ * their callee's summary to already exist as a finished formula, which is undefined for a cycle. A consumer that
+ * can encode a cycle some other way asks {@link #getSccsCalleeFirst(java.util.Collection)}, which keeps the
+ * procedures of a cycle together in one component, and {@link #getRecursiveSccs(java.util.Collection)}, which
+ * names them - {@link ProcedureSummaries} gives those an activation record instead of a summary, see
+ * {@link CallStack}. A consumer that cannot asks {@link #getProceduresCalleeFirst()}, which refuses a recursive
+ * call graph with an {@link UnsupportedOperationException} naming the offending call and the full cycle.
+ * <p>
+ * Either way the order is the one every interprocedural consumer needs: every callee fully processed (and thus
+ * already holding a summary, if it needs one) before any of its callers. Both
+ * {@code InterproceduralImcOrchestrator} and {@link ProcedureSummaries} use
  * it that way, which is also why the small per-procedure helpers they share (state grouping, exit states, the
  * call/summary/return composition) live here rather than in one of them.
  */
@@ -87,36 +93,105 @@ public final class ProcedureCallGraph {
 
 	/**
 	 * Every procedure, in an order where every callee occurs before every one of its callers. Throws if the call
-	 * graph is recursive (a procedure transitively/mutually calls itself) - checked here, up front, before any
-	 * checkpoint graph is built.
+	 * graph is recursive (a procedure transitively/mutually calls itself).
+	 * <p>
+	 * For a caller that can handle recursion, {@link #getSccsCalleeFirst(Collection)} is the same order without the
+	 * refusal: it keeps the procedures of a call cycle together in one component instead of rejecting them.
 	 */
 	public List<String> getProceduresCalleeFirst() {
-		final DefaultSccComputation<String> sccComputation = new DefaultSccComputation<>(mLogger,
-				node -> mCalls.getImage(node).iterator(), mProcedures.size(), mProcedures);
-
-		for (final StronglyConnectedComponent<String> ball : sccComputation.getBalls()) {
-			final Set<String> cycle = ball.getNodes();
-			String caller = null;
-			String callee = null;
-			outer: for (final String c : cycle) {
-				for (final String d : mCalls.getImage(c)) {
-					if (cycle.contains(d)) {
-						caller = c;
-						callee = d;
-						break outer;
-					}
-				}
-			}
-			throw new UnsupportedOperationException("Recursion is not supported: procedure " + callee
-					+ " is (transitively) reachable from itself via a call from " + caller
-					+ "; the full recursive call cycle is " + cycle);
-		}
-
 		final List<String> result = new ArrayList<>();
-		for (final StronglyConnectedComponent<String> comp : sccComputation.getSCCs()) {
-			result.add(comp.getNodes().iterator().next());
+		for (final Set<String> scc : getSccsCalleeFirst(mProcedures)) {
+			if (scc.size() > 1 || mCalls.getImage(scc.iterator().next()).contains(scc.iterator().next())) {
+				final String caller = someCallerInside(scc);
+				throw new UnsupportedOperationException("Recursion is not supported: procedure "
+						+ someCalleeInside(scc, caller) + " is (transitively) reachable from itself via a call from "
+						+ caller + "; the full recursive call cycle is " + scc);
+			}
+			result.add(scc.iterator().next());
 		}
 		return result;
+	}
+
+	/**
+	 * The strongly connected components of the call graph restricted to {@code scope}, in an order where every
+	 * component occurs before every component that calls into it.
+	 * <p>
+	 * A component with more than one procedure, or a single procedure that calls itself, is a call cycle: its
+	 * procedures have no summary, because a summary of one of them would need the summaries of all of them. Every
+	 * other component is a single procedure and the order is the plain callee-first order. Restricting to
+	 * {@code scope} matters: a call cycle among procedures that no entry procedure can reach says nothing about the
+	 * program being analysed, and grouping it in anyway would encode procedures that are never executed.
+	 */
+	public List<Set<String>> getSccsCalleeFirst(final Collection<String> scope) {
+		final Set<String> inScope = new LinkedHashSet<>(scope);
+		final DefaultSccComputation<String> sccComputation =
+				new DefaultSccComputation<>(mLogger, node -> calleesInside(node, inScope).iterator(), inScope.size(),
+						inScope);
+		final List<Set<String>> result = new ArrayList<>();
+		for (final StronglyConnectedComponent<String> comp : sccComputation.getSCCs()) {
+			result.add(comp.getNodes());
+		}
+		return result;
+	}
+
+	/**
+	 * The components of {@link #getSccsCalleeFirst(Collection)} that are call cycles, i.e. the procedures that cannot
+	 * be summarized because they are (mutually) recursive.
+	 */
+	public List<Set<String>> getRecursiveSccs(final Collection<String> scope) {
+		final Set<String> inScope = new LinkedHashSet<>(scope);
+		final DefaultSccComputation<String> sccComputation =
+				new DefaultSccComputation<>(mLogger, node -> calleesInside(node, inScope).iterator(), inScope.size(),
+						inScope);
+		final List<Set<String>> result = new ArrayList<>();
+		for (final StronglyConnectedComponent<String> ball : sccComputation.getBalls()) {
+			result.add(ball.getNodes());
+		}
+		return result;
+	}
+
+	/** Every procedure that a chain of calls can reach from an entry procedure. */
+	public Set<String> getReachableProcedures() {
+		final Set<String> visited = new LinkedHashSet<>(mEntryProcedures);
+		final Deque<String> worklist = new ArrayDeque<>(mEntryProcedures);
+		while (!worklist.isEmpty()) {
+			for (final String callee : getCallees(worklist.poll())) {
+				if (visited.add(callee)) {
+					worklist.add(callee);
+				}
+			}
+		}
+		return visited;
+	}
+
+	private Set<String> calleesInside(final String caller, final Set<String> scope) {
+		final Set<String> result = new LinkedHashSet<>();
+		for (final String callee : mCalls.getImage(caller)) {
+			if (scope.contains(callee)) {
+				result.add(callee);
+			}
+		}
+		return result;
+	}
+
+	private String someCallerInside(final Set<String> cycle) {
+		for (final String c : cycle) {
+			for (final String d : mCalls.getImage(c)) {
+				if (cycle.contains(d)) {
+					return c;
+				}
+			}
+		}
+		throw new AssertionError("component " + cycle + " was reported as a call cycle but has no call inside it");
+	}
+
+	private String someCalleeInside(final Set<String> cycle, final String caller) {
+		for (final String d : mCalls.getImage(caller)) {
+			if (cycle.contains(d)) {
+				return d;
+			}
+		}
+		throw new AssertionError(caller + " was reported as a caller inside " + cycle + " but calls nothing in it");
 	}
 
 	// ----------------------------------------------------------------------------------------------------------

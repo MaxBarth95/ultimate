@@ -29,6 +29,7 @@ package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.k
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
@@ -49,6 +50,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolk
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IAction;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.ICallAction;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IReturnAction;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.TransFormulaBuilder;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.TransFormulaUtils;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.ILocalProgramVar;
@@ -105,10 +107,15 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ki
  *
  * <h2>What is not supported</h2>
  *
- * Recursion, which {@link ProcedureCallGraph} rejects up front - a summary would be undefined and an unfolding
- * infinite. An unfolded procedure that reads an {@code old(g)} and calls another unfolded procedure that may
- * overwrite that snapshot, see {@code rejectOldVarReadsAcrossUnfoldedCalls}. And an unfolding that grows past
- * {@link #MAX_UNFOLDED_NODES} nodes, which is refused rather than truncated.
+ * A procedure that reads an {@code old(g)} and calls a procedure that is unfolded or stack-encoded and may
+ * overwrite that snapshot, see {@code rejectOldVarReadsAcrossStackFreeCalls}: neither an unfolded nor a stacked
+ * activation gets its own copy of the oldvars, because {@link PcTransitionSystem} does not keep oldvars in the
+ * state at all.
+ * <p>
+ * Recursion and an unfolding too big to build are <b>not</b> in this list any more. A procedure on a call cycle,
+ * and any procedure whose unfolding would not fit into {@link #MAX_UNFOLDED_NODES}, is given an activation record
+ * instead - see {@link CallStack} - so its states occur exactly once in the graph and its recursive call is an
+ * ordinary loop of it.
  *
  * @param <LETTER>
  *            letter type
@@ -137,6 +144,16 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	private final Map<String, ScopeData> mScopeData = new LinkedHashMap<>();
 	/** The procedures that are unfolded at their call sites rather than summarized, see the class javadoc. */
 	private final Set<String> mUnfolded = new LinkedHashSet<>();
+	/**
+	 * The procedures whose activations are told apart by {@link CallStack} rather than by copies of their states:
+	 * every procedure on a call cycle, plus any procedure whose unfolding would not fit into
+	 * {@link #MAX_UNFOLDED_NODES}. Their states occur exactly once in the graph.
+	 */
+	private final Set<String> mStacked = new LinkedHashSet<>();
+	/** Null exactly if {@link #mStacked} is empty, i.e. if no call needs an activation record. */
+	private CallStack mCallStack;
+	/** Hands out the id that tells a stacked return which call site it has to go back to. */
+	private int mNextReturnSiteId;
 	/** Per procedure, the states a call transition enters it at. Used to look for loops in its body. */
 	private final Map<String, Set<STATE>> mEntryStates = new LinkedHashMap<>();
 
@@ -151,6 +168,7 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	private int mNumBuilds;
 	private int mNumUnfoldedCallSites;
 	private int mNumSummarizedCallSites;
+	private int mNumStackedCallSites;
 
 	/**
 	 * Where a resolved call site puts the nodes it creates. A procedure's own scope works in plain states, so both
@@ -202,34 +220,47 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 
 		final ProcedureCallGraph callGraph = new ProcedureCallGraph(logger, abstraction);
 		final Set<String> entryProcedures = callGraph.getEntryProcedures();
-		final Set<String> reachable = callReachable(callGraph, entryProcedures);
+		// Only what an entry procedure can reach: a call cycle among procedures that are never called says nothing
+		// about this program, and encoding it would spend a stack on activations that never happen.
+		final Set<String> reachable = callGraph.getReachableProcedures();
+		for (final Set<String> cycle : callGraph.getRecursiveSccs(reachable)) {
+			mStacked.addAll(cycle);
+		}
 		final List<String> order = new ArrayList<>();
-		for (final String procedure : callGraph.getProceduresCalleeFirst()) {
-			if (reachable.contains(procedure)) {
-				order.add(procedure);
-			}
+		for (final Set<String> scc : callGraph.getSccsCalleeFirst(reachable)) {
+			order.addAll(scc);
 		}
 		mLogger.info("KInduction: call graph ready, %d of %d procedure(s) reachable, processing order %s",
 				order.size(), mStatesByProcedure.size(), order);
 
 		for (final String procedure : order) {
-			if (entryProcedures.contains(procedure)) {
-				// Never summarized: nothing calls it, its graph is the root graph itself.
+			if (entryProcedures.contains(procedure) || mStacked.contains(procedure)) {
+				// An entry procedure is never summarized (nothing calls it, its graph is the root graph itself), and
+				// a procedure on a call cycle has no summary by definition.
 				continue;
 			}
 			classify(callGraph, procedure);
 		}
-		rejectOldVarReadsAcrossUnfoldedCalls(entryProcedures, callGraph);
+		stackUnfoldingsThatDoNotFit(order, entryProcedures);
+		if (!mStacked.isEmpty()) {
+			mCallStack = new CallStack(mMgdScript, localsOf(mStacked));
+		}
+		rejectOldVarReadsAcrossStackFreeCalls(entryProcedures, callGraph);
 		unfold(entryProcedures);
 
 		mLogger.info(
-				"KInduction: resolved %d call site(s) by summary and %d by unfolding (%d checkpoint graph(s) built); "
-						+ "entry scope has %d node(s), %d error node(s), of which %d with a pending call",
-				mNumSummarizedCallSites, mNumUnfoldedCallSites, mNumBuilds, mRootScopeStates.size(),
-				mRootFinalStates.size(), mRootPendingErrors.size());
+				"KInduction: resolved %d call site(s) by summary, %d by unfolding and %d by an activation record "
+						+ "(%d checkpoint graph(s) built); entry scope has %d node(s), %d error node(s), of which %d "
+						+ "with a pending call",
+				mNumSummarizedCallSites, mNumUnfoldedCallSites, mNumStackedCallSites, mNumBuilds,
+				mRootScopeStates.size(), mRootFinalStates.size(), mRootPendingErrors.size());
 		if (!mUnfolded.isEmpty()) {
 			mLogger.info("KInduction: unfolded procedure(s) %s, because they contain a loop or call one that does",
 					mUnfolded);
+		}
+		if (mCallStack != null) {
+			mLogger.info("KInduction: stack-encoded procedure(s) %s, using %d extra variable(s)", mStacked,
+					mCallStack.getVariables().size());
 		}
 	}
 
@@ -261,6 +292,25 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	}
 
 	/**
+	 * The procedures whose activations {@link CallStack} tells apart, so that their states occur exactly once in
+	 * the graph however deep the recursion goes. A node inside one of them cannot say which activation it belongs
+	 * to - see {@link CallNode} - which is what {@link KInductionCounterexampleBuilder} has to allow for.
+	 */
+	public Set<String> getStackedProcedures() {
+		return Collections.unmodifiableSet(mStacked);
+	}
+
+	/**
+	 * The variable that counts the activations {@link CallStack} keeps, or {@code null} if this program needed no
+	 * activation record at all. How many calls are open at a node is exactly its chain of call sites plus how far
+	 * this has moved since the start, which is what lets {@link KInductionCounterexampleBuilder} cut a run into pc
+	 * steps again.
+	 */
+	public IProgramVar getStackPointer() {
+		return mCallStack == null ? null : mCallStack.getStackPointer();
+	}
+
+	/**
 	 * The nodes that are dead ends of this graph because their own transitions belong to a procedure that is not
 	 * in it: the error states imported from a summarized callee. An unfolded callee's states are all in the graph,
 	 * so none of them is sealed.
@@ -289,8 +339,10 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	 */
 	private void classify(final ProcedureCallGraph callGraph, final String procedure) {
 		for (final String callee : callGraph.getCallees(procedure)) {
-			if (mUnfolded.contains(callee)) {
-				// No summary for the callee means none for this procedure either: it has no loop-free formula.
+			if (mUnfolded.contains(callee) || mStacked.contains(callee)) {
+				// No summary for the callee means none for this procedure either: it has no loop-free formula. A
+				// stacked callee also has to be resolved in the root graph, where its states live, so a caller of
+				// one cannot be summarized into a scope of its own.
 				mUnfolded.add(procedure);
 				return;
 			}
@@ -317,12 +369,12 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	 * oldvars would mean minting fresh program variables, which is out of proportion here - C programs translated
 	 * to Boogie do not read {@code old(...)} in a procedure body at all - so this is refused instead.
 	 */
-	private void rejectOldVarReadsAcrossUnfoldedCalls(final Set<String> entryProcedures,
+	private void rejectOldVarReadsAcrossStackFreeCalls(final Set<String> entryProcedures,
 			final ProcedureCallGraph callGraph) {
-		for (final String procedure : union(entryProcedures, mUnfolded)) {
+		for (final String procedure : union(union(entryProcedures, mUnfolded), mStacked)) {
 			final Set<String> unfoldedCallees = new LinkedHashSet<>();
 			for (final String callee : callGraph.getCallees(procedure)) {
-				if (mUnfolded.contains(callee)) {
+				if (mUnfolded.contains(callee) || mStacked.contains(callee)) {
 					unfoldedCallees.add(callee);
 				}
 			}
@@ -400,7 +452,9 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 			}
 			for (final OutgoingCallTransition<LETTER, STATE> call : mAbstraction.callSuccessors(state)) {
 				final String callee = call.getLetter().getSucceedingProcedure();
-				if (mUnfolded.contains(callee)) {
+				if (mStacked.contains(callee)) {
+					stackCallee(worklist, alternatives, node, call);
+				} else if (mUnfolded.contains(callee)) {
 					unfoldCallee(worklist, alternatives, node, call);
 				} else {
 					summarizeCallee(worklist, alternatives, node, call);
@@ -413,11 +467,10 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	private void enqueue(final Deque<CallNode<STATE>> worklist, final CallNode<STATE> node) {
 		if (mRootScopeStates.add(node)) {
 			if (mRootScopeStates.size() > MAX_UNFOLDED_NODES) {
-				throw new UnsupportedOperationException("unfolding the callees that contain a loop ("
-						+ mUnfolded + ") past " + MAX_UNFOLDED_NODES + " nodes; unfolding is exponential in the "
-						+ "depth of the call graph times the number of call sites per procedure, and this program "
-						+ "asks for more than k-induction is willing to build. Inline fewer procedures, or raise "
-						+ "ProcedureSummaries.MAX_UNFOLDED_NODES.");
+				// stackUnfoldingsThatDoNotFit() counted the copies of every procedure before any of this was built
+				// and gave an activation record to whatever did not fit, so reaching this means that count was wrong.
+				throw new AssertionError("the unfolded graph passed " + MAX_UNFOLDED_NODES + " nodes although the "
+						+ "estimate said it would fit; unfolded " + mUnfolded + ", stacked " + mStacked);
 			}
 			worklist.add(node);
 		}
@@ -435,7 +488,7 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 		final ICallAction callAction = asCallAction(call.getLetter());
 		final String callee = call.getLetter().getSucceedingProcedure();
 		final CallNode<STATE> entryNode = callSite.enter(call.getSucc());
-		addAlternative(alternatives, callSite, entryNode, callEntryFormula(callAction, callee));
+		addAlternative(alternatives, callSite, entryNode, callEntryFormula(callAction, callee, false));
 		enqueue(worklist, entryNode);
 
 		int returns = 0;
@@ -456,6 +509,149 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 					callee, callSite.getState());
 		}
 		mNumUnfoldedCallSites++;
+	}
+
+	/**
+	 * Resolves one call site into an activation record: a virtual edge that pushes one and enters the callee's own
+	 * entry node, and one that pops it again out of each of the callee's exit nodes.
+	 * <p>
+	 * Unlike {@link #unfoldCallee} this does <b>not</b> copy the callee: its states enter the graph as
+	 * {@link CallNode#root} nodes, once, however many call sites reach them and however deep the recursion goes.
+	 * Which activation the graph is in is a matter of {@code ki_sp}, not of which node it is at, and a recursive call
+	 * is therefore an ordinary cycle of the graph that {@link LoopTreeFormulaBuilder} turns into an ordinary loop.
+	 * <p>
+	 * The return edges are what the id is for: every call site that can enter this callee reaches the same exit
+	 * nodes, so the graph alone does not say where to go back to. The push records the id of <em>this</em> call site
+	 * and the pop checks it, which makes the return deterministic without duplicating anything. The id is per call
+	 * site <em>node</em>, not per call transition of the automaton, so a call from inside an unfolded copy returns
+	 * into that copy rather than into one of its siblings.
+	 */
+	private void stackCallee(final Deque<CallNode<STATE>> worklist,
+			final Map<CallNode<STATE>, Map<CallNode<STATE>, List<UnmodifiableTransFormula>>> alternatives,
+			final CallNode<STATE> callSite, final OutgoingCallTransition<LETTER, STATE> call) {
+		final ICallAction callAction = asCallAction(call.getLetter());
+		final String callee = call.getLetter().getSucceedingProcedure();
+		final String caller = ProcedureCallGraph.procedureOf(callSite.getState());
+		final int returnSiteId = mNextReturnSiteId++;
+		// Only a caller that can be re-entered while the callee runs needs a copy of its locals, and that is exactly
+		// a caller that lies on a call cycle itself. A caller that cannot be re-entered still needs the return site
+		// pushed, or the callee would not know where to go back to.
+		final Collection<IProgramVar> toSave =
+				mStacked.contains(caller) ? localsOf(Collections.singleton(caller)) : Collections.emptyList();
+
+		final CallNode<STATE> entryNode = CallNode.root(call.getSucc());
+		addAlternative(alternatives, callSite, entryNode, TransFormulaUtils.sequentialComposition(mLogger, mServices,
+				mMgdScript, false, false, false, SimplificationTechnique.NONE,
+				Arrays.asList(mCallStack.push(returnSiteId, toSave), callEntryFormula(callAction, callee, true))));
+		enqueue(worklist, entryNode);
+
+		int returns = 0;
+		for (final STATE exit : ProcedureCallGraph.computeExitStates(mAbstraction, ownStates(callee),
+				Collections.singleton(callSite.getState()))) {
+			for (final OutgoingReturnTransition<LETTER, STATE> ret : mAbstraction.returnSuccessorsGivenHier(exit,
+					callSite.getState())) {
+				final UnmodifiableTransFormula returnTf = asReturnAction(ret.getLetter()).getAssignmentOfReturn();
+				// The return assignment carries the result out of the activation that is being left, so it has to
+				// read the callee's outparams before the pop overwrites them - in direct recursion they are the very
+				// same variables as the caller's. Whatever it assigns must then not be restored on top of it.
+				final Set<IProgramVar> toRestore = new LinkedHashSet<>(toSave);
+				toRestore.removeAll(returnTf.getAssignedVars());
+				addAlternative(alternatives, CallNode.root(exit), callSite.sibling(ret.getSucc()),
+						TransFormulaUtils.sequentialComposition(mLogger, mServices, mMgdScript, false, false, false,
+								SimplificationTechnique.NONE,
+								Arrays.asList(returnTf, mCallStack.pop(returnSiteId, toRestore))));
+				enqueue(worklist, callSite.sibling(ret.getSucc()));
+				returns++;
+			}
+		}
+		if (returns == 0) {
+			mLogger.info("KInduction: the stacked call %s -> %s at %s never returns; only a violation inside the "
+					+ "callee can be reached through it", caller, callee, callSite.getState());
+		}
+		mNumStackedCallSites++;
+	}
+
+	/** Every local variable, in- and outparams included, of each of {@code procedures}. */
+	private Set<IProgramVar> localsOf(final Collection<String> procedures) {
+		final Set<IProgramVar> result = new LinkedHashSet<>();
+		for (final String procedure : procedures) {
+			result.addAll(mCsToolkit.getSymbolTable().getLocals(procedure));
+		}
+		return result;
+	}
+
+	/**
+	 * Moves unfolded procedures to {@link #mStacked} until the unfolding fits into {@link #MAX_UNFOLDED_NODES}.
+	 * <p>
+	 * Unfolding is exponential in the depth of the call graph times the number of call sites per procedure, so a
+	 * program can ask for arbitrarily many nodes. How many it asks for does not have to be found out by unfolding
+	 * until it is too late: a procedure gets one copy per copy of each of its callers, which is one pass over the
+	 * call graph from the entry procedures downwards. A procedure that is stack-encoded instead contributes its
+	 * states once, so stacking the worst offender and recomputing converges.
+	 */
+	private void stackUnfoldingsThatDoNotFit(final List<String> order, final Set<String> entryProcedures) {
+		while (true) {
+			final Map<String, Long> copies = estimateCopies(order, entryProcedures);
+			long total = 0;
+			String worst = null;
+			long worstNodes = -1;
+			for (final Map.Entry<String, Long> entry : copies.entrySet()) {
+				final long nodes = entry.getValue() * ownStates(entry.getKey()).size();
+				total += nodes;
+				if (mUnfolded.contains(entry.getKey()) && nodes > worstNodes) {
+					worst = entry.getKey();
+					worstNodes = nodes;
+				}
+			}
+			if (total <= MAX_UNFOLDED_NODES) {
+				return;
+			}
+			if (worst == null) {
+				// Nothing left to stack: the graph is this big because the procedures themselves are, not because
+				// they are copied. Unfolding would not shrink it and neither would an activation record.
+				throw new UnsupportedOperationException("the checkpoint graph of this program has about " + total
+						+ " nodes, past the " + MAX_UNFOLDED_NODES + " k-induction is willing to build, and none of "
+						+ "that is unfolding that could be replaced by an activation record");
+			}
+			mLogger.info("KInduction: unfolding %s would take about %d node(s) of an estimated %d; giving it an "
+					+ "activation record instead", worst, worstNodes, total);
+			mUnfolded.remove(worst);
+			mStacked.add(worst);
+		}
+	}
+
+	/**
+	 * How many copies of each procedure the unfolded graph would hold. An entry procedure and a stack-encoded
+	 * procedure occur once; an unfolded procedure occurs once per call site in each copy of each of its callers; a
+	 * summarized procedure does not occur at all, its states stay in its own scope.
+	 */
+	private Map<String, Long> estimateCopies(final List<String> order, final Set<String> entryProcedures) {
+		final Map<String, Long> copies = new LinkedHashMap<>();
+		final List<String> callerFirst = new ArrayList<>(order);
+		Collections.reverse(callerFirst);
+		for (final String procedure : callerFirst) {
+			final long own;
+			if (entryProcedures.contains(procedure) || mStacked.contains(procedure)) {
+				own = 1;
+			} else if (mUnfolded.contains(procedure)) {
+				own = copies.getOrDefault(procedure, 0L);
+			} else {
+				continue;
+			}
+			copies.put(procedure, own);
+			if (own == 0) {
+				continue;
+			}
+			for (final STATE state : ownStates(procedure)) {
+				for (final OutgoingCallTransition<LETTER, STATE> call : mAbstraction.callSuccessors(state)) {
+					final String callee = call.getLetter().getSucceedingProcedure();
+					if (mUnfolded.contains(callee)) {
+						copies.merge(callee, own, Long::sum);
+					}
+				}
+			}
+		}
+		return copies;
 	}
 
 	/** Resolves one call site of the root graph into summary and error edges, as {@link #buildVirtualEdges} does. */
@@ -685,9 +881,53 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 				mCsToolkit.getModifiableGlobalsTable().getModifiedBoogieVars(procAtEnd);
 		return TransFormulaUtils.sequentialCompositionWithPendingCall(mMgdScript, false, false, false,
 				Collections.emptyList(), callAction.getLocalVarsAssignment(), oldVarsAssignment, globalVarsAssignment,
-				toError, mLogger, mServices, modifiableGlobalsAtEnd, SimplificationTechnique.NONE,
-				mCsToolkit.getSymbolTable(), caller, caller, callee, procAtEnd,
+				scopeToCallerAndCallee(toError, caller, callee), mLogger, mServices, modifiableGlobalsAtEnd,
+				SimplificationTechnique.NONE, mCsToolkit.getSymbolTable(), caller, caller, callee, procAtEnd,
 				mCsToolkit.getModifiableGlobalsTable());
+	}
+
+	/**
+	 * {@code toError} with the locals of every procedure other than {@code caller} and {@code callee} dropped from
+	 * its interface.
+	 * <p>
+	 * {@link TransFormulaUtils#sequentialCompositionWithPendingCall} classifies each variable of the formula it is
+	 * given as belonging to the caller, to the callee, or to neither - and the third case is an
+	 * {@link AssertionError} ("local var neither from caller nor callee"), because the primitive knows only those two
+	 * procedures. The error this call runs into may lie deeper than the direct callee, though, and then
+	 * {@code toError} spans several activations and mentions the locals of all of them.
+	 * <p>
+	 * Dropping them is what the formula means anyway, not an approximation of it. An inVar stands for the value the
+	 * variable has where the composed formula starts, which is the callee's entry - at that point the deeper
+	 * activation does not exist and its locals hold nothing, so leaving the inVar in would claim a relationship
+	 * between two values that never coexist; removing it turns the variable into an existentially quantified aux var,
+	 * which is what "unconstrained" is. An outVar stands for a value at the error state, and an error node is a dead
+	 * end of the graph ({@code unfold} stops at a sealed state), so nothing ever reads it.
+	 */
+	private UnmodifiableTransFormula scopeToCallerAndCallee(final UnmodifiableTransFormula toError,
+			final String caller, final String callee) {
+		final List<IProgramVar> inVarsToRemove = new ArrayList<>();
+		for (final IProgramVar pv : toError.getInVars().keySet()) {
+			if (isLocalOfOtherProcedure(pv, caller, callee)) {
+				inVarsToRemove.add(pv);
+			}
+		}
+		final List<IProgramVar> outVarsToRemove = new ArrayList<>();
+		for (final IProgramVar pv : toError.getOutVars().keySet()) {
+			if (isLocalOfOtherProcedure(pv, caller, callee)) {
+				outVarsToRemove.add(pv);
+			}
+		}
+		if (inVarsToRemove.isEmpty() && outVarsToRemove.isEmpty()) {
+			return toError;
+		}
+		mLogger.debug("KInduction: dropping %d in- and %d outvar(s) of procedures other than %s and %s from a "
+				+ "pending call to an error", inVarsToRemove.size(), outVarsToRemove.size(), caller, callee);
+		return TransFormulaBuilder.constructCopy(mMgdScript, toError, inVarsToRemove, outVarsToRemove,
+				Collections.emptyMap());
+	}
+
+	private static boolean isLocalOfOtherProcedure(final IProgramVar pv, final String caller, final String callee) {
+		return !pv.isGlobal() && !caller.equals(pv.getProcedure()) && !callee.equals(pv.getProcedure());
 	}
 
 	/**
@@ -703,8 +943,15 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	 * because {@code sequentialCompositionWithCallAndReturn} projects the callee's locals out of the summary,
 	 * which has the same effect. {@link KInductionCounterexampleBuilder} makes them fresh constants for the same
 	 * reason.
+	 * <p>
+	 * Whether the havoc comes before or after the parameter assignment only matters when the caller and the callee
+	 * are the same procedure, which is to say for a directly recursive call: then the actual parameters the call
+	 * reads <em>are</em> locals of the callee, and havocing first would destroy them before they are passed. For a
+	 * call between two different procedures the two steps write disjoint variables and commute, so
+	 * {@code havocAfterParameters} only has to be set where recursion is possible.
 	 */
-	private UnmodifiableTransFormula callEntryFormula(final ICallAction callAction, final String callee) {
+	private UnmodifiableTransFormula callEntryFormula(final ICallAction callAction, final String callee,
+			final boolean havocAfterParameters) {
 		final UnmodifiableTransFormula callTf = callAction.getLocalVarsAssignment();
 		final UnmodifiableTransFormula oldVarsAssignment =
 				mCsToolkit.getOldVarsAssignmentCache().getOldVarsAssignment(callee);
@@ -717,9 +964,11 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 			}
 		}
 		final UnmodifiableTransFormula havoc = TransFormulaUtils.constructHavoc(havoced, mMgdScript);
+		final List<UnmodifiableTransFormula> parts = havocAfterParameters
+				? Arrays.asList(callTf, havoc, oldVarsAssignment, globalVarsAssignment)
+				: Arrays.asList(havoc, callTf, oldVarsAssignment, globalVarsAssignment);
 		return TransFormulaUtils.sequentialComposition(mLogger, mServices, mMgdScript, false, false, false,
-				SimplificationTechnique.NONE,
-				Arrays.asList(havoc, callTf, oldVarsAssignment, globalVarsAssignment));
+				SimplificationTechnique.NONE, parts);
 	}
 
 	// ----------------------------------------------------------------------------------------------------------

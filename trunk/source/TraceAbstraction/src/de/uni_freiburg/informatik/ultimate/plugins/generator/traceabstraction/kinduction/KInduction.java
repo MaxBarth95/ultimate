@@ -207,7 +207,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 				// invalidate the model we are working from. mWitness already holds everything we need from it.
 				mCounterexample = new KInductionCounterexampleBuilder<LETTER, STATE>(mServices, mLogger,
 						mWorkerMgdScript, mKILock, mCsToolkit, mAbstraction, mSystem, mWitness,
-						mSummaries == null ? Collections.emptySet() : mSummaries.getSealedStates()).build();
+						mSummaries == null ? Collections.emptySet() : mSummaries.getSealedStates(),
+						mSummaries == null ? Collections.emptySet() : mSummaries.getStackedProcedures()).build();
 			}
 		} finally {
 			mWorkerMgdScript.unlock(mKILock);
@@ -317,12 +318,18 @@ public class KInduction<LETTER extends IAction, STATE> {
 	 * before the {@code pop} of that query.
 	 */
 	private KInductionWitness extractWitness(final int k) {
+		final IProgramVar stackPointer = mSummaries == null ? null : mSummaries.getStackPointer();
 		final List<Term> queried = new ArrayList<>();
 		for (int j = 0; j <= k; j++) {
 			queried.add(mConstants.pc(j));
 		}
 		for (int j = 0; j < k; j++) {
 			queried.add(mConstants.sel(j));
+		}
+		if (stackPointer != null) {
+			for (int j = 0; j <= k; j++) {
+				queried.add(mConstants.var(stackPointer, j));
+			}
 		}
 
 		final Map<Term, Term> model;
@@ -343,7 +350,14 @@ public class KInduction<LETTER extends IAction, STATE> {
 		for (int j = 0; j < k; j++) {
 			transitionIds[j] = intValue(model, mConstants.sel(j), "selector_" + j);
 		}
-		return new KInductionWitness(k, pcValues, transitionIds);
+		int[] stackPointers = null;
+		if (stackPointer != null) {
+			stackPointers = new int[k + 1];
+			for (int j = 0; j <= k; j++) {
+				stackPointers[j] = intValue(model, mConstants.var(stackPointer, j), stackPointer + "_" + j);
+			}
+		}
+		return new KInductionWitness(k, pcValues, transitionIds, stackPointers);
 	}
 
 	/**

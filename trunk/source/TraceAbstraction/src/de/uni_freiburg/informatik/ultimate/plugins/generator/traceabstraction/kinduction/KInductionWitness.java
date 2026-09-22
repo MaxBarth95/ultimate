@@ -34,12 +34,19 @@ package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.k
  * This is plain data, read off the model in {@code KInduction.checkBase} <b>before</b> the {@code pop} that discards
  * it, and afterwards the only thing {@link KInductionCounterexampleBuilder} needs from the solver.
  * <p>
- * Deliberately <b>no variable values</b>. A pc transition is a whole composed path, and the composition does not
- * have to agree with any single concrete path about the value a variable ends up with - an edge whose composed
+ * Deliberately <b>almost no variable values</b>. A pc transition is a whole composed path, and the composition does
+ * not have to agree with any single concrete path about the value a variable ends up with - an edge whose composed
  * relation leaves a variable unconstrained lets the model pick a value the concrete path would never produce. Using
  * such values to constrain the reconstruction makes it fail on perfectly good counterexamples. The pc and the
  * transition ids are safe to rely on, because they are what the encoding is about, and the reconstruction checks
  * feasibility for itself anyway.
+ * <p>
+ * {@link CallStack}'s stack pointer is the one exception, and for a reason that does not generalise: no composition
+ * ever leaves it unconstrained. Every alternative of every edge either does not mention it - and is then framed to
+ * keep it - or moves it by exactly one per call or return on that alternative. So the model does not pick its value,
+ * the path does, and a reconstruction that follows the model's value is following the alternative the model chose.
+ * That is what tells {@link KInductionCounterexampleBuilder} how many activations are open at a step boundary, which
+ * a node of a stack-encoded procedure cannot say by itself.
  *
  * @author Max Barth (max.barth@lmu.de)
  */
@@ -48,17 +55,23 @@ public final class KInductionWitness {
 	private final int mK;
 	private final int[] mPcValues;
 	private final int[] mTransitionIds;
+	/** Null exactly if the program needed no activation record, see {@link #getOpenActivations(int)}. */
+	private final int[] mStackPointers;
 
-	KInductionWitness(final int k, final int[] pcValues, final int[] transitionIds) {
+	KInductionWitness(final int k, final int[] pcValues, final int[] transitionIds, final int[] stackPointers) {
 		if (pcValues.length != k + 1) {
 			throw new AssertionError("expected " + (k + 1) + " pc values, got " + pcValues.length);
 		}
 		if (transitionIds.length != k) {
 			throw new AssertionError("expected " + k + " transition ids, got " + transitionIds.length);
 		}
+		if (stackPointers != null && stackPointers.length != k + 1) {
+			throw new AssertionError("expected " + (k + 1) + " stack pointers, got " + stackPointers.length);
+		}
 		mK = k;
 		mPcValues = pcValues;
 		mTransitionIds = transitionIds;
+		mStackPointers = stackPointers;
 	}
 
 	/** The number of unrolled transitions. There are {@code k + 1} states. */
@@ -74,6 +87,24 @@ public final class KInductionWitness {
 	/** The id of the transition taken between state {@code idx} and {@code idx + 1}. */
 	public int getTransitionId(final int idx) {
 		return mTransitionIds[idx];
+	}
+
+	/** Whether this witness knows the stack depth, i.e. whether the program has a {@link CallStack} at all. */
+	public boolean knowsOpenActivations() {
+		return mStackPointers != null;
+	}
+
+	/**
+	 * How many activations of stack-encoded procedures are open in state {@code idx}. The stack pointer itself is
+	 * not constrained to start at zero - nothing needs it to - so only the difference to the start is meaningful.
+	 */
+	public int getOpenActivations(final int idx) {
+		if (mStackPointers == null) {
+			throw new UnsupportedOperationException("this witness has no stack pointer; the program has no "
+					+ "stack-encoded procedure, so every node's chain of call sites already says how many calls "
+					+ "are open at it");
+		}
+		return mStackPointers[idx] - mStackPointers[0];
 	}
 
 	/**

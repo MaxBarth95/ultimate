@@ -76,6 +76,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.ISLPredicate;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateFactory;
 import de.uni_freiburg.informatik.ultimate.lib.proofs.floydhoare.NwaHoareProofProducer;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder.SolverMode;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder.SolverSettings;
@@ -381,6 +382,23 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 * transfer between controller and worker goes via @TransferBetweenMainAndWorker.
 	 *
 	 */
+	/**
+	 * The prefix the worker's {@link ManagedScript} puts into every variable it mints.
+	 * <p>
+	 * {@code CfgSmtToolkit#createFreshManagedScript} replays the main script's whole declaration history onto the
+	 * worker script, including the constants the main thread declared for its own auxiliary variables, while the
+	 * worker's {@link ManagedScript} starts its per-basename counter at zero. The k-induction worker composes tens of
+	 * thousands of transition formulas while it builds its loop tree, so its counter reliably reaches an index the
+	 * main thread already used and the aux-var constant is rejected as "already defined". A prefix that is unique per
+	 * worker keeps the two name spaces apart.
+	 * <p>
+	 * Only k-induction gets one: the other worker types never came close to the collision, and an empty prefix keeps
+	 * their variable names exactly as they were.
+	 */
+	private static String freshVarPrefix(final WorkerType workerType, final int id) {
+		return workerType == WorkerType.KINDUCTION ? "ki" + id + "_" : "";
+	}
+
 	private ICegarNwaWorkerThread<L, A> setUpWorkerThread(final IUltimateServiceProvider iterationServices,
 			final int id, final WorkerType workerType) throws InterruptedException {
 
@@ -388,7 +406,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				new AutomataLibraryServices(mServices), mLogger, mCsToolkit.getManagedScript(), iterationServices,
 				getSolverSettings(workerType,
 						getIteration() + mRunningThreads + mCounterexample.getWord().asList().hashCode() + "parallel"),
-				mCsToolkit);
+				mCsToolkit, freshVarPrefix(workerType, id));
 
 		final CfgSmtToolkit freshToolKit = transferUtils.getWorkerCfgSmtToolKit();
 

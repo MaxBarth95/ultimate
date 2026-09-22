@@ -53,6 +53,7 @@ import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceP
 import de.uni_freiburg.informatik.ultimate.lib.icfg.BoogieIcfgLocation;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.Call;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.CodeBlock;
+import de.uni_freiburg.informatik.ultimate.lib.icfg.GotoEdge;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.Return;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.SequentialComposition;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.StatementSequence;
@@ -115,16 +116,22 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 	 * @param main
 	 * @param worker
 	 * @param mainCfgToolKit
+	 * @param freshVarPrefix
+	 *            carried by every variable the worker {@link ManagedScript} mints, so that its names cannot clash
+	 *            with the main script's, whose whole declaration history is replayed onto the worker script; see
+	 *            {@link CfgSmtToolkit#createFreshManagedScript(IUltimateServiceProvider, SolverSettings, String, String)}.
+	 *            Pass {@code ""} to keep the names a worker produced before this existed.
 	 *
 	 * @author Max Barth (max.barth@lmu.de)
 	 */
 	public TransferBetweenMainAndWorker(final AutomataLibraryServices services, final ILogger logger,
 			final ManagedScript main, final IUltimateServiceProvider solverServices,
-			final SolverSettings solverSettings, final CfgSmtToolkit mainCfgToolKit) {
+			final SolverSettings solverSettings, final CfgSmtToolkit mainCfgToolKit, final String freshVarPrefix) {
 		mLogger = logger;
 		mIUltiamteServices = solverServices;
 		mMainScript = main;
-		mWorkerScript = mainCfgToolKit.createFreshManagedScript(solverServices, solverSettings);
+		mWorkerScript = mainCfgToolKit.createFreshManagedScript(solverServices, solverSettings,
+				solverSettings.getBaseNameOfDumpedScript(), freshVarPrefix);
 
 		mServices = services;
 		mMainCsToolkit = mainCfgToolKit;
@@ -177,10 +184,18 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 			case final StatementSequence stmt -> transferredLetter = (LETTER) getTransferStmtSequence(stmt);
 			case final SequentialComposition seqComp -> transferredLetter = (LETTER) getTransferSeqComp(seqComp);
 			case final Summary sum -> transferredLetter = (LETTER) getTransferSummary(sum);
-			default -> new AssertionError("Unexpected letter type: " + letter.getClass());
+			case final GotoEdge gotoEdge -> transferredLetter = (LETTER) getTransferGoto(gotoEdge);
+			default -> throw new UnsupportedOperationException("Cannot transfer the letter " + letter + ", which is a "
+					+ letter.getClass().getSimpleName() + "; this transferrer knows Call, Return, StatementSequence, "
+					+ "SequentialComposition, Summary and GotoEdge");
 			}
 		}
-		assert transferredLetter != null;
+		if (transferredLetter == null) {
+			// Never a mere assertion: a null letter is accepted by the automaton being built and only surfaces much
+			// later, as a NullPointerException in whoever first asks that transition for its transition formula.
+			throw new AssertionError("Transferring the " + letter.getClass().getSimpleName() + " " + letter
+					+ " produced no letter");
+		}
 		mEdgeCache.put(letter, transferredLetter);
 		mEdgeCache.put(transferredLetter, letter);
 		return transferredLetter;
@@ -229,6 +244,19 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 		newReturn.setPayload(re.getPayload());
 		return newReturn;
 
+	}
+
+	/**
+	 * A {@link GotoEdge} carries no statements, but it does carry a transition formula and it does survive into the
+	 * ICFG: removing goto edges is off by default (see {@code IcfgPreferenceInitializer#LABEL_REMOVE_GOTO_EDGES}),
+	 * and a goto that cannot be merged away is kept as an ordinary internal edge.
+	 */
+	private GotoEdge getTransferGoto(final GotoEdge gotoEdge) {
+		final GotoEdge newGoto = new GotoEdge(gotoEdge.getSerialNumber(), (BoogieIcfgLocation) gotoEdge.getSource(),
+				(BoogieIcfgLocation) gotoEdge.getTarget(), mLogger);
+		newGoto.setTransitionFormula(transferTransFormulaWithMode(gotoEdge.getTransformula()));
+		newGoto.setPayload(gotoEdge.getPayload());
+		return newGoto;
 	}
 
 	private Summary getTransferSummary(final Summary sum) {
