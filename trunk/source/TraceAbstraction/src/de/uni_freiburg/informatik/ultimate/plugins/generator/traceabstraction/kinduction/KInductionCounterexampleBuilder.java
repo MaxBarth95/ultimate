@@ -182,7 +182,6 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	private STATE mFurthestLetterState;
 	private int mFurthestLetterStep = -1;
 
-
 	/** The number of pc steps to reconstruct: everything after it is the FINAL stutter self loop. */
 	private final int mSteps;
 
@@ -701,8 +700,16 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 			}
 			updates.put(assigned, current(((IProgramOldVar) assigned).getNonOldVar()));
 		}
+		// Everything of the callee the call did not give a value to starts the activation unconstrained. What the
+		// call did give a value to is what ssaOfTransFormula just recorded in "updates" - deliberately not
+		// localVarsAssignment.getAssignedVars(), which also reports a variable that the formula only *reads*
+		// without an outvar (computeAssignedVars counts that as havoced). For a call between two procedures the
+		// difference is invisible, because the caller's variables are not locals of the callee. For a recursive
+		// call they are the very same IProgramVars: the actual parameter's variable would then be taken for one the
+		// call assigns, so it would never be havoced here, never end up in the frame, and never be restored when
+		// the activation returns - leaving the caller reading the callee's value.
 		for (final ILocalProgramVar local : mCsToolkit.getSymbolTable().getLocals(callee)) {
-			if (!localVarsAssignment.getAssignedVars().contains(local)) {
+			if (!updates.containsKey(local)) {
 				updates.put(local, nextConstant(local));
 			}
 		}
