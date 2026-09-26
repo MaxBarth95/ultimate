@@ -228,11 +228,14 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// we sleep if not: thread or counterexample is available
 			final WorkerThreadResult<L, A> workerResult = getWorkerResult(didntFindCexLastIteration);
 			if (workerResult != null) {
+				final int refinementsBefore = mRefinementsDone;
 				final boolean terminate = handleWorkerResults(workerResult);
 				if (terminate) {
 					return;
 				}
-				abstractionWasRefined = true;
+				// Results without a verdict retire their worker but leave the abstraction as it is, which may still be
+				// the initial one: minimization rejects that for interprocedural programs (not an IDoubleDecker).
+				abstractionWasRefined = mRefinementsDone > refinementsBefore;
 			}
 
 			if (abstractionWasRefined && !mPref.minimizeAbstractionPerWorker()) {
