@@ -84,6 +84,7 @@ import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracechec
 import de.uni_freiburg.informatik.ultimate.logic.Logics;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.preferences.IcfgPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.absint.AbsIntInvariantStore;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.absint.AbsIntWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization.AutomataMinimizationTimeout;
@@ -119,11 +120,12 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private final int mNumImcWorkers;
 	private final int mNumSymExecWorkers;
 	private final int mNumKInductionWorkers;
-	private final int mNumAbsIntWorkers;
+	private final boolean mUseAbsIntWorker;
 	private int mRunningThreads = 0;
 	// Workers that finished without a verdict. They are gone from the pool and will produce nothing more.
 	private int mRetiredWorkers = 0;
-	private IInvariantSupplier<IPredicate> mAbsIntInvariants = IInvariantSupplier.none();
+	// Created with the abstract interpretation worker, null without it
+	private AbsIntInvariantStore mAbsIntInvariants;
 
 	// private final CompletionService<WorkerThreadResult<L, A>> mECS;
 	BlockingQueue<WorkerThreadTask<L>> mWorkerTaskQueue = new LinkedBlockingQueue<>();
@@ -191,9 +193,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		mNumImcWorkers = mPref.getNumImcWorkers();
 		mNumSymExecWorkers = mPref.getNumSymExecWorkers();
 		mNumKInductionWorkers = mPref.getNumKInductionWorkers();
-		mNumAbsIntWorkers = mPref.getNumAbsIntWorkers();
-		mThreadLimit =
-				mNumTaWorkers + mNumImcWorkers + mNumSymExecWorkers + mNumKInductionWorkers + mNumAbsIntWorkers;
+		mUseAbsIntWorker = mPref.useAbsIntWorker();
+		mThreadLimit = mNumTaWorkers + mNumImcWorkers + mNumSymExecWorkers + mNumKInductionWorkers
+				+ (mUseAbsIntWorker ? 1 : 0);
 		if (mThreadLimit == 0) {
 			throw new AssertionError(
 					"At least one parallel CEGAR worker thread must be configured (TA/IMC/SymExec/KInduction/AbsInt worker counts are all 0)");
@@ -294,9 +296,6 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// nothing to refine with, so the only thing to do is retire it and let the remaining workers finish.
 			// If it was the last one, nobody is left to decide and the honest answer is UNKNOWN - not a crash.
 			if (workerResult.noVerdict()) {
-				if (workerResult.getInvariants() != null) {
-					mAbsIntInvariants = workerResult.getInvariants();
-				}
 				mRetiredWorkers += 1;
 				mLogger.warn("Main: %s finished without a verdict (%d of %d worker(s) retired)",
 						workerResult.getWorkerType(), mRetiredWorkers, mThreadLimit);
@@ -369,9 +368,10 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		final IUltimateServiceProvider iterationServices = createIterationTimer(currentErrorLoc);
 		int id = 0;
 		try {
-			// First, while no pool thread exists yet: their constructors walk the ICFG, whose edge lists the other
-			// workers mutate whenever they transfer a letter.
-			for (int i = 0; i < mNumAbsIntWorkers; i++) {
+			// First, while no pool thread exists yet: its constructor walks the ICFG, whose edge lists the other
+			// workers mutate whenever they transfer a letter. The store must exist before any k-induction worker.
+			if (mUseAbsIntWorker) {
+				mAbsIntInvariants = new AbsIntInvariantStore(mCsToolkit, iterationServices);
 				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.ABSINT));
 				id++;
 			}
@@ -423,7 +423,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		if (workerType == WorkerType.ABSINT) {
 			// Runs on the main script's variables and needs no solver of its own.
 			return new AbsIntWorkerThread<>(mLogger, iterationServices, mAbstraction, mIcfg,
-					mCsToolkit.getManagedScript(), mWorkerResultQueue);
+					mCsToolkit.getManagedScript(), mAbsIntInvariants, mPref.getAbsIntDomains(), mWorkerResultQueue);
 		}
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(
@@ -466,7 +466,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			return new KInductionWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
 					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
-					transferUtils, mTaskIdentifier, IInvariantSupplier.none());
+					transferUtils, mTaskIdentifier, mAbsIntInvariants == null ? IInvariantSupplier.none()
+							: mAbsIntInvariants.supplierFor(freshToolKit.getManagedScript()));
 		case SYMEXEC:
 			// TODO: SymExec worker is not implemented yet; falls back to a TA worker for now.
 		case TA:
@@ -926,14 +927,6 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// use result
 			mAbstraction = newAbstraction;
 		}
-	}
-
-	/**
-	 * @return invariants of the main abstraction's states found by an abstract interpretation worker, native to the
-	 *         main script, or none if no such worker has finished without proving the program.
-	 */
-	public IInvariantSupplier<IPredicate> getAbsIntInvariants() {
-		return mAbsIntInvariants;
 	}
 
 	// worker use this method to access the programcache shared across all workers + main

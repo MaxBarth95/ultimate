@@ -117,7 +117,25 @@ public class FixpointEngineParameterFactory {
 	public <STATE extends IAbstractState<STATE>, LOC> FixpointEngineParameters<STATE, IcfgEdge, IProgramVarOrConst, LOC>
 			createParams(final IProgressAwareTimer timer, final ITransitionProvider<IcfgEdge, LOC> transitionProvider,
 					final ILoopDetector<IcfgEdge> loopDetector) {
-		final IAbstractDomain<STATE, IcfgEdge> domain = (IAbstractDomain<STATE, IcfgEdge>) selectDomain();
+		return buildParams(timer, transitionProvider, loopDetector, (IAbstractDomain<STATE, IcfgEdge>) selectDomain());
+	}
+
+	/**
+	 * Like {@link #createParams(IProgressAwareTimer, ITransitionProvider, ILoopDetector)}, but with the flat domain
+	 * named {@code domainName} (the simple class name, as in the preferences) instead of the preferred one.
+	 */
+	@SuppressWarnings("unchecked")
+	public <STATE extends IAbstractState<STATE>, LOC> FixpointEngineParameters<STATE, IcfgEdge, IProgramVarOrConst, LOC>
+			createParams(final IProgressAwareTimer timer, final ITransitionProvider<IcfgEdge, LOC> transitionProvider,
+					final ILoopDetector<IcfgEdge> loopDetector, final String domainName) {
+		final ILogger logger = mServices.getLoggingService().getLogger(Activator.PLUGIN_ID);
+		return buildParams(timer, transitionProvider, loopDetector,
+				(IAbstractDomain<STATE, IcfgEdge>) getFlatDomainOrFail(domainName, logger));
+	}
+
+	private <STATE extends IAbstractState<STATE>, LOC> FixpointEngineParameters<STATE, IcfgEdge, IProgramVarOrConst, LOC>
+			buildParams(final IProgressAwareTimer timer, final ITransitionProvider<IcfgEdge, LOC> transitionProvider,
+					final ILoopDetector<IcfgEdge> loopDetector, final IAbstractDomain<STATE, IcfgEdge> domain) {
 		final IAbstractStateStorage<STATE, IcfgEdge, LOC> storageProvider =
 				new IcfgAbstractStateStorageProvider<>(mServices, transitionProvider);
 

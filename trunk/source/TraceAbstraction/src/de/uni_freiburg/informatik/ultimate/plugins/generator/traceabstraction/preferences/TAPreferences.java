@@ -27,6 +27,10 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
 import de.uni_freiburg.informatik.ultimate.automata.AutomatonDefinitionPrinter.Format;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.IsEmptyHeuristic.AStarHeuristic;
 import de.uni_freiburg.informatik.ultimate.automata.petrinet.unfolding.PetriNetUnfolder.EventOrderEnum;
@@ -103,7 +107,8 @@ public final class TAPreferences {
 	private final int mNumSymExecWorkers;
 	private final int mNumKInductionWorkers;
 	private final int mKInductionSolverTimeout;
-	private final int mNumAbsIntWorkers;
+	private final boolean mAbsIntWorker;
+	private final List<String> mAbsIntDomains;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
 	private final int mSearchLoopBound;
@@ -218,7 +223,9 @@ public final class TAPreferences {
 		mNumKInductionWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_KINDUCTION_WORKERS);
 		mKInductionSolverTimeout =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_SOLVER_TIMEOUT);
-		mNumAbsIntWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_ABSINT_WORKERS);
+		mAbsIntWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_WORKER);
+		mAbsIntDomains = Arrays.stream(mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_DOMAINS)
+				.split(",")).map(String::trim).filter(domain -> !domain.isEmpty()).collect(Collectors.toList());
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY);
 		mMinimizeAbstractionPerWorker =
@@ -629,8 +636,15 @@ public final class TAPreferences {
 		return mKInductionSolverTimeout;
 	}
 
-	public int getNumAbsIntWorkers() {
-		return mNumAbsIntWorkers;
+	public boolean useAbsIntWorker() {
+		return mAbsIntWorker;
+	}
+
+	/**
+	 * @return the simple class names of the domains the abstract interpretation worker runs, in order
+	 */
+	public List<String> getAbsIntDomains() {
+		return mAbsIntDomains;
 	}
 
 	public boolean minimizeAbstractionPerWorker() {

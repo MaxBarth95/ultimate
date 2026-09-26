@@ -156,6 +156,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	// pc node of a loop head -> its invariant, over the program variables' term variables
 	private final Map<Integer, Term> mInjectedInvariants = new LinkedHashMap<>();
 	private final Map<Integer, Map<IProgramVar, TermVariable>> mInjectedInvariantVars = new LinkedHashMap<>();
+	// Supplied invariants that mention a variable outside the transition system, so that they are reported only once
+	private final Set<Term> mUnusableInvariants = new LinkedHashSet<>();
 
 	public KInduction(final IUltimateServiceProvider services, final ILogger logger,
 			final TaCheckAndRefinementPreferences<?> prefs, final CfgSmtToolkit csToolkit,
@@ -194,7 +196,6 @@ public class KInduction<LETTER extends IAction, STATE> {
 		mWorkerMgdScript.lock(mKILock);
 		try {
 			mConstants = new ConstantVars();
-			collectInvariants();
 
 			final Verdict verdict = kInduction();
 			mSafe = verdict == Verdict.SAFE;
@@ -260,6 +261,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 			if (!mServices.getProgressMonitorService().continueProcessing()) {
 				throw new ToolchainCanceledException(getClass(), "k-induction at k=" + k);
 			}
+			// The supplier may have learned more since the last k; asking never waits.
+			collectInvariants();
 			final LBool base = checkBase(k);
 			mLogger.info("KInduction: k=%d - base case: %s", k, base);
 			if (base == LBool.SAT) {
@@ -440,7 +443,9 @@ public class KInduction<LETTER extends IAction, STATE> {
 		}
 		for (final Map.Entry<CallNode<STATE>, Integer> head : mSystem.getHeadNodes().entrySet()) {
 			final Optional<Term> invariant = mInvariantSupplier.getInvariant(head.getKey(), mWorkerMgdScript);
-			if (invariant.isEmpty()) {
+			// Terms are unified by the script, so an unchanged invariant is the very same object.
+			if (invariant.isEmpty() || invariant.get() == mInjectedInvariants.get(head.getValue())
+					|| mUnusableInvariants.contains(invariant.get())) {
 				continue;
 			}
 			final Map<IProgramVar, TermVariable> used = new LinkedHashMap<>();
@@ -449,6 +454,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 				final IProgramVar pv = varOfTermVariable.get(tv);
 				if (pv == null) {
 					usable = false;
+					mUnusableInvariants.add(invariant.get());
 					mLogger.info("KInduction: ignoring invariant of loop head %s, it mentions %s which occurs in "
 							+ "no transition", head.getKey(), tv);
 					break;
