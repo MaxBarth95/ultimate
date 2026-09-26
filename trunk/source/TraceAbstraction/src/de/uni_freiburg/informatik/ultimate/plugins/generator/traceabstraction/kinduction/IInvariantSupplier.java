@@ -57,6 +57,16 @@ public interface IInvariantSupplier<STATE> {
 	Optional<Term> getInvariant(STATE loopHead, ManagedScript targetScript);
 
 	/**
+	 * Takes whatever the supplier has learned since the last call, without waiting. {@link #getInvariant} answers from
+	 * what was taken so far. A supplier whose invariants never change has nothing to take.
+	 *
+	 * @return true if some invariant may have changed since the last call
+	 */
+	default boolean update() {
+		return false;
+	}
+
+	/**
 	 * @return a supplier that never provides an invariant, i.e. plain (unstrengthened) k-induction.
 	 */
 	static <STATE> IInvariantSupplier<STATE> none() {

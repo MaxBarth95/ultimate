@@ -50,7 +50,7 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	public enum WorkerType
 
 	{
-		TA, IMC, SYMEXEC, KINDUCTION, ABSINT
+		TA, IMC, SYMEXEC, KINDUCTION, ABSINT, INVARIANT
 	}
 
 	/**

@@ -565,6 +565,14 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "CongruenceDomain, ExplicitValueDomain or OctagonDomain.";
 	private static final String DEF_ABSINT_DOMAINS = "IntervalDomain,OctagonDomain";
 
+	public static final String LABEL_INTERPOLANT_INVARIANTS =
+			"Check interpolants of TA workers for invariants for k-induction";
+	private static final String DESC_INTERPOLANT_INVARIANTS =
+			"If there is a k-induction worker, every TA worker hands the interpolants of each infeasible counterexample "
+					+ "to the invariant supplier. It checks which of them are inductive invariants of the program and "
+					+ "gives those to the k-induction workers while they run.";
+	private static final boolean DEF_INTERPOLANT_INVARIANTS = true;
+
 	public static final String LABEL_MINIMIZE_ABSTRACTION_PER_WORKER =
 			"Minimize Abstraction every time a worker is done";
 	private static final boolean DEF_MINIMIZE_ABSTRACTION_PER_WORKER = true;
@@ -886,6 +894,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_ABSINT_DOMAINS, DEF_ABSINT_DOMAINS, DESC_ABSINT_DOMAINS,
 						PreferenceType.String),
+				new UltimatePreferenceItem<>(LABEL_INTERPOLANT_INVARIANTS, DEF_INTERPOLANT_INVARIANTS,
+						DESC_INTERPOLANT_INVARIANTS, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_SEARCH_LOOP_BOUND, DEF_SEARCH_LOOP_BOUND, DESC_SEARCH_LOOP_BOUND,
 						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(-1, 1_0000_000)),
 				new UltimatePreferenceItem<>(LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY, DEF_PARALLELSEARCH_ACTIVE_CEX_ONLY,

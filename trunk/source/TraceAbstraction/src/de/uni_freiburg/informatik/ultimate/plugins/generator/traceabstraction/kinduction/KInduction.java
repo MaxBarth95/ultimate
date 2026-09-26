@@ -46,7 +46,6 @@ import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceP
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IAction;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateUtils;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.taskidentifier.TaskIdentifier;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.PureSubstitution;
@@ -58,7 +57,6 @@ import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Sort;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.LoopTree;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.PcTransitionSystem.StepVars;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
@@ -158,6 +156,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private final Map<Integer, Map<IProgramVar, TermVariable>> mInjectedInvariantVars = new LinkedHashMap<>();
 	// Supplied invariants that mention a variable outside the transition system, so that they are reported only once
 	private final Set<Term> mUnusableInvariants = new LinkedHashSet<>();
+	// Whether the supplier was asked about every loop head at least once
+	private boolean mInvariantsCollected;
 
 	public KInduction(final IUltimateServiceProvider services, final ILogger logger,
 			final TaCheckAndRefinementPreferences<?> prefs, final CfgSmtToolkit csToolkit,
@@ -186,8 +186,10 @@ public class KInduction<LETTER extends IAction, STATE> {
 		mLogger.info("KInduction: starting k-induction (MAX_K=%d)", MAX_K);
 		// Building the loop tree composes transition formulas, which declares constants for their aux vars and thus
 		// locks the script itself. So the tree has to be complete before we take the lock for the solver queries.
-		final LoopTree<CallNode<STATE>> tree = buildLoopTree();
-		mSystem = new PcTransitionSystem<>(tree);
+		final PcTransitionSystemFactory.Result<LETTER, STATE> encoding =
+				PcTransitionSystemFactory.build(mServices, mLogger, mCsToolkit, mWorkerMgdScript, mAbstraction);
+		mSystem = encoding.system();
+		mSummaries = encoding.summaries();
 		mLogger.info(
 				"KInduction: transition system with %d pc value(s), %d transition(s), %d variable(s), %d loop head(s)",
 				mSystem.getNumNodes(), mSystem.getNumTransitions(), mSystem.getVars().size(),
@@ -195,7 +197,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 
 		mWorkerMgdScript.lock(mKILock);
 		try {
-			mConstants = new ConstantVars();
+			mConstants = new IndexedConstantVars(mWorkerMgdScript.getScript(), mIndexedConstantsWorkerScript,
+					"ki");
 
 			final Verdict verdict = kInduction();
 			mSafe = verdict == Verdict.SAFE;
@@ -215,45 +218,6 @@ public class KInduction<LETTER extends IAction, STATE> {
 		}
 		mLogger.info("is safe " + mSafe);
 		mLogger.info("solver returned unknown: " + mSolverReturnedUnknown);
-	}
-
-	/**
-	 * The loop tree of the program. Its nodes are {@link CallNode}s: a state together with the call sites it was
-	 * reached through. If the abstraction has no call transition every node is at depth zero and the tree is the whole
-	 * automaton, as it always was. Otherwise every call site is first resolved by {@link ProcedureSummaries} - into a
-	 * virtual call edge if the callee can be summarized, into an unfolded copy of the callee if it contains a loop -
-	 * and the tree is built for the resulting graph, which has no call and no return transition left. A call that
-	 * stayed in it would be unsound, see {@link LoopTreeFormulaBuilder}.
-	 */
-	private LoopTree<CallNode<STATE>> buildLoopTree() {
-		final UnfoldedGraph<LETTER, STATE> graph = new UnfoldedGraph<>(mAbstraction);
-		if (!hasCallTransitions()) {
-			return new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, graph,
-					roots(mAbstraction.getStates()), roots(mAbstraction.getInitialStates()),
-					roots(mAbstraction.getFinalStates()), Collections.emptyMap(), Collections.emptySet()).build();
-		}
-		mSummaries = new ProcedureSummaries<>(mServices, mLogger, mCsToolkit, mWorkerMgdScript, mAbstraction);
-		return new LoopTreeFormulaBuilder<>(mServices, mLogger, mWorkerMgdScript, mSummaries.getGraph(),
-				mSummaries.getScopeStates(), mSummaries.getInitStates(), mSummaries.getFinalStates(),
-				mSummaries.getVirtualCallEdges(), mSummaries.getSealedStates()).build();
-	}
-
-	/** The given states as nodes with no pending call, for a program in which nothing is ever called. */
-	private Set<CallNode<STATE>> roots(final Iterable<STATE> states) {
-		final Set<CallNode<STATE>> result = new LinkedHashSet<>();
-		for (final STATE state : states) {
-			result.add(CallNode.root(state));
-		}
-		return result;
-	}
-
-	private boolean hasCallTransitions() {
-		for (final STATE state : mAbstraction.getStates()) {
-			if (mAbstraction.callSuccessors(state).iterator().hasNext()) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private Verdict kInduction() {
@@ -434,9 +398,13 @@ public class KInduction<LETTER extends IAction, STATE> {
 
 	/**
 	 * Asks the supplier for an invariant of every loop head and keeps those that only mention variables of the
-	 * transition system.
+	 * transition system. Never waits: if the supplier has nothing new since the last call, nothing changes.
 	 */
 	private void collectInvariants() {
+		if (!mInvariantSupplier.update() && mInvariantsCollected) {
+			return;
+		}
+		mInvariantsCollected = true;
 		final Map<TermVariable, IProgramVar> varOfTermVariable = new HashMap<>();
 		for (final IProgramVar pv : mSystem.getVars()) {
 			varOfTermVariable.put(pv.getTermVariable(), pv);
@@ -516,38 +484,6 @@ public class KInduction<LETTER extends IAction, STATE> {
 		}
 		mLogger.info("KInduction: learned an invariant for %d loop head(s) from k=%d", mLearnedInvariants.size(),
 				mProvedK);
-	}
-
-	/**
-	 * Unrolling with constants, for solver queries. Auxiliary variables are separate constants per transition and step,
-	 * so different steps do not share their values.
-	 */
-	private final class ConstantVars implements StepVars {
-		private final Sort mPcSort = PcTransitionSystem.pcValue(mWorkerMgdScript.getScript(), 0).getSort();
-
-		@Override
-		public Term var(final IProgramVar pv, final int idx) {
-			return PredicateUtils.getIndexedConstant(pv, idx, mIndexedConstantsWorkerScript,
-					mWorkerMgdScript.getScript());
-		}
-
-		@Override
-		public Term pc(final int idx) {
-			return PredicateUtils.getIndexedConstant("kipc", mPcSort, idx, mIndexedConstantsWorkerScript,
-					mWorkerMgdScript.getScript());
-		}
-
-		@Override
-		public Term aux(final int transitionId, final TermVariable auxVar, final int idx) {
-			return PredicateUtils.getIndexedConstant("kiaux_" + transitionId + "_" + auxVar.getName(), auxVar.getSort(),
-					idx, mIndexedConstantsWorkerScript, mWorkerMgdScript.getScript());
-		}
-
-		@Override
-		public Term sel(final int idx) {
-			return PredicateUtils.getIndexedConstant("kisel", mPcSort, idx, mIndexedConstantsWorkerScript,
-					mWorkerMgdScript.getScript());
-		}
 	}
 
 	/**

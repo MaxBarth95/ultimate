@@ -83,12 +83,14 @@ import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverB
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracecheck.InterpolationTechnique;
 import de.uni_freiburg.informatik.ultimate.logic.Logics;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.preferences.IcfgPreferenceInitializer;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.absint.AbsIntInvariantStore;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.absint.AbsIntWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization.AutomataMinimizationTimeout;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolModelCheckingWorkerThread;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.IInvariantSink;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.InvariantSupplier;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.IInvariantSupplier;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.KInductionWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
@@ -124,8 +126,13 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private int mRunningThreads = 0;
 	// Workers that finished without a verdict. They are gone from the pool and will produce nothing more.
 	private int mRetiredWorkers = 0;
-	// Created with the abstract interpretation worker, null without it
-	private AbsIntInvariantStore mAbsIntInvariants;
+	// Collects invariants from the AbsInt and TA workers for the k-induction workers. Null unless there is a
+	// k-induction worker and someone to feed it; runs on mInvariantExec, outside the worker pool, since it never
+	// decides the program.
+	private InvariantSupplier<L, A> mInvariantSupplier;
+	private ExecutorService mInvariantExec;
+	// Set before the workers are shut down and their solvers destroyed: a query failing from then on is no crash.
+	private volatile boolean mShuttingDown;
 
 	// private final CompletionService<WorkerThreadResult<L, A>> mECS;
 	BlockingQueue<WorkerThreadTask<L>> mWorkerTaskQueue = new LinkedBlockingQueue<>();
@@ -216,6 +223,25 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 */
 	@Override
 	protected void iterate() throws AutomataLibraryException {
+		try {
+			iterateWithWorkers();
+		} finally {
+			// Not every way out of the loop shuts the pool down, but the supplier would wait for messages forever.
+			mShuttingDown = true;
+			if (mInvariantExec != null) {
+				mInvariantExec.shutdownNow();
+			}
+		}
+	}
+
+	/**
+	 * @return whether the loop is done, so that a worker whose solver is destroyed under a query stops quietly
+	 */
+	public boolean isShuttingDown() {
+		return mShuttingDown;
+	}
+
+	private void iterateWithWorkers() throws AutomataLibraryException {
 		// TODO manage time and timeout
 		boolean didntFindCexLastIteration = false;
 		setUpWorkerThreads();
@@ -368,12 +394,28 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		final IUltimateServiceProvider iterationServices = createIterationTimer(currentErrorLoc);
 		int id = 0;
 		try {
+			// The supplier's channels must exist before any worker that feeds or reads them.
+			final TransferBetweenMainAndWorker<L, IPredicate> invariantTransfer;
+			if (needsInvariantSupplier()) {
+				invariantTransfer = new TransferBetweenMainAndWorker<>(new AutomataLibraryServices(mServices), mLogger,
+						mCsToolkit.getManagedScript(), iterationServices,
+						getSolverSettings(WorkerType.INVARIANT, "InvariantSupplier"), mCsToolkit,
+						freshVarPrefix(WorkerType.INVARIANT, id));
+				mInvariantSupplier = new InvariantSupplier<>(mLogger, iterationServices,
+						invariantTransfer.getWorkerCfgSmtToolKit(), mWorkerResultQueue, this::isShuttingDown);
+			} else {
+				invariantTransfer = null;
+			}
 			// First, while no pool thread exists yet: its constructor walks the ICFG, whose edge lists the other
-			// workers mutate whenever they transfer a letter. The store must exist before any k-induction worker.
+			// workers mutate whenever they transfer a letter.
 			if (mUseAbsIntWorker) {
-				mAbsIntInvariants = new AbsIntInvariantStore(mCsToolkit, iterationServices);
 				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.ABSINT));
 				id++;
+			}
+			if (mInvariantSupplier != null) {
+				mInvariantSupplier.setAbstraction(transferForInvariantSupplier(invariantTransfer));
+				mInvariantExec = Executors.newSingleThreadExecutor();
+				mInvariantExec.submit(mInvariantSupplier);
 			}
 			for (int i = 0; i < mNumTaWorkers; i++) {
 				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.TA));
@@ -415,7 +457,45 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 * their variable names exactly as they were.
 	 */
 	private static String freshVarPrefix(final WorkerType workerType, final int id) {
-		return workerType == WorkerType.KINDUCTION ? "ki" + id + "_" : "";
+		switch (workerType) {
+		case KINDUCTION:
+			return "ki" + id + "_";
+		case INVARIANT:
+			// Builds the same loop tree as k-induction, so it is exposed to the same collision.
+			return "inv_";
+		default:
+			return "";
+		}
+	}
+
+	/**
+	 * Only k-induction consumes invariants, AbsInt and the TA workers produce them.
+	 */
+	private boolean needsInvariantSupplier() {
+		return mNumKInductionWorkers > 0 && (mUseAbsIntWorker || interpolantsFeedInvariantSupplier());
+	}
+
+	/** SymExec workers are still TA workers, see {@link #setUpWorkerThread}. */
+	private boolean interpolantsFeedInvariantSupplier() {
+		return mNumTaWorkers + mNumSymExecWorkers > 0 && mPref.submitInterpolantInvariants();
+	}
+
+	private IInvariantSink invariantSink(final boolean enabled) {
+		return mInvariantSupplier == null || !enabled ? IInvariantSink.none() : mInvariantSupplier.sink();
+	}
+
+	/**
+	 * The initial abstraction, as an automaton of the invariant supplier's script.
+	 */
+	private INestedWordAutomaton<L, IPredicate>
+			transferForInvariantSupplier(final TransferBetweenMainAndWorker<L, IPredicate> transfer) {
+		final CfgSmtToolkit toolkit = transfer.getWorkerCfgSmtToolKit();
+		final PredicateFactory predicateFactory =
+				new PredicateFactory(mServices, toolkit.getManagedScript(), toolkit.getSymbolTable());
+		final PredicateFactoryForInterpolantAutomata emptyStackFactory =
+				new PredicateFactoryForInterpolantAutomata(toolkit.getManagedScript(), predicateFactory, false);
+		return (INestedWordAutomaton<L, IPredicate>) transfer.transferAutomaton(mAbstraction, emptyStackFactory,
+				TransferMode.MAIN2WORKER);
 	}
 
 	private ICegarNwaWorkerThread<L, A> setUpWorkerThread(final IUltimateServiceProvider iterationServices,
@@ -423,7 +503,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		if (workerType == WorkerType.ABSINT) {
 			// Runs on the main script's variables and needs no solver of its own.
 			return new AbsIntWorkerThread<>(mLogger, iterationServices, mAbstraction, mIcfg,
-					mCsToolkit.getManagedScript(), mAbsIntInvariants, mPref.getAbsIntDomains(), mWorkerResultQueue);
+					mCsToolkit, invariantSink(true), mPref.getAbsIntDomains(), mWorkerResultQueue);
 		}
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(
@@ -466,15 +546,15 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			return new KInductionWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
 					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
-					transferUtils, mTaskIdentifier, mAbsIntInvariants == null ? IInvariantSupplier.none()
-							: mAbsIntInvariants.supplierFor(freshToolKit.getManagedScript()));
+					transferUtils, mTaskIdentifier, mInvariantSupplier == null ? IInvariantSupplier.none()
+							: mInvariantSupplier.subscribe(freshToolKit.getManagedScript()));
 		case SYMEXEC:
 			// TODO: SymExec worker is not implemented yet; falls back to a TA worker for now.
 		case TA:
 			return new CegarNwaWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
 					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
-					transferUtils);
+					transferUtils, invariantSink(interpolantsFeedInvariantSupplier()));
 		default:
 			throw new AssertionError("Unknown worker type " + workerType);
 		}
@@ -569,7 +649,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	private void shutDownAndDestroy(final Object marker) {
+		mShuttingDown = true;
 		mExec.shutdownNow();
+		if (mInvariantExec != null) {
+			mInvariantExec.shutdownNow();
+		}
 		final Set<String> destroyedStorables = getServices().getStorage().destroyMarker(marker);
 		if (!destroyedStorables.isEmpty()) {
 			mLogger.warn("Destroyed unattended storables created during the last iteration: "

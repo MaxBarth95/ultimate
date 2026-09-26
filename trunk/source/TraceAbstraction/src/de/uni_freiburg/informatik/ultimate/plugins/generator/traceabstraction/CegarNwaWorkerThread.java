@@ -70,6 +70,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.tracehandling.I
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.tracehandling.ITraceCheckStrategyModule;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils.SimplificationTechnique;
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.Counterexample;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.interpolant.QualifiedTracePredicates;
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracecheck.TraceCheckUtils;
 import de.uni_freiburg.informatik.ultimate.logic.SMTLIBException;
 import de.uni_freiburg.informatik.ultimate.logic.Script;
@@ -82,6 +83,8 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.Tr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.errorabstraction.ErrorGeneralizationEngine;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.AbstractInterpolantAutomaton;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.IInvariantSink;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.InvariantMessage.InterpolantSequence;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.DeterministicInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.NondeterministicInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
@@ -123,6 +126,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	private final TransferBetweenMainAndWorker<L, IPredicate> mNwaCexTransferrer;
 
 	private final PathProgramCache<L> mProgramCache;
+	// where the interpolants of every infeasible counterexample go, to be checked for invariants
+	private final IInvariantSink mInvariantSink;
 	private long mIdleTime = 0;
 	private long mWastedTime = 0;
 	private int mWastedWork = 0;
@@ -153,7 +158,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			final ParallelNwaCegarLoop<L, A> mainThread,
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
 			final BlockingQueue<WorkerThreadTask<L>> workerTaskQueue,
-			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils) throws InterruptedException {
+			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils, final IInvariantSink invariantSink)
+			throws InterruptedException {
 
 		mLogger = logger;
 		mPref = pref;
@@ -177,6 +183,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		mNwaCexTransferrer = transferWorkerUtils;
 		mAbstraction = (INestedWordAutomaton<L, IPredicate>) getAbstraction();
 		mProgramCache = new PathProgramCache<>(mLogger);
+		mInvariantSink = invariantSink;
 
 		final Thread.UncaughtExceptionHandler exhandler = (th, ex) -> {
 			mThreadResult = new WorkerThreadResult<>(WorkerType.TA, null, null, null, mCounterexample, null, true);
@@ -241,6 +248,9 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 					final Counterexample<L> counterexample = new Counterexample<>(mCounterexample.getWord(), locations);
 					final ITARefinementStrategy<L> strategy = setUpStrategy(counterexample);
 					final Pair<LBool, IProgramExecution<L, Term>> isCexResult = isCounterexampleFeasible(strategy);
+					if (isCexResult.getFirst() == LBool.UNSAT) {
+						submitInterpolants();
+					}
 					mIdleTime += ((System.nanoTime() / 1000000000) - time);
 
 					mUpdatingATime += ((System.nanoTime() / 1000000000) - time);
@@ -259,6 +269,26 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}
+		}
+	}
+
+	/**
+	 * Hands every interpolant sequence of the infeasibility proof to the invariant supplier, which keeps what is
+	 * inductive. The interpolants are terms of this worker's script; the supplier copies them on its own thread.
+	 */
+	private void submitInterpolants() {
+		final List<QualifiedTracePredicates> sequences = mRefinementResult.getUsedTracePredicates();
+		if (sequences == null) {
+			return;
+		}
+		final List<IcfgLocation> locations = getIcfgLocationsFromRun(mCounterexample);
+		// The interpolants are those between two letters, i.e. at the states 1..n-1 of the run.
+		final List<IcfgLocation> inner = locations.subList(1, locations.size() - 1);
+		for (final QualifiedTracePredicates sequence : sequences) {
+			final List<Term> interpolants =
+					sequence.getPredicates().stream().map(IPredicate::getFormula).collect(Collectors.toList());
+			mInvariantSink.submit(new InterpolantSequence(mCfgSmtToolkit.getManagedScript(), inner, interpolants,
+					"TA " + sequence.getOrigin().getSimpleName()));
 		}
 	}
 

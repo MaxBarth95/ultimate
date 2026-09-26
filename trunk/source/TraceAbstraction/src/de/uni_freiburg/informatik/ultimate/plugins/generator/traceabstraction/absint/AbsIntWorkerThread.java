@@ -45,17 +45,21 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.absint.IAbstrac
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.absint.IAbstractState;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfg;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgEdge;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVarOrConst;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicate;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.TermTransferrer;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder;
+import de.uni_freiburg.informatik.ultimate.logic.Logics;
 import de.uni_freiburg.informatik.ultimate.logic.Script;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.algorithm.FixpointEngine;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.algorithm.FixpointEngineParameters;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.algorithm.rcfg.RCFGLiteralCollector;
-import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.algorithm.rcfg.RcfgLoopDetector;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.IVariableMappedTermProvider;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.nonrelational.NonrelationalPostOperator;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.nonrelational.NonrelationalTermUtils;
@@ -64,13 +68,17 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.IC
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ParallelNwaCegarLoop;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.IInvariantSink;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.InvariantMessage.TrustedInvariants;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.InvariantSupplier;
 
 /**
  * Single-shot worker of {@link ParallelNwaCegarLoop} running abstract interpretation on the initial abstraction, with
  * one domain after the other: SAFE as soon as one proves no error state reachable, otherwise each fixpoint is
- * published to an {@link AbsIntInvariantStore}. The fixpoint runs off the main thread on main-script variables, so it
- * must not touch the main script; the constructor (main thread) does all ICFG-dependent setup and skips the domains
- * for which the fixpoint would.
+ * submitted to the {@link InvariantSupplier} as invariants of the program locations. The fixpoint runs off the main
+ * thread on main-script variables, so it must not touch the main script; the constructor (main thread) does all
+ * ICFG-dependent setup and skips the domains for which the fixpoint would. The terms are built in a script of the
+ * worker's own, which only it builds terms in.
  *
  * @author Max Barth (max.barth@lmu.de)
  */
@@ -83,8 +91,10 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 
 	private final ILogger mLogger;
 	private final BlockingQueue<WorkerThreadResult<L, A>> mResultQueue;
-	private final AbsIntInvariantStore mStore;
-	private final TermTransferrer mMainToStore;
+	private final IInvariantSink mSink;
+	// Only this worker builds terms in it; the supplier reads them.
+	private final ManagedScript mTermScript;
+	private final TermTransferrer mMainToTermScript;
 	// Why the worker cannot run at all, or null
 	private final String mUnsupported;
 	private final List<DomainRun> mRuns;
@@ -95,12 +105,16 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 	 */
 	public AbsIntWorkerThread(final ILogger logger, final IUltimateServiceProvider services,
 			final INestedWordAutomaton<L, IPredicate> abstraction, final IIcfg<?> icfg,
-			final ManagedScript mainScript, final AbsIntInvariantStore store, final List<String> domains,
+			final CfgSmtToolkit mainCsToolkit, final IInvariantSink sink, final List<String> domains,
 			final BlockingQueue<WorkerThreadResult<L, A>> resultQueue) {
 		mLogger = logger;
 		mResultQueue = resultQueue;
-		mStore = store;
-		mMainToStore = new TermTransferrer(mainScript.getScript(), store.getScript().getScript());
+		mSink = sink;
+		// Only used to build terms, never to solve, so an in-process SMTInterpol suffices. Created here, on the main
+		// thread, because the main script's declarations are replayed onto it.
+		mTermScript = mainCsToolkit.createFreshManagedScript(services,
+				SolverBuilder.constructSolverSettings().setSolverLogics(Logics.ALL), "AbsIntTerms", "absint_");
+		mMainToTermScript = new TermTransferrer(mainCsToolkit.getManagedScript().getScript(), mTermScript.getScript());
 
 		NwaTransitionProvider transitionProvider = null;
 		String unsupported = null;
@@ -122,11 +136,13 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 				new FixpointEngineParameterFactory(icfg, () -> literals, services);
 		final boolean hasCallWithArguments =
 				transitionProvider.getActions().stream().anyMatch(AbsIntWorkerThread::isCallWithArguments);
+		final NwaLoopDetector loopDetector = new NwaLoopDetector(transitionProvider);
+		mLogger.info("AbsInt: widening at %d loop head(s)", loopDetector.getLoopHeads().size());
 
 		final List<DomainRun> runs = new ArrayList<>();
 		for (final String domain : domains) {
 			final FixpointEngineParameters<?, IcfgEdge, IProgramVarOrConst, IPredicate> params = factory
-					.createParams(services.getProgressMonitorService(), transitionProvider, new RcfgLoopDetector<>(),
+					.createParams(services.getProgressMonitorService(), transitionProvider, loopDetector,
 							domain);
 			// On a return, NonrelationalPostOperator translates the call's arguments into terms of the main script.
 			// Asking for the post operator also creates it, here on the main thread.
@@ -137,7 +153,7 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 				continue;
 			}
 			runs.add(new DomainRun(domain,
-					prepareFixpoint(params, transitionProvider, mStore.getScript().getScript())));
+					prepareFixpoint(params, transitionProvider, mTermScript.getScript())));
 		}
 		return runs;
 	}
@@ -201,9 +217,9 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 				return new WorkerThreadResult<>(WorkerType.ABSINT, null, null, null, null, null, false);
 			}
 			try {
-				final Map<IPredicate, Term> invariants = toStoreTerms(result);
-				mStore.publish(invariants);
-				mLogger.info("AbsInt: published invariants of %d state(s) found by %s", invariants.size(),
+				final Map<IcfgLocation, Term> invariants = toTerms(result);
+				mSink.submit(new TrustedInvariants(mTermScript, invariants, "AbsInt " + run.domain()));
+				mLogger.info("AbsInt: submitted invariants of %d location(s) found by %s", invariants.size(),
 						run.domain());
 			} catch (final UnsupportedOperationException e) {
 				mLogger.warn("AbsInt: cannot publish the invariants of %s, %s", run.domain(), e.getMessage());
@@ -213,24 +229,29 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 		return WorkerThreadResult.noVerdict(WorkerType.ABSINT);
 	}
 
-	private Map<IPredicate, Term> toStoreTerms(final IAbstractInterpretationResult<?, IcfgEdge, IPredicate> result) {
-		final Script storeScript = mStore.getScript().getScript();
-		final Map<IPredicate, Term> invariants = new HashMap<>();
+	/**
+	 * The fixpoint as invariants of program locations, in {@link #mTermScript}. Two states of one location, which the
+	 * initial abstraction does not have, would be joined by a disjunction.
+	 */
+	private Map<IcfgLocation, Term> toTerms(final IAbstractInterpretationResult<?, IcfgEdge, IPredicate> result) {
+		final Script termScript = mTermScript.getScript();
+		final Map<IcfgLocation, Term> invariants = new HashMap<>();
 		for (final Entry<IPredicate, ?> entry : result.getLoc2SingleStates().entrySet()) {
 			if (!(entry.getValue() instanceof IVariableMappedTermProvider)) {
 				throw new UnsupportedOperationException(
 						entry.getValue().getClass().getSimpleName() + " cannot be turned into terms of another script");
 			}
-			invariants.put(entry.getKey(),
-					((IVariableMappedTermProvider) entry.getValue()).getTerm(storeScript, this::storeTermOf));
+			final Term term = ((IVariableMappedTermProvider) entry.getValue()).getTerm(termScript, this::termOf);
+			invariants.merge(InvariantSupplier.locationOf(entry.getKey()), term,
+					(older, newer) -> SmtUtils.or(termScript, older, newer));
 		}
 		return invariants;
 	}
 
 	/**
-	 * Only reads the main-script term of the variable; the copy is built in the store's script.
+	 * Only reads the main-script term of the variable; the copy is built in the worker's own script.
 	 */
-	private Term storeTermOf(final IProgramVarOrConst variable) {
-		return mMainToStore.transform(NonrelationalTermUtils.getTermVar(variable));
+	private Term termOf(final IProgramVarOrConst variable) {
+		return mMainToTermScript.transform(NonrelationalTermUtils.getTermVar(variable));
 	}
 }

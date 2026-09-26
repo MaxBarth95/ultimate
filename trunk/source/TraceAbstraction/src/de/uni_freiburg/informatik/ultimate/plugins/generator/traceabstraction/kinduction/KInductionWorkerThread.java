@@ -146,45 +146,45 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	@Override
 	public void run() {
 		Thread.currentThread().setName("KInduction Thread");
-		while (!Thread.currentThread().isInterrupted()) {
+		try {
+			mLogger.info("WorkerThread for KInduction Starts");
+			mIteration = 1;
+			switch (runKInduction()) {
+			case SAFE:
+				mBlockingQueueForResults
+						.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null, null, null, null, null, false));
+				break;
+			case UNSAFE:
+				// The violation is already registered on the shared result builder. AutomatonType.ERROR is what
+				// tells the main thread that this is a refutation and not the "safe" sentinel, which carries a
+				// null automaton type; no subtrahend, because there is nothing left to refine.
+				mBlockingQueueForResults.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null,
+						AutomatonType.ERROR, null, null, null, false));
+				break;
+			case NO_VERDICT:
+				mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.KINDUCTION));
+				break;
+			default:
+				throw new AssertionError("unknown k-induction verdict");
+			}
+		} catch (final InterruptedException e) {
+			Thread.currentThread().interrupt();
+		} catch (final Throwable t) {
+			if (mMainThread.isShuttingDown()) {
+				// Another worker decided and the main thread destroyed our solver under a running query.
+				mLogger.info("KInduction worker: stopping, shut down during a query (" + t + ")");
+				return;
+			}
+			mLogger.error("KInduction worker crashed: " + t);
+			for (final StackTraceElement element : t.getStackTrace()) {
+				mLogger.error("\tat " + element);
+			}
 			try {
-				mLogger.info("WorkerThread for KInduction Starts");
-				mIteration = 1;
-
-				switch (runKInduction()) {
-				case SAFE:
-					mBlockingQueueForResults
-							.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null, null, null, null, null, false));
-					return;
-				case UNSAFE:
-					// The violation is already registered on the shared result builder. AutomatonType.ERROR is what
-					// tells the main thread that this is a refutation and not the "safe" sentinel, which carries a
-					// null automaton type; no subtrahend, because there is nothing left to refine.
-					mBlockingQueueForResults.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null,
-							AutomatonType.ERROR, null, null, null, false));
-					return;
-				case NO_VERDICT:
-					mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.KINDUCTION));
-					return;
-				default:
-					throw new AssertionError("unknown k-induction verdict");
-				}
-
+				mBlockingQueueForResults
+						.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null, null, null, null, null, true));
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
-			} catch (final Throwable t) {
-				mLogger.error("KInduction worker crashed: " + t);
-				for (final StackTraceElement element : t.getStackTrace()) {
-					mLogger.error("\tat " + element);
-				}
-				try {
-					mBlockingQueueForResults
-							.put(new WorkerThreadResult<>(WorkerType.KINDUCTION, null, null, null, null, null, true));
-				} catch (final InterruptedException e) {
-					e.printStackTrace();
-				}
 			}
-			return;
 		}
 	}
 
