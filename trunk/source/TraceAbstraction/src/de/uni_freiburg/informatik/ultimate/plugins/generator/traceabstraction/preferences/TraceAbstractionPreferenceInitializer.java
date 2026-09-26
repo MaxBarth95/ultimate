@@ -553,6 +553,14 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "external solver command says instead. Supported for z3, cvc4 and cvc5.";
 	private static final Integer DEF_KINDUCTION_SOLVER_TIMEOUT = 60 * 60 * 1000;
 
+	public static final String LABEL_NUM_ABSINT_WORKERS =
+			"Number of abstract interpretation workers in Parallel Trace Abstraction";
+	private static final String DESC_NUM_ABSINT_WORKERS =
+			"Runs abstract interpretation on the initial abstraction, using the domain selected in the "
+					+ "AbstractInterpretationV2 settings (not Array or Compound). One worker suffices: the analysis is "
+					+ "deterministic.";
+	private static final Integer DEF_NUM_ABSINT_WORKERS = 0;
+
 	public static final String LABEL_MINIMIZE_ABSTRACTION_PER_WORKER =
 			"Minimize Abstraction every time a worker is done";
 	private static final boolean DEF_MINIMIZE_ABSTRACTION_PER_WORKER = true;
@@ -870,6 +878,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 				new UltimatePreferenceItem<>(LABEL_KINDUCTION_SOLVER_TIMEOUT, DEF_KINDUCTION_SOLVER_TIMEOUT,
 						DESC_KINDUCTION_SOLVER_TIMEOUT, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(-1, 1_0000_000)),
+				new UltimatePreferenceItem<>(LABEL_NUM_ABSINT_WORKERS, DEF_NUM_ABSINT_WORKERS, DESC_NUM_ABSINT_WORKERS,
+						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(0, 1_0000_000)),
 				new UltimatePreferenceItem<>(LABEL_SEARCH_LOOP_BOUND, DEF_SEARCH_LOOP_BOUND, DESC_SEARCH_LOOP_BOUND,
 						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(-1, 1_0000_000)),
 				new UltimatePreferenceItem<>(LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY, DEF_PARALLELSEARCH_ACTIVE_CEX_ONLY,

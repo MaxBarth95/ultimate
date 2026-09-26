@@ -35,6 +35,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateFactory;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.NwaCegarLoop.AutomatonType;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.IInvariantSupplier;
 
 public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> {
 
@@ -45,12 +46,13 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	PredicateFactory mPredicateFactory;
 	private final boolean mWorkerCrashed;
 	private final boolean mNoVerdict;
+	private final IInvariantSupplier<IPredicate> mInvariants;
 	WorkerType mWorkerType;
 
 	public enum WorkerType
 
 	{
-		TA, IMC, SYMEXEC, KINDUCTION
+		TA, IMC, SYMEXEC, KINDUCTION, ABSINT
 	}
 
 	/**
@@ -61,13 +63,14 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 			final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahend, final AutomatonType automatonType,
 			final ManagedScript mgdScript, final IRun<L, ?> counterexample, final PredicateFactory predicateFactory,
 			final boolean workerCrashed) {
-		this(workerType, subtrahend, automatonType, mgdScript, counterexample, predicateFactory, workerCrashed, false);
+		this(workerType, subtrahend, automatonType, mgdScript, counterexample, predicateFactory, workerCrashed, false,
+				null);
 	}
 
 	private WorkerThreadResult(final WorkerType workerType,
 			final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahend, final AutomatonType automatonType,
 			final ManagedScript mgdScript, final IRun<L, ?> counterexample, final PredicateFactory predicateFactory,
-			final boolean workerCrashed, final boolean noVerdict) {
+			final boolean workerCrashed, final boolean noVerdict, final IInvariantSupplier<IPredicate> invariants) {
 		mWorkerType = workerType;
 		mSubtrahend = subtrahend;
 		mAutomatonType = automatonType;
@@ -76,6 +79,7 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 		mPredicateFactory = predicateFactory;
 		mWorkerCrashed = workerCrashed;
 		mNoVerdict = noVerdict;
+		mInvariants = invariants;
 	}
 
 	/**
@@ -84,7 +88,15 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	 */
 	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
 			noVerdict(final WorkerType workerType) {
-		return new WorkerThreadResult<>(workerType, null, null, null, null, null, false, true);
+		return new WorkerThreadResult<>(workerType, null, null, null, null, null, false, true, null);
+	}
+
+	/**
+	 * Like {@link #noVerdict(WorkerType)}, but the worker leaves behind invariants of the main abstraction's states.
+	 */
+	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
+			noVerdictWithInvariants(final WorkerType workerType, final IInvariantSupplier<IPredicate> invariants) {
+		return new WorkerThreadResult<>(workerType, null, null, null, null, null, false, true, invariants);
 	}
 
 	public WorkerType getWorkerType() {
@@ -100,6 +112,13 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	 */
 	public boolean noVerdict() {
 		return mNoVerdict;
+	}
+
+	/**
+	 * @return the invariants of a {@link #noVerdictWithInvariants} result, null otherwise.
+	 */
+	public IInvariantSupplier<IPredicate> getInvariants() {
+		return mInvariants;
 	}
 
 	public PredicateFactory getPredicateFactory() {

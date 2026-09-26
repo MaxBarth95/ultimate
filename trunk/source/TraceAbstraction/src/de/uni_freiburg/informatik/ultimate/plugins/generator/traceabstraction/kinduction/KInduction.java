@@ -67,40 +67,39 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tr
  * k-induction on a nested word automaton (path program or abstraction) that represents a program with any number of
  * loops, sequential or nested.
  * <p>
- * {@link LoopTreeFormulaBuilder} summarizes the program as a tree of loops whose edges are transition formulas
- * between checkpoints (program start, loop heads, error states, ...). {@link PcTransitionSystem} turns this into one
- * transition system whose state is the program variables plus a program counter {@code pc}. An error is reachable
- * iff the system reaches {@code pc = FINAL}. This class runs plain k-induction on it, for {@code k = 1, 2, ...}:
+ * {@link LoopTreeFormulaBuilder} summarizes the program as a tree of loops whose edges are transition formulas between
+ * checkpoints (program start, loop heads, error states, ...). {@link PcTransitionSystem} turns this into one transition
+ * system whose state is the program variables plus a program counter {@code pc}. An error is reachable iff the system
+ * reaches {@code pc = FINAL}. This class runs plain k-induction on it, for {@code k = 1, 2, ...}:
  * <ul>
- * <li><b>Base case</b>: {@code pc_0 = INIT}, k transitions, {@code pc_k = FINAL}. SAT is a real violation
- * (<i>unsafe</i>), since FINAL has a self loop this covers every error within k steps.
- * <li><b>Step case</b>: k transitions starting in an arbitrary state that is not {@code INIT}, no error in the first
- * k states, but an error in the last one. UNSAT together with the base case for k proves that no error is reachable
- * at all (<i>safe</i>). INIT can be excluded in the first state because it has no incoming transition, so every
- * error at a step {@code > k} is preceded by k non-INIT states, and errors at steps {@code <= k} are found by the
- * base case.
+ * <li><b>Base case</b>: {@code pc_0 = INIT}, k transitions, {@code pc_k = FINAL}. SAT means (<i>unsafe</i>), since
+ * FINAL has a self loop this covers every error within k steps.
+ * <li><b>Step case</b>: k transitions starting in an arbitrary state that is not {@code INIT}, no error in the first k
+ * states, but an error in the last one. UNSAT together with the base case for k proves that no error is reachable at
+ * all (<i>safe</i>). INIT can be excluded in the first state because it has no incoming transition, so every error at a
+ * step {@code > k} is preceded by k non-INIT states, and errors at steps {@code <= k} are found by the base case.
  * </ul>
- * Since the whole program, including all loop heads, is one system, a SAFE result is a genuine proof also for
- * several and for nested loops; there is no per-loop or per-path approximation. The only incompleteness is
- * {@link #MAX_K} and the solver returning unknown.
+ * Since the whole program, including all loop heads, is one system, a SAFE result is a genuine proof also for several
+ * and for nested loops; there is no per-loop or per-path approximation. The only incompleteness is {@link #MAX_K} and
+ * the solver returning unknown.
  * <p>
- * <b>Procedures.</b> The transition system is flat and has no call stack, so it never contains a call or a
- * return. If the abstraction has any, {@link ProcedureSummaries} resolves every call site first: a callee whose
- * graph is loop-free becomes one edge for the whole call-to-return span (and one edge per error state inside it,
- * for a call that never returns), while a callee that contains a loop is unfolded into one copy of its states per
- * call site, so that its loop becomes an ordinary nested loop of the tree and gets {@code pc} values of its own.
- * The nodes of the tree are therefore {@link CallNode}s - a state plus the call sites it was reached through - and
- * a loop head of an unfolded callee is a different head at each of its call sites. Recursion is refused there.
+ * <b>Procedures.</b> The transition system is flat and has no call stack, so it never contains a call or a return. If
+ * the abstraction has any, {@link ProcedureSummaries} resolves every call site first: a callee whose graph is loop-free
+ * becomes one edge for the whole call-to-return span (and one edge per error state inside it, for a call that never
+ * returns), while a callee that contains a loop is unfolded into one copy of its states per call site, so that its loop
+ * becomes an ordinary nested loop of the tree and gets {@code pc} values of its own. The nodes of the tree are
+ * therefore {@link CallNode}s - a state plus the call sites it was reached through - and a loop head of an unfolded
+ * callee is a different head at each of its call sites. Recursion is refused there.
  * <p>
- * <b>Invariant injection.</b> The {@link IInvariantSupplier} may return a trusted invariant for any loop head, also
- * a nested one. It is assumed in every unrolled state where {@code pc} is that loop head, in the base and the step
- * case. This only prunes the search and can make a loop inductive that is not k-inductive on its own, but a wrong
- * invariant makes the result wrong. An invariant that mentions a variable that occurs in no transition is dropped,
- * which is always sound.
+ * <b>Invariant injection.</b> The {@link IInvariantSupplier} may return a trusted invariant for any loop head, also a
+ * nested one. It is assumed in every unrolled state where {@code pc} is that loop head, in the base and the step case.
+ * This only prunes the search and can make a loop inductive that is not k-inductive on its own, but a wrong invariant
+ * makes the result wrong. An invariant that mentions a variable that occurs in no transition is dropped, which is
+ * always sound.
  * <p>
  * <b>Learned invariants.</b> If the program is proven safe with some k, {@link #getLearnedInvariants()} returns for
- * every loop head the formula "no error can be reached from here within k steps". It holds in every reachable state
- * of the head, because the program is safe, and can be given to other components as an invariant.
+ * every loop head the formula "no error can be reached from here within k steps". It holds in every reachable state of
+ * the head, because the program is safe, and can be given to other components as an invariant.
  *
  * @param <LETTER>
  *            letter type
@@ -205,8 +204,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 			} else if (verdict == Verdict.UNSAFE) {
 				// Still under the lock, but after the base case's pop: reconstruction asserts terms, which would
 				// invalidate the model we are working from. mWitness already holds everything we need from it.
-				mCounterexample = new KInductionCounterexampleBuilder<LETTER, STATE>(mServices, mLogger,
-						mWorkerMgdScript, mKILock, mCsToolkit, mAbstraction, mSystem, mWitness,
+				mCounterexample = new KInductionCounterexampleBuilder<>(mServices, mLogger, mWorkerMgdScript, mKILock,
+						mCsToolkit, mAbstraction, mSystem, mWitness,
 						mSummaries == null ? Collections.emptySet() : mSummaries.getSealedStates(),
 						mSummaries == null ? Collections.emptySet() : mSummaries.getStackedProcedures()).build();
 			}
@@ -219,11 +218,11 @@ public class KInduction<LETTER extends IAction, STATE> {
 
 	/**
 	 * The loop tree of the program. Its nodes are {@link CallNode}s: a state together with the call sites it was
-	 * reached through. If the abstraction has no call transition every node is at depth zero and the tree is the
-	 * whole automaton, as it always was. Otherwise every call site is first resolved by {@link ProcedureSummaries}
-	 * - into a virtual call edge if the callee can be summarized, into an unfolded copy of the callee if it
-	 * contains a loop - and the tree is built for the resulting graph, which has no call and no return transition
-	 * left. A call that stayed in it would be unsound, see {@link LoopTreeFormulaBuilder}.
+	 * reached through. If the abstraction has no call transition every node is at depth zero and the tree is the whole
+	 * automaton, as it always was. Otherwise every call site is first resolved by {@link ProcedureSummaries} - into a
+	 * virtual call edge if the callee can be summarized, into an unfolded copy of the callee if it contains a loop -
+	 * and the tree is built for the resulting graph, which has no call and no return transition left. A call that
+	 * stayed in it would be unsound, see {@link LoopTreeFormulaBuilder}.
 	 */
 	private LoopTree<CallNode<STATE>> buildLoopTree() {
 		final UnfoldedGraph<LETTER, STATE> graph = new UnfoldedGraph<>(mAbstraction);
@@ -294,8 +293,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 		final Script script = mWorkerMgdScript.getScript();
 		final List<Term> invariants = prepare(k);
 		mWorkerMgdScript.push(mKILock, 1);
-		mWorkerMgdScript.assertTerm(mKILock,
-				SmtUtils.binaryEquality(script, mConstants.pc(0), PcTransitionSystem.pcValue(script, PcTransitionSystem.INIT)));
+		mWorkerMgdScript.assertTerm(mKILock, SmtUtils.binaryEquality(script, mConstants.pc(0),
+				PcTransitionSystem.pcValue(script, PcTransitionSystem.INIT)));
 		assertSteps(k);
 		mWorkerMgdScript.assertTerm(mKILock, SmtUtils.binaryEquality(script, mConstants.pc(k),
 				PcTransitionSystem.pcValue(script, PcTransitionSystem.FINAL)));
@@ -314,8 +313,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Reads the model of a satisfiable base case. Must be called after {@code checkSat} returned {@code sat} and
-	 * before the {@code pop} of that query.
+	 * Reads the model of a satisfiable base case. Must be called after {@code checkSat} returned {@code sat} and before
+	 * the {@code pop} of that query.
 	 */
 	private KInductionWitness extractWitness(final int k) {
 		final IProgramVar stackPointer = mSummaries == null ? null : mSummaries.getStackPointer();
@@ -361,8 +360,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * The pc and the transition selector are integers by construction, so anything else here means the model does
-	 * not fit the encoding, which is a bug rather than an unsupported case.
+	 * The pc and the transition selector are integers by construction, so anything else here means the model does not
+	 * fit the encoding, which is a bug rather than an unsupported case.
 	 */
 	private static int intValue(final Map<Term, Term> model, final Term term, final String description) {
 		final Term value = model.get(term);
@@ -375,8 +374,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Can {@code k} transitions from an arbitrary non-INIT state, with no error in the first {@code k} states,
-	 * reach an error? UNSAT means the step is inductive.
+	 * Can {@code k} transitions from an arbitrary non-INIT state, with no error in the first {@code k} states, reach an
+	 * error? UNSAT means the step is inductive.
 	 */
 	private LBool checkStep(final int k) {
 		final Script script = mWorkerMgdScript.getScript();
@@ -404,9 +403,9 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Builds everything that declares constants (the steps up to {@code k}, the pc constants and the invariants).
-	 * This has to happen before the {@code push} of a query: constants declared inside are forgotten by the solver
-	 * on {@code pop}, but stay in {@link #mIndexedConstantsWorkerScript}.
+	 * Builds everything that declares constants (the steps up to {@code k}, the pc constants and the invariants). This
+	 * has to happen before the {@code push} of a query: constants declared inside are forgotten by the solver on
+	 * {@code pop}, but stay in {@link #mIndexedConstantsWorkerScript}.
 	 *
 	 * @return the invariant assertions for the states {@code 0..k}
 	 */
@@ -465,7 +464,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * For every step {@code 0..k}: if the pc is a loop head with an invariant, the invariant holds. Returns the assertions.
+	 * For every step {@code 0..k}: if the pc is a loop head with an invariant, the invariant holds. Returns the
+	 * assertions.
 	 */
 	private List<Term> invariantAssertions(final int k) {
 		final List<Term> result = new ArrayList<>();
@@ -513,8 +513,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Unrolling with constants, for solver queries. Auxiliary variables are separate constants per transition and
-	 * step, so different steps do not share their values.
+	 * Unrolling with constants, for solver queries. Auxiliary variables are separate constants per transition and step,
+	 * so different steps do not share their values.
 	 */
 	private final class ConstantVars implements StepVars {
 		private final Sort mPcSort = PcTransitionSystem.pcValue(mWorkerMgdScript.getScript(), 0).getSort();
@@ -533,8 +533,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 
 		@Override
 		public Term aux(final int transitionId, final TermVariable auxVar, final int idx) {
-			return PredicateUtils.getIndexedConstant("kiaux_" + transitionId + "_" + auxVar.getName(),
-					auxVar.getSort(), idx, mIndexedConstantsWorkerScript, mWorkerMgdScript.getScript());
+			return PredicateUtils.getIndexedConstant("kiaux_" + transitionId + "_" + auxVar.getName(), auxVar.getSort(),
+					idx, mIndexedConstantsWorkerScript, mWorkerMgdScript.getScript());
 		}
 
 		@Override
@@ -614,9 +614,9 @@ public class KInduction<LETTER extends IAction, STATE> {
 
 	/**
 	 * Why k-induction stopped without proving or refuting the program. The two possibilities are kept apart because
-	 * they call for opposite remedies: an exhausted unrolling bound means the search was cut short and a larger
-	 * bound might still decide it, whereas a solver that answers {@code unknown} will keep doing so until the query
-	 * itself changes (fewer variables, a different encoding, an injected invariant, or a higher resource limit).
+	 * they call for opposite remedies: an exhausted unrolling bound means the search was cut short and a larger bound
+	 * might still decide it, whereas a solver that answers {@code unknown} will keep doing so until the query itself
+	 * changes (fewer variables, a different encoding, an injected invariant, or a higher resource limit).
 	 */
 	public static final class Inconclusive {
 		private final int mK;
@@ -665,8 +665,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * @return for every loop head, an invariant learned from the k-induction proof (empty unless the program was
-	 *         proven safe). The terms are native to the worker's {@link ManagedScript}.
+	 * @return for every loop head, an invariant learned from the k-induction proof (empty unless the program was proven
+	 *         safe). The terms are native to the worker's {@link ManagedScript}.
 	 */
 	public Map<CallNode<STATE>, Term> getLearnedInvariants() {
 		return Collections.unmodifiableMap(mLearnedInvariants);
@@ -680,13 +680,13 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * @return a run of the abstraction that reaches an accepting state and is feasible, i.e. a genuine
-	 *         counterexample. Only defined if k-induction refuted the program.
+	 * @return a run of the abstraction that reaches an accepting state and is feasible, i.e. a genuine counterexample.
+	 *         Only defined if k-induction refuted the program.
 	 */
 	public NestedRun<LETTER, STATE> getCounterexample() {
 		if (mSafe || mSolverReturnedUnknown) {
-			throw new UnsupportedOperationException("k-induction did not refute the program, so there is no "
-					+ "counterexample");
+			throw new UnsupportedOperationException(
+					"k-induction did not refute the program, so there is no " + "counterexample");
 		}
 		if (mCounterexample == null) {
 			throw new IllegalStateException("k-induction refuted the program but no counterexample was built; "

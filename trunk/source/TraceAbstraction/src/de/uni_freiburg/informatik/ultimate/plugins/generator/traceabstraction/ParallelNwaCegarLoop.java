@@ -84,6 +84,7 @@ import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracechec
 import de.uni_freiburg.informatik.ultimate.logic.Logics;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.preferences.IcfgPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.absint.AbsIntWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization.AutomataMinimizationTimeout;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.imc.InterpolModelCheckingWorkerThread;
@@ -118,9 +119,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private final int mNumImcWorkers;
 	private final int mNumSymExecWorkers;
 	private final int mNumKInductionWorkers;
+	private final int mNumAbsIntWorkers;
 	private int mRunningThreads = 0;
 	// Workers that finished without a verdict. They are gone from the pool and will produce nothing more.
 	private int mRetiredWorkers = 0;
+	private IInvariantSupplier<IPredicate> mAbsIntInvariants = IInvariantSupplier.none();
 
 	// private final CompletionService<WorkerThreadResult<L, A>> mECS;
 	BlockingQueue<WorkerThreadTask<L>> mWorkerTaskQueue = new LinkedBlockingQueue<>();
@@ -188,10 +191,12 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		mNumImcWorkers = mPref.getNumImcWorkers();
 		mNumSymExecWorkers = mPref.getNumSymExecWorkers();
 		mNumKInductionWorkers = mPref.getNumKInductionWorkers();
-		mThreadLimit = mNumTaWorkers + mNumImcWorkers + mNumSymExecWorkers + mNumKInductionWorkers;
+		mNumAbsIntWorkers = mPref.getNumAbsIntWorkers();
+		mThreadLimit =
+				mNumTaWorkers + mNumImcWorkers + mNumSymExecWorkers + mNumKInductionWorkers + mNumAbsIntWorkers;
 		if (mThreadLimit == 0) {
 			throw new AssertionError(
-					"At least one parallel CEGAR worker thread must be configured (TA/IMC/SymExec/KInduction worker counts are all 0)");
+					"At least one parallel CEGAR worker thread must be configured (TA/IMC/SymExec/KInduction/AbsInt worker counts are all 0)");
 		}
 
 		mExec = Executors.newFixedThreadPool(mThreadLimit);
@@ -286,6 +291,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// nothing to refine with, so the only thing to do is retire it and let the remaining workers finish.
 			// If it was the last one, nobody is left to decide and the honest answer is UNKNOWN - not a crash.
 			if (workerResult.noVerdict()) {
+				if (workerResult.getInvariants() != null) {
+					mAbsIntInvariants = workerResult.getInvariants();
+				}
 				mRetiredWorkers += 1;
 				mLogger.warn("Main: %s finished without a verdict (%d of %d worker(s) retired)",
 						workerResult.getWorkerType(), mRetiredWorkers, mThreadLimit);
@@ -313,10 +321,12 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				updateAndPrintStatistics(true);
 				return true;
 			}
-			// IMC and k-induction prove the whole program safe at once, they have no subtrahend to refine with.
-			// The null automaton type is what distinguishes that sentinel from the refutation above.
+			// IMC, k-induction and abstract interpretation prove the whole program safe at once, they have no
+			// subtrahend to refine with. The null automaton type is what distinguishes that sentinel from the
+			// refutation above.
 			if ((workerResult.mWorkerType.equals(WorkerType.IMC)
-					|| workerResult.mWorkerType.equals(WorkerType.KINDUCTION))
+					|| workerResult.mWorkerType.equals(WorkerType.KINDUCTION)
+					|| workerResult.mWorkerType.equals(WorkerType.ABSINT))
 					&& (workerResult.getSubtrahend() == null) && (workerResult.getAutomatonType() == null)) {
 				mAbstraction = new NestedWordAutomaton(new AutomataLibraryServices(getServices()),
 						mAbstraction.getVpAlphabet(), mPredicateFactoryInterpolantAutomata);
@@ -356,6 +366,12 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		final IUltimateServiceProvider iterationServices = createIterationTimer(currentErrorLoc);
 		int id = 0;
 		try {
+			// First, while no pool thread exists yet: their constructors walk the ICFG, whose edge lists the other
+			// workers mutate whenever they transfer a letter.
+			for (int i = 0; i < mNumAbsIntWorkers; i++) {
+				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.ABSINT));
+				id++;
+			}
 			for (int i = 0; i < mNumTaWorkers; i++) {
 				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.TA));
 				id++;
@@ -401,6 +417,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 
 	private ICegarNwaWorkerThread<L, A> setUpWorkerThread(final IUltimateServiceProvider iterationServices,
 			final int id, final WorkerType workerType) throws InterruptedException {
+		if (workerType == WorkerType.ABSINT) {
+			// Runs on the main script's variables and needs no solver of its own.
+			return new AbsIntWorkerThread<>(mLogger, iterationServices, mAbstraction, mIcfg,
+					mCsToolkit.getManagedScript(), mWorkerResultQueue);
+		}
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(
 				new AutomataLibraryServices(mServices), mLogger, mCsToolkit.getManagedScript(), iterationServices,
@@ -902,6 +923,14 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// use result
 			mAbstraction = newAbstraction;
 		}
+	}
+
+	/**
+	 * @return invariants of the main abstraction's states found by an abstract interpretation worker, native to the
+	 *         main script, or none if no such worker has finished without proving the program.
+	 */
+	public IInvariantSupplier<IPredicate> getAbsIntInvariants() {
+		return mAbsIntInvariants;
 	}
 
 	// worker use this method to access the programcache shared across all workers + main

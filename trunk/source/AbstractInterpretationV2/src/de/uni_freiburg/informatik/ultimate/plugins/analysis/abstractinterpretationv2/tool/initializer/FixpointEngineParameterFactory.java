@@ -45,7 +45,6 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.absint.IVariabl
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.boogie.IBoogieSymbolTableVariableProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfg;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgEdge;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVarOrConst;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.Activator;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.algorithm.FixpointEngineParameters;
@@ -115,20 +114,18 @@ public class FixpointEngineParameterFactory {
 	}
 
 	@SuppressWarnings("unchecked")
-	public <STATE extends IAbstractState<STATE>>
-			FixpointEngineParameters<STATE, IcfgEdge, IProgramVarOrConst, IcfgLocation>
-			createParams(final IProgressAwareTimer timer,
-					final ITransitionProvider<IcfgEdge, IcfgLocation> transitionProvider,
+	public <STATE extends IAbstractState<STATE>, LOC> FixpointEngineParameters<STATE, IcfgEdge, IProgramVarOrConst, LOC>
+			createParams(final IProgressAwareTimer timer, final ITransitionProvider<IcfgEdge, LOC> transitionProvider,
 					final ILoopDetector<IcfgEdge> loopDetector) {
 		final IAbstractDomain<STATE, IcfgEdge> domain = (IAbstractDomain<STATE, IcfgEdge>) selectDomain();
-		final IAbstractStateStorage<STATE, IcfgEdge, IcfgLocation> storageProvider =
+		final IAbstractStateStorage<STATE, IcfgEdge, LOC> storageProvider =
 				new IcfgAbstractStateStorageProvider<>(mServices, transitionProvider);
 
 		final IVariableProvider<STATE, IcfgEdge> variableProvider =
 				new RcfgVariableProvider<>(mRoot.getCfgSmtToolkit(), mServices);
-		final IDebugHelper<STATE, IcfgEdge, IProgramVarOrConst, IcfgLocation> debugHelper =
+		final IDebugHelper<STATE, IcfgEdge, IProgramVarOrConst, LOC> debugHelper =
 				new RcfgDebugHelper<>(mRoot.getCfgSmtToolkit(), mServices, mRoot.getCfgSmtToolkit().getSymbolTable());
-		return new FixpointEngineParameters<STATE, IcfgEdge, IProgramVarOrConst, IcfgLocation>(mServices,
+		return new FixpointEngineParameters<STATE, IcfgEdge, IProgramVarOrConst, LOC>(mServices,
 				IProgramVarOrConst.class).setDomain(domain).setLoopDetector(loopDetector).setStorage(storageProvider)
 						.setTransitionProvider(transitionProvider).setVariableProvider(variableProvider)
 						.setDebugHelper(debugHelper).setTimer(timer);

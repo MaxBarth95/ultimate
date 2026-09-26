@@ -103,6 +103,7 @@ public final class TAPreferences {
 	private final int mNumSymExecWorkers;
 	private final int mNumKInductionWorkers;
 	private final int mKInductionSolverTimeout;
+	private final int mNumAbsIntWorkers;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
 	private final int mSearchLoopBound;
@@ -217,6 +218,7 @@ public final class TAPreferences {
 		mNumKInductionWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_KINDUCTION_WORKERS);
 		mKInductionSolverTimeout =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_SOLVER_TIMEOUT);
+		mNumAbsIntWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_ABSINT_WORKERS);
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY);
 		mMinimizeAbstractionPerWorker =
@@ -625,6 +627,10 @@ public final class TAPreferences {
 	 */
 	public int getKInductionSolverTimeout() {
 		return mKInductionSolverTimeout;
+	}
+
+	public int getNumAbsIntWorkers() {
+		return mNumAbsIntWorkers;
 	}
 
 	public boolean minimizeAbstractionPerWorker() {
