@@ -25,6 +25,7 @@ import de.uni_freiburg.informatik.ultimate.boogie.ast.UnaryExpression.Operator;
 import de.uni_freiburg.informatik.ultimate.boogie.output.BoogiePrettyPrinter;
 import de.uni_freiburg.informatik.ultimate.boogie.symboltable.BoogieSymbolTable;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.boogie.IBoogieSymbolTableVariableProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramNonOldVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVarOrConst;
@@ -53,6 +54,13 @@ public abstract class NonrelationalEvaluator<STATE extends NonrelationalState<ST
 	private boolean mOldScope;
 	private final Map<Expression, Expression> mNormalizedExpressionCache;
 	private final ILogger mLogger;
+
+	/**
+	 * Bounds every evaluation by the timer, or by none if it is null.
+	 */
+	public void setTimer(final IProgressAwareTimer timer) {
+		mEvaluatorFactory.setTimer(timer);
+	}
 
 	public NonrelationalEvaluator(final ILogger logger, final BoogieSymbolTable boogieSymbolTable,
 			final IBoogieSymbolTableVariableProvider bpl2SmtTable, final int maxParallelStates,

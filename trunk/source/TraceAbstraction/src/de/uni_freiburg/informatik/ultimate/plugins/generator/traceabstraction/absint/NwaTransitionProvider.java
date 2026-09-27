@@ -42,6 +42,8 @@ import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.Outgo
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingInternalTransition;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingReturnTransition;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.CodeBlock;
+import de.uni_freiburg.informatik.ultimate.lib.icfg.ParallelComposition;
+import de.uni_freiburg.informatik.ultimate.lib.icfg.SequentialComposition;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.Summary;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.ICallAction;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgCallTransition;
@@ -55,10 +57,11 @@ import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretati
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.algorithm.rcfg.RcfgUtils;
 
 /**
- * {@link IcfgTransitionProvider} over a nested word automaton: locations are its states, actions are its letters
- * themselves (so the engine's {@code instanceof} tests on actions keep working), which requires every letter to label
- * exactly one transition, as in the initial abstraction. All automaton access happens in the constructor; afterwards
- * only immutable indices are read, never the ICFG locations' edge lists, which other workers mutate concurrently.
+ * {@link IcfgTransitionProvider} over a nested word automaton of a non-recursive program: locations are its states,
+ * actions are its letters themselves (so the engine's {@code instanceof} tests on actions keep working), which requires
+ * every letter to label exactly one transition, as in the initial abstraction. All automaton access happens in the
+ * constructor; afterwards only immutable indices are read, never the ICFG locations' edge lists, which other workers
+ * mutate concurrently.
  *
  * @author Max Barth (max.barth@lmu.de)
  */
@@ -86,6 +89,41 @@ public final class NwaTransitionProvider implements ITransitionProvider<IcfgEdge
 		}
 		mInitialStates = Collections.unmodifiableSet(new HashSet<>(nwa.getInitialStates()));
 		mFinalStates = Collections.unmodifiableSet(new HashSet<>(nwa.getFinalStates()));
+		checkNotRecursive();
+	}
+
+	/**
+	 * The fixpoint engine is unsound on recursion: on {@code int id(int x) { if (x <= 0) return 0; return id(x-1) + 1;
+	 * }} the interval domain proves {@code id(n) != 10}. So a program with a cycle in its call graph is not supported.
+	 */
+	private void checkNotRecursive() {
+		final Map<String, Set<String>> callees = new HashMap<>();
+		for (final IcfgEdge action : mSource.keySet()) {
+			if (action instanceof IIcfgCallTransition<?>) {
+				callees.computeIfAbsent(action.getPrecedingProcedure(), x -> new HashSet<>())
+						.add(action.getSucceedingProcedure());
+			}
+		}
+		final Set<String> done = new HashSet<>();
+		for (final String procedure : callees.keySet()) {
+			findCycle(callees, procedure, new HashSet<>(), done);
+		}
+	}
+
+	private static void findCycle(final Map<String, Set<String>> callees, final String procedure,
+			final Set<String> onPath, final Set<String> done) {
+		if (done.contains(procedure)) {
+			return;
+		}
+		if (!onPath.add(procedure)) {
+			throw new UnsupportedOperationException(
+					"The program is recursive (" + procedure + "), the fixpoint engine is unsound on recursion");
+		}
+		for (final String callee : callees.getOrDefault(procedure, Set.of())) {
+			findCycle(callees, callee, onPath, done);
+		}
+		onPath.remove(procedure);
+		done.add(procedure);
 	}
 
 	private void addTransition(final IPredicate source, final IIcfgTransition<?> letter, final IPredicate target) {
@@ -99,6 +137,9 @@ public final class NwaTransitionProvider implements ITransitionProvider<IcfgEdge
 			throw new UnsupportedOperationException("The abstraction contains the summary " + edge
 					+ " of an implemented procedure, i.e. it is not interprocedural");
 		}
+		if (edge instanceof SequentialComposition || edge instanceof ParallelComposition) {
+			checkComposedBlock((CodeBlock) edge);
+		}
 		final IPredicate oldSource = mSource.putIfAbsent(edge, source);
 		if (oldSource != null) {
 			throw new UnsupportedOperationException("Letter " + edge + " labels more than one transition (from "
@@ -107,6 +148,27 @@ public final class NwaTransitionProvider implements ITransitionProvider<IcfgEdge
 		mTarget.put(edge, target);
 		mOutgoing.computeIfAbsent(source, x -> new ArrayList<>()).add(edge);
 		mIncoming.computeIfAbsent(target, x -> new ArrayList<>()).add(edge);
+	}
+
+	/**
+	 * The post operators read a composed block as the concatenation of its statements (RcfgStatementExtractor): the
+	 * branches of a parallel composition would run one after the other, which makes most posts bottom, and a summary
+	 * inside a sequential composition would be skipped. Both would make the fixpoint unsound.
+	 */
+	private static void checkComposedBlock(final CodeBlock block) {
+		if (block instanceof ParallelComposition) {
+			throw new UnsupportedOperationException("The abstraction contains the parallel composition " + block
+					+ ", which the post operators would read as a sequence of its branches");
+		}
+		if (block instanceof SequentialComposition) {
+			for (final CodeBlock part : ((SequentialComposition) block).getCodeBlocks()) {
+				checkComposedBlock(part);
+			}
+		} else if (block instanceof Summary || block instanceof IIcfgCallTransition<?>
+				|| block instanceof IIcfgReturnTransition<?, ?>) {
+			throw new UnsupportedOperationException("The abstraction contains the " + block.getClass().getSimpleName()
+					+ " " + block + " inside a sequential composition, which the post operators would skip");
+		}
 	}
 
 	public Set<IPredicate> getInitialStates() {

@@ -50,6 +50,7 @@ import de.uni_freiburg.informatik.ultimate.lib.icfg.Summary;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.absint.IAbstractPostOperator;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.boogie.IBoogieSymbolTableVariableProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.ModifiableGlobalsTable;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgEdge;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVarOrConst;
@@ -76,6 +77,8 @@ public class OctPostOperator implements IAbstractPostOperator<OctDomainState, Ic
 	private final IBoogieSymbolTableVariableProvider mBpl2SmtTable;
 	private final CallInfoCache mCallInfoCache;
 
+	private final ModifiableGlobalsTable mModifiableGlobals;
+
 	public OctPostOperator(final ILogger logger, final BoogieSymbolTable symbolTable, final CfgSmtToolkit cfgSmtToolkit,
 			final int maxParallelStates, final boolean fallbackAssignIntervalProjection,
 			final IBoogieSymbolTableVariableProvider bpl2smtSymbolTable,
@@ -97,6 +100,12 @@ public class OctPostOperator implements IAbstractPostOperator<OctDomainState, Ic
 		mAssumeProcessor =
 				new OctAssumeProcessor(mLogger, this, fallBackPostOperator, codeBlockFactory, bpl2smtSymbolTable);
 		mCallInfoCache = new CallInfoCache(cfgSmtToolkit, symbolTable);
+		mModifiableGlobals = cfgSmtToolkit.getModifiableGlobalsTable();
+	}
+
+	/** @return the globals each procedure may modify */
+	ModifiableGlobalsTable getModifiableGlobals() {
+		return mModifiableGlobals;
 	}
 
 	public static OctDomainState join(final List<OctDomainState> states) {

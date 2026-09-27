@@ -562,8 +562,16 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	public static final String LABEL_ABSINT_DOMAINS = "Abstract domains of the abstract interpretation worker";
 	private static final String DESC_ABSINT_DOMAINS =
 			"Comma-separated AbstractInterpretationV2 domains, run in this order: SignDomain, IntervalDomain, "
-					+ "CongruenceDomain, ExplicitValueDomain or OctagonDomain.";
-	private static final String DEF_ABSINT_DOMAINS = "IntervalDomain,OctagonDomain";
+					+ "CongruenceDomain, ExplicitValueDomain or OctagonDomain. Their results are trusted: "
+					+ "OctagonDomain is unsound on modular (unsigned) and nonlinear arithmetic.";
+	private static final String DEF_ABSINT_DOMAINS = "IntervalDomain";
+
+	public static final String LABEL_ABSINT_DOMAIN_BUDGET =
+			"Time budget per domain of the abstract interpretation worker (s)";
+	private static final String DESC_ABSINT_DOMAIN_BUDGET =
+			"How long each domain of the abstract interpretation worker may run. A domain that runs out gives no "
+					+ "result and the next one starts.";
+	private static final int DEF_ABSINT_DOMAIN_BUDGET = 60;
 
 	public static final String LABEL_INTERPOLANT_INVARIANTS =
 			"Check interpolants of TA workers for invariants for k-induction";
@@ -894,6 +902,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_ABSINT_DOMAINS, DEF_ABSINT_DOMAINS, DESC_ABSINT_DOMAINS,
 						PreferenceType.String),
+				new UltimatePreferenceItem<>(LABEL_ABSINT_DOMAIN_BUDGET, DEF_ABSINT_DOMAIN_BUDGET,
+						DESC_ABSINT_DOMAIN_BUDGET, PreferenceType.Integer, IUltimatePreferenceItemValidator.ONLY_POSITIVE),
 				new UltimatePreferenceItem<>(LABEL_INTERPOLANT_INVARIANTS, DEF_INTERPOLANT_INVARIANTS,
 						DESC_INTERPOLANT_INVARIANTS, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_SEARCH_LOOP_BOUND, DEF_SEARCH_LOOP_BOUND, DESC_SEARCH_LOOP_BOUND,

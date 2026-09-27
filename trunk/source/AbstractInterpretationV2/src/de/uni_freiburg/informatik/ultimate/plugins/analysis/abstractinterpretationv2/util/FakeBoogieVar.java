@@ -60,6 +60,15 @@ public final class FakeBoogieVar implements IProgramVar {
 		mSort = new TypeSortTranslator(Collections.emptyList(), SCRIPT_MOCK, null).constructSort(type, a -> null);
 	}
 
+	/**
+	 * With the sort of an existing variable, e.g. one whose Boogie type is declared with a {:builtin} attribute, which
+	 * the constructor from a Boogie type cannot translate.
+	 */
+	public FakeBoogieVar(final Sort sort, final String identifier) {
+		mId = identifier;
+		mSort = sort;
+	}
+
 	@Override
 	public String getGloballyUniqueId() {
 		return mId;

@@ -32,6 +32,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVarOrConst;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.nonrelational.BooleanValue;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.nonrelational.INonrelationalValue;
@@ -71,6 +72,11 @@ public class EvaluatorFactory<VALUE extends INonrelationalValue<VALUE>, STATE ex
 		mNonrelationalValueFactory = nonrelationalValueFactory;
 		mSingletonValueExpressionEvaluatorCreator = singletonValueEvaluatorCreator;
 		mEvalLogger = new EvaluatorLogger(logger);
+	}
+
+	@Override
+	public void setTimer(final IProgressAwareTimer timer) {
+		mEvalLogger.setTimer(timer);
 	}
 
 	@Override

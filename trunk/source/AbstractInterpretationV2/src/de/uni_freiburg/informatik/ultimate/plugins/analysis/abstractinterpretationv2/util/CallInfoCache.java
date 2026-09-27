@@ -108,6 +108,10 @@ public final class CallInfoCache {
 		// create a multi-assignment statement that assigns each procedure argument (expression) to a temporary
 		// variable
 
+		if (args.length != realInParams.size()) {
+			throw new UnsupportedOperationException("The call " + callStatement.getMethodName() + " has " + args.length
+					+ " arguments, but the procedure has " + realInParams.size() + " in-parameters");
+		}
 		final List<String> tmpParamNames =
 				getArgumentTemporaries(args.length, getForbiddenNames(callStatement.getMethodName()));
 		final List<LeftHandSide> idents = new ArrayList<>();
@@ -116,7 +120,9 @@ public final class CallInfoCache {
 		final ILocation loc = callStatement.getLocation();
 		for (int i = 0; i < args.length; i++) {
 			final String name = tmpParamNames.get(i);
-			final IProgramVarOrConst boogieVar = AbsIntUtil.createTemporaryIBoogieVar(name, args[i].getType());
+			// The in-parameter's sort, a Boogie type with a {:builtin} attribute cannot be translated on its own.
+			final IProgramVarOrConst boogieVar =
+					AbsIntUtil.createTemporaryIBoogieVar(name, realInParams.get(i).getTerm().getSort());
 			final VariableLHS lhs = new VariableLHS(loc, name);
 			tmpParamVars.add(boogieVar);
 			tmpVarUses.put(lhs, boogieVar);

@@ -503,7 +503,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		if (workerType == WorkerType.ABSINT) {
 			// Runs on the main script's variables and needs no solver of its own.
 			return new AbsIntWorkerThread<>(mLogger, iterationServices, mAbstraction, mIcfg,
-					mCsToolkit, invariantSink(true), mPref.getAbsIntDomains(), mWorkerResultQueue);
+					mCsToolkit, invariantSink(true), mPref.getAbsIntDomains(), mPref.getAbsIntDomainBudget(),
+					mWorkerResultQueue);
 		}
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(

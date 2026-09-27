@@ -33,14 +33,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.BlockingQueue;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.core.lib.exceptions.ToolchainCanceledException;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
-import de.uni_freiburg.informatik.ultimate.lib.icfg.Call;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.absint.IAbstractInterpretationResult;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.absint.IAbstractState;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfg;
@@ -77,19 +77,25 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.in
  * one domain after the other: SAFE as soon as one proves no error state reachable, otherwise each fixpoint is
  * submitted to the {@link InvariantSupplier} as invariants of the program locations. The fixpoint runs off the main
  * thread on main-script variables, so it must not touch the main script; the constructor (main thread) does all
- * ICFG-dependent setup and skips the domains for which the fixpoint would. The terms are built in a script of the
- * worker's own, which only it builds terms in.
+ * ICFG-dependent setup and turns off the parts of the post operators that would. The terms are built in a script of
+ * the worker's own, which only it builds terms in. Each domain gets a time budget; one that runs out gives no result.
  *
  * @author Max Barth (max.barth@lmu.de)
  */
 public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>>
 		implements ICegarNwaWorkerThread<L, A> {
 
+	/**
+	 * @param fixpoint
+	 *            computes the fixpoint, stopping when the given timer runs out
+	 */
 	private record DomainRun(String domain,
-			Supplier<? extends IAbstractInterpretationResult<?, IcfgEdge, IPredicate>> fixpoint) {
+			Function<IProgressAwareTimer, ? extends IAbstractInterpretationResult<?, IcfgEdge, IPredicate>> fixpoint) {
 	}
 
 	private final ILogger mLogger;
+	private final IUltimateServiceProvider mServices;
+	private final long mDomainBudgetMs;
 	private final BlockingQueue<WorkerThreadResult<L, A>> mResultQueue;
 	private final IInvariantSink mSink;
 	// Only this worker builds terms in it; the supplier reads them.
@@ -102,12 +108,19 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 	/**
 	 * @param domains
 	 *            the simple class names of flat AbstractInterpretationV2 domains, in the order in which they run
+	 * @param domainBudgetSeconds
+	 *            how long each domain may run; one that runs out gives no result and the next one starts
 	 */
 	public AbsIntWorkerThread(final ILogger logger, final IUltimateServiceProvider services,
 			final INestedWordAutomaton<L, IPredicate> abstraction, final IIcfg<?> icfg,
 			final CfgSmtToolkit mainCsToolkit, final IInvariantSink sink, final List<String> domains,
-			final BlockingQueue<WorkerThreadResult<L, A>> resultQueue) {
+			final int domainBudgetSeconds, final BlockingQueue<WorkerThreadResult<L, A>> resultQueue) {
+		if (domainBudgetSeconds <= 0) {
+			throw new IllegalArgumentException("The time budget per domain must be positive: " + domainBudgetSeconds);
+		}
 		mLogger = logger;
+		mServices = services;
+		mDomainBudgetMs = domainBudgetSeconds * 1000L;
 		mResultQueue = resultQueue;
 		mSink = sink;
 		// Only used to build terms, never to solve, so an in-process SMTInterpol suffices. Created here, on the main
@@ -117,26 +130,27 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 		mMainToTermScript = new TermTransferrer(mainCsToolkit.getManagedScript().getScript(), mTermScript.getScript());
 
 		NwaTransitionProvider transitionProvider = null;
+		NwaLoopDetector loopDetector = null;
 		String unsupported = null;
 		try {
 			transitionProvider = new NwaTransitionProvider(abstraction);
+			loopDetector = new NwaLoopDetector(transitionProvider);
 		} catch (final UnsupportedOperationException e) {
 			unsupported = e.getMessage();
 		}
 		mUnsupported = unsupported;
-		mRuns = transitionProvider == null ? List.of() : prepareRuns(services, icfg, transitionProvider, domains);
+		mRuns = unsupported != null ? List.of()
+				: prepareRuns(services, icfg, transitionProvider, loopDetector, domains);
 	}
 
 	private List<DomainRun> prepareRuns(final IUltimateServiceProvider services, final IIcfg<?> icfg,
-			final NwaTransitionProvider transitionProvider, final List<String> domains) {
+			final NwaTransitionProvider transitionProvider, final NwaLoopDetector loopDetector,
+			final List<String> domains) {
 		// The collector walks the ICFG's edge lists, which workers mutate when they transfer letters, and the octagon
 		// domain asks for it again during the fixpoint. So collect once, here on the main thread.
 		final RCFGLiteralCollector literals = new RCFGLiteralCollector(icfg);
 		final FixpointEngineParameterFactory factory =
 				new FixpointEngineParameterFactory(icfg, () -> literals, services);
-		final boolean hasCallWithArguments =
-				transitionProvider.getActions().stream().anyMatch(AbsIntWorkerThread::isCallWithArguments);
-		final NwaLoopDetector loopDetector = new NwaLoopDetector(transitionProvider);
 		mLogger.info("AbsInt: widening at %d loop head(s)", loopDetector.getLoopHeads().size());
 
 		final List<DomainRun> runs = new ArrayList<>();
@@ -144,36 +158,39 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 			final FixpointEngineParameters<?, IcfgEdge, IProgramVarOrConst, IPredicate> params = factory
 					.createParams(services.getProgressMonitorService(), transitionProvider, loopDetector,
 							domain);
-			// On a return, NonrelationalPostOperator translates the call's arguments into terms of the main script.
+			final Function<IProgressAwareTimer, ? extends IAbstractInterpretationResult<?, IcfgEdge, IPredicate>>
+					fixpoint = prepareFixpoint(params, transitionProvider, mTermScript.getScript());
 			// Asking for the post operator also creates it, here on the main thread.
-			if (hasCallWithArguments
-					&& params.getAbstractDomain().getPostOperator() instanceof NonrelationalPostOperator<?, ?>) {
-				mLogger.warn("AbsInt: skipping %s, it would use the main script on the calls with arguments this "
-						+ "program has", domain);
-				continue;
+			if (params.getAbstractDomain().getPostOperator() instanceof NonrelationalPostOperator<?, ?>) {
+				final NonrelationalPostOperator<?, ?> postOperator =
+						(NonrelationalPostOperator<?, ?>) params.getAbstractDomain().getPostOperator();
+				// On a return it would translate the call's arguments into terms of the main script.
+				postOperator.setRefineArgumentsOnReturn(false);
+				// A single post can take longer than the whole budget.
+				runs.add(new DomainRun(domain, timer -> {
+					postOperator.setTimer(timer);
+					return fixpoint.apply(timer);
+				}));
+			} else {
+				runs.add(new DomainRun(domain, fixpoint));
 			}
-			runs.add(new DomainRun(domain,
-					prepareFixpoint(params, transitionProvider, mTermScript.getScript())));
 		}
 		return runs;
-	}
-
-	private static boolean isCallWithArguments(final IcfgEdge action) {
-		return action instanceof Call && ((Call) action).getCallStatement().getArguments().length > 0;
 	}
 
 	/**
 	 * Binds the domain's state type, which is only known at runtime.
 	 */
 	private static <STATE extends IAbstractState<STATE>>
-			Supplier<IAbstractInterpretationResult<STATE, IcfgEdge, IPredicate>> prepareFixpoint(
+			Function<IProgressAwareTimer, IAbstractInterpretationResult<STATE, IcfgEdge, IPredicate>> prepareFixpoint(
 					final FixpointEngineParameters<STATE, IcfgEdge, IProgramVarOrConst, IPredicate> params,
 					final NwaTransitionProvider transitionProvider, final Script script) {
 		// The default debug helper checks every post with the SMT solver when assertions are enabled.
 		final FixpointEngineParameters<STATE, IcfgEdge, IProgramVarOrConst, IPredicate> solverFreeParams =
 				params.setDebugHelper((preState, hierachicalPreState, postState, transition) -> true);
 		// The engine only stores the script, it never builds a term in it.
-		return () -> new FixpointEngine<>(solverFreeParams).run(transitionProvider.getInitialStates(), script);
+		return timer -> new FixpointEngine<>(solverFreeParams.setTimer(timer))
+				.run(transitionProvider.getInitialStates(), script);
 	}
 
 	@Override
@@ -204,8 +221,14 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 		for (final DomainRun run : mRuns) {
 			final IAbstractInterpretationResult<?, IcfgEdge, IPredicate> result;
 			try {
-				result = run.fixpoint().get();
+				// Created here, the budget starts now.
+				result = run.fixpoint()
+						.apply(mServices.getProgressMonitorService().getChildTimer(mDomainBudgetMs));
 			} catch (final ToolchainCanceledException e) {
+				if (mServices.getProgressMonitorService().continueProcessing()) {
+					mLogger.warn("AbsInt: %s ran out of its %d s budget", run.domain(), mDomainBudgetMs / 1000);
+					continue;
+				}
 				mLogger.warn("AbsInt: stopped during %s, %s", run.domain(), e.getMessage());
 				return WorkerThreadResult.noVerdict(WorkerType.ABSINT);
 			} catch (final UnsupportedOperationException e) {

@@ -28,6 +28,7 @@
 
 package de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.nonrelational.evaluator;
 
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.absint.IAbstractState;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVarOrConst;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.nonrelational.BooleanValue;
@@ -47,6 +48,12 @@ import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretati
  *            Any declaration type.
  */
 public interface IEvaluatorFactory<VALUE extends INonrelationalValue<VALUE>, STATE extends IAbstractState<STATE>> {
+
+	/**
+	 * Bounds the evaluations of all evaluators this factory created or creates by the timer, or by none if it is
+	 * null.
+	 */
+	void setTimer(IProgressAwareTimer timer);
 
 	/**
 	 * Creates an n-ary evaluator for n-ary expressions.

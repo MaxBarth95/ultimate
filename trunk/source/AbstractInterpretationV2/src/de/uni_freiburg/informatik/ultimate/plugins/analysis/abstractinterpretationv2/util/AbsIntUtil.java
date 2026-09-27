@@ -57,6 +57,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.P
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
 import de.uni_freiburg.informatik.ultimate.logic.Rational;
 import de.uni_freiburg.informatik.ultimate.logic.Script;
+import de.uni_freiburg.informatik.ultimate.logic.Sort;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.DataStructureUtils;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
@@ -341,6 +342,14 @@ public final class AbsIntUtil {
 	 */
 	public static IProgramVar createTemporaryIBoogieVar(final String identifier, final IBoogieType type) {
 		return new FakeBoogieVar(type, identifier);
+	}
+
+	/**
+	 * Like {@link #createTemporaryIBoogieVar(String, IBoogieType)}, but with the SMT sort, e.g. of the variable the
+	 * temporary one stands for.
+	 */
+	public static IProgramVar createTemporaryIBoogieVar(final String identifier, final Sort sort) {
+		return new FakeBoogieVar(sort, identifier);
 	}
 
 	/**

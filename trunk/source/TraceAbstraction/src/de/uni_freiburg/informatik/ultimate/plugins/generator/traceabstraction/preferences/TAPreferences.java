@@ -109,6 +109,7 @@ public final class TAPreferences {
 	private final int mKInductionSolverTimeout;
 	private final boolean mAbsIntWorker;
 	private final List<String> mAbsIntDomains;
+	private final int mAbsIntDomainBudget;
 	private final boolean mInterpolantInvariants;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
@@ -227,6 +228,7 @@ public final class TAPreferences {
 		mAbsIntWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_WORKER);
 		mAbsIntDomains = Arrays.stream(mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_DOMAINS)
 				.split(",")).map(String::trim).filter(domain -> !domain.isEmpty()).collect(Collectors.toList());
+		mAbsIntDomainBudget = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_DOMAIN_BUDGET);
 		mInterpolantInvariants =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INTERPOLANT_INVARIANTS);
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
@@ -648,6 +650,13 @@ public final class TAPreferences {
 	 */
 	public List<String> getAbsIntDomains() {
 		return mAbsIntDomains;
+	}
+
+	/**
+	 * @return how many seconds each domain of the abstract interpretation worker may run
+	 */
+	public int getAbsIntDomainBudget() {
+		return mAbsIntDomainBudget;
 	}
 
 	/**
