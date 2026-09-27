@@ -194,4 +194,18 @@ public class IntervalDomainValueTest {
 		}
 		return new IntervalValue(v);
 	}
+
+	/**
+	 * {@link IntervalDomainValue#mayBeZero()} guards the inverse evaluation of multiplication: a * 0 = 0 holds for every
+	 * a, so a factor that may be 0 must not restrict the other one.
+	 */
+	@Test
+	public void testMayBeZero() {
+		assertTrue(new IntervalDomainValue(0, 0).mayBeZero());
+		assertTrue(new IntervalDomainValue(-1, 1).mayBeZero());
+		assertTrue(new IntervalDomainValue().mayBeZero());
+		assertFalse(new IntervalDomainValue(1, 5).mayBeZero());
+		assertFalse(new IntervalDomainValue(-5, -1).mayBeZero());
+		assertFalse(new IntervalDomainValue(true).mayBeZero());
+	}
 }

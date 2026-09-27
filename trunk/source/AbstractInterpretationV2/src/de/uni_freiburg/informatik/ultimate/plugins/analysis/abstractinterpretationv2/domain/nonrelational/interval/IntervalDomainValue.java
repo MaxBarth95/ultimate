@@ -351,6 +351,11 @@ public class IntervalDomainValue implements INonrelationalValue<IntervalDomainVa
 	 *
 	 * @return <code>true</code> if 0 is part of the interval, <code>false</code> otherwise.
 	 */
+	@Override
+	public boolean mayBeZero() {
+		return containsZero();
+	}
+
 	public boolean containsZero() {
 		if (mIsBottom) {
 			return false;

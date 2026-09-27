@@ -371,7 +371,10 @@ public class BinaryExpressionEvaluator<VALUE extends INonrelationalValue<VALUE>,
 			newValue = newValue.intersect(oldValue);
 			break;
 		case ARITHMUL:
-			if (mEvaluatorType == EvaluatorType.INTEGER) {
+			if (otherValue.mayBeZero() && referenceValue.mayBeZero()) {
+				// a * 0 = 0 for every a: dividing by the other factor would wrongly exclude all values of a
+				newValue = oldValue;
+			} else if (mEvaluatorType == EvaluatorType.INTEGER) {
 				newValue = referenceValue.divideInteger(otherValue);
 			} else if (mEvaluatorType == EvaluatorType.REAL) {
 				newValue = referenceValue.divideReal(otherValue);
