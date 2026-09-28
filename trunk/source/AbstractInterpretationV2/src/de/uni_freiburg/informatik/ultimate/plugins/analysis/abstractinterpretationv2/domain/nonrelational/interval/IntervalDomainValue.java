@@ -1653,6 +1653,10 @@ public class IntervalDomainValue implements INonrelationalValue<IntervalDomainVa
 
 	@Override
 	public IntervalDomainValue inverseLessOrEqual(final IntervalDomainValue oldValue, final boolean isLeft) {
+		if (isBottom()) {
+			// No value of the other operand satisfies the relation, and bottom has no bounds to build from.
+			return new IntervalDomainValue(true);
+		}
 		final IntervalDomainValue newValue;
 		if (isLeft) {
 			newValue = new IntervalDomainValue(new IntervalValue(), getUpper());
@@ -1669,6 +1673,10 @@ public class IntervalDomainValue implements INonrelationalValue<IntervalDomainVa
 
 	@Override
 	public IntervalDomainValue inverseGreaterOrEqual(final IntervalDomainValue oldValue, final boolean isLeft) {
+		if (isBottom()) {
+			// No value of the other operand satisfies the relation, and bottom has no bounds to build from.
+			return new IntervalDomainValue(true);
+		}
 		final IntervalDomainValue newValue;
 		if (isLeft) {
 			newValue = new IntervalDomainValue(getLower(), new IntervalValue());

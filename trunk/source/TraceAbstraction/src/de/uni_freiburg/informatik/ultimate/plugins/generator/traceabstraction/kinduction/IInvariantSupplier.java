@@ -28,6 +28,9 @@
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction;
 
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
+
+import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
@@ -64,6 +67,51 @@ public interface IInvariantSupplier<STATE> {
 	 */
 	default boolean update() {
 		return false;
+	}
+
+	/**
+	 * Called by k-induction when it starts to ask a query, with the invariants taken by the last {@link #update()}.
+	 */
+	default void queryStarted(final KInductionQuery.Kind kind, final int k) {
+		// nothing to watch
+	}
+
+	/**
+	 * Called by k-induction when a query was answered or interrupted.
+	 *
+	 * @param millis
+	 *            how long the query took
+	 */
+	default void queryFinished(final KInductionQuery.Kind kind, final int k, final long millis) {
+		// nothing to watch
+	}
+
+	/**
+	 * @return whether the supplier may interrupt the queries of k-induction; then k-induction registers an interrupter
+	 *         with {@link #setInterrupter}
+	 */
+	default boolean mayInterrupt() {
+		return false;
+	}
+
+	/**
+	 * Called by k-induction once, if the supplier {@link #mayInterrupt()}.
+	 *
+	 * @param interrupter
+	 *            interrupts the running query, from any thread, and says whether one was running; k-induction then
+	 *            takes what the supplier published and the supplier's answer, see {@link #takeAnswer}
+	 */
+	default void setInterrupter(final BooleanSupplier interrupter) {
+		// never interrupts
+	}
+
+	/**
+	 * Called by k-induction after the supplier interrupted a query.
+	 *
+	 * @return the answer the supplier's probe found for this query, with weaker invariants, if it probed it
+	 */
+	default Optional<LBool> takeAnswer(final KInductionQuery.Kind kind, final int k) {
+		return Optional.empty();
 	}
 
 	/**

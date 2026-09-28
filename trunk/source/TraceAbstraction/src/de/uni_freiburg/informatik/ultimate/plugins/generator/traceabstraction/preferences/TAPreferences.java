@@ -107,6 +107,10 @@ public final class TAPreferences {
 	private final int mNumSymExecWorkers;
 	private final int mNumKInductionWorkers;
 	private final int mKInductionSolverTimeout;
+	private final boolean mInvariantProbation;
+	private final int mProbationFactor;
+	private final int mProbationMinimum;
+	private final boolean mKInductionSolverRestart;
 	private final boolean mAbsIntWorker;
 	private final List<String> mAbsIntDomains;
 	private final int mAbsIntDomainBudget;
@@ -226,6 +230,11 @@ public final class TAPreferences {
 		mNumKInductionWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_KINDUCTION_WORKERS);
 		mKInductionSolverTimeout =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_SOLVER_TIMEOUT);
+		mInvariantProbation = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_PROBATION);
+		mProbationFactor = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_PROBATION_FACTOR);
+		mProbationMinimum = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_PROBATION_MINIMUM);
+		mKInductionSolverRestart =
+				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_SOLVER_RESTART);
 		mAbsIntWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_WORKER);
 		mAbsIntDomains = Arrays.stream(mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_DOMAINS)
 				.split(",")).map(String::trim).filter(domain -> !domain.isEmpty()).collect(Collectors.toList());
@@ -641,6 +650,35 @@ public final class TAPreferences {
 	 */
 	public int getKInductionSolverTimeout() {
 		return mKInductionSolverTimeout;
+	}
+
+	/**
+	 * @return whether the invariant supplier may interrupt a query of k-induction that an invariant made slow
+	 */
+	public boolean useInvariantProbation() {
+		return mInvariantProbation;
+	}
+
+	/**
+	 * @return how many times longer than the previous query of its kind a query of k-induction may run before it is
+	 *         on probation
+	 */
+	public int getProbationFactor() {
+		return mProbationFactor;
+	}
+
+	/**
+	 * @return how long (s) a query of k-induction runs at least before it is on probation
+	 */
+	public int getProbationMinimum() {
+		return mProbationMinimum;
+	}
+
+	/**
+	 * @return whether k-induction restarts its solver if an interrupt of the invariant supplier killed it
+	 */
+	public boolean restartKInductionSolverAfterInterrupt() {
+		return mKInductionSolverRestart;
 	}
 
 	public boolean useAbsIntWorker() {

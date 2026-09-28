@@ -569,6 +569,11 @@ public class OctAssumeProcessor {
 		final List<OctDomainState> returnStates = new ArrayList<>();
 
 		for (final OctDomainState oldState : oldStates) {
+			if (oldState.isBottom()) {
+				// Stays bottom. It may be a fresh bottom state without any variables, which could not be written.
+				returnStates.add(oldState);
+				continue;
+			}
 			for (final IntervalDomainState iState : computedIntervalPost) {
 				final OctDomainState newOld =
 						IntervalProjection.projectIntervalStateToOctagon(logger, iState, oldState, relevantVars);

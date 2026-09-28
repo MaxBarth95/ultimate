@@ -101,6 +101,11 @@ final class InductivenessChecker {
 		mConstants = new IndexedConstantVars(mgdScript.getScript(), new HashMap<>(), "inv");
 	}
 
+	/** @return the transition system of the initial abstraction, over the supplier's script */
+	PcTransitionSystem<CallNode<IPredicate>> getSystem() {
+		return mSystem;
+	}
+
 	/** @return true if {@code location} has a pc node, i.e. a candidate there can be checked */
 	boolean hasNode(final IcfgLocation location) {
 		return mLocationOfNode.containsValue(location);

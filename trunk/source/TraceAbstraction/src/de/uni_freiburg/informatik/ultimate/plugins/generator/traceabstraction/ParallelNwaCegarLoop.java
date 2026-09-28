@@ -40,6 +40,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -110,6 +111,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 * pattern matches the option as it may already appear in the configured command, the format string writes a new
 	 * one. Mirrors {@link SolverBuilder.ExternalSolver}, which spells the same options for its built-in commands.
 	 */
+	/** z3's value of :timeout for no timeout at all. */
+	private static final long Z3_NO_TIMEOUT = 4294967295L;
+
 	private static final Map<String, Entry<Pattern, String>> SOLVER_TIMEOUT_OPTION = Map.of(
 			"z3", Map.entry(Pattern.compile("\\s*-t:\\d+"), " -t:%d"),
 			"cvc4", Map.entry(Pattern.compile("\\s*--tlimit-per=\\d+"), " --tlimit-per=%d"),
@@ -402,7 +406,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 						getSolverSettings(WorkerType.INVARIANT, "InvariantSupplier"), mCsToolkit,
 						freshVarPrefix(WorkerType.INVARIANT, id));
 				mInvariantSupplier = new InvariantSupplier<>(mLogger, iterationServices,
-						invariantTransfer.getWorkerCfgSmtToolKit(), mWorkerResultQueue, this::isShuttingDown);
+						invariantTransfer.getWorkerCfgSmtToolKit(), mWorkerResultQueue, this::isShuttingDown,
+						probationSettings());
 			} else {
 				invariantTransfer = null;
 			}
@@ -504,7 +509,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// Runs on the main script's variables and needs no solver of its own.
 			return new AbsIntWorkerThread<>(mLogger, iterationServices, mAbstraction, mIcfg,
 					mCsToolkit, invariantSink(true), mPref.getAbsIntDomains(), mPref.getAbsIntDomainBudget(),
-					mPref.getAbsIntMemoryBudget(), mWorkerResultQueue);
+					mPref.getAbsIntMemoryBudget(), mWorkerResultQueue, this::isShuttingDown);
 		}
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(
@@ -905,6 +910,34 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 						.setSolverMode(solverMode).setAdditionalOptions(additionalSmtOptions);
 
 		return solverSettings;
+	}
+
+	/**
+	 * @return the settings of the invariant supplier's probation of k-induction's queries, or {@code null} if it is
+	 *         disabled or there is no k-induction worker
+	 */
+	private InvariantSupplier.Probation probationSettings() {
+		if (!mPref.useInvariantProbation() || mNumKInductionWorkers == 0) {
+			return null;
+		}
+		// Interrupting a query needs SIGINT, after which z3 answers unknown and keeps its state; the supplier sets
+		// z3's :timeout option for its probes.
+		final String supplierCommand = externalSolverCommand(WorkerType.INVARIANT);
+		if (!isZ3(externalSolverCommand(WorkerType.KINDUCTION)) || !isZ3(supplierCommand)) {
+			mLogger.warn("The probation of invariants needs z3 as the solver of k-induction and of the invariant "
+					+ "supplier, but the solver command is \"%s\"; k-induction runs without probation",
+					mPref.commandExternalSolver());
+			return null;
+		}
+		final Matcher timeout = Pattern.compile("-t:(\\d+)").matcher(supplierCommand);
+		final long solverTimeout = timeout.find() ? Long.parseLong(timeout.group(1)) : Z3_NO_TIMEOUT;
+		return new InvariantSupplier.Probation(mPref.getProbationFactor(), mPref.getProbationMinimum() * 1000L,
+				solverTimeout);
+	}
+
+	private static boolean isZ3(final String command) {
+		final String executable = command.split("\\s+", 2)[0];
+		return "z3".equals(executable.substring(executable.lastIndexOf('/') + 1));
 	}
 
 	/**

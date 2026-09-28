@@ -48,15 +48,19 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.I
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.taskidentifier.TaskIdentifier;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
-import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.PureSubstitution;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.ExternalSolverInterrupter;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.ExternalSolverRestarter;
 import de.uni_freiburg.informatik.ultimate.logic.QuantifiedFormula;
 import de.uni_freiburg.informatik.ultimate.logic.Rational;
+import de.uni_freiburg.informatik.ultimate.logic.SMTLIBException;
 import de.uni_freiburg.informatik.ultimate.logic.Script;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Sort;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.KInductionQuery.Invariant;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.KInductionQuery.Kind;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.PcTransitionSystem.StepVars;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
@@ -93,7 +97,9 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tr
  * nested one. It is assumed in every unrolled state where {@code pc} is that loop head, in the base and the step case.
  * This only prunes the search and can make a loop inductive that is not k-inductive on its own, but a wrong invariant
  * makes the result wrong. An invariant that mentions a variable that occurs in no transition is dropped, which is
- * always sound.
+ * always sound. With probation, the supplier watches how long the queries take and may interrupt one that an
+ * invariant made slow, after publishing a better invariant. k-induction then takes the answer of the supplier's
+ * probe, or asks the query again for a violation (see {@link #answer}).
  * <p>
  * <b>Learned invariants.</b> If the program is proven safe with some k, {@link #getLearnedInvariants()} returns for
  * every loop head the formula "no error can be reached from here within k steps". It holds in every reachable state of
@@ -119,7 +125,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 	// Set by run() when the base case is satisfiable, reconstructed from mWitness by
 	// KInductionCounterexampleBuilder.
 	NestedRun<LETTER, STATE> mCounterexample;
-	// What the model of the satisfiable base case said. Read in checkBase before its pop, null unless UNSAFE.
+	// What the model of the satisfiable base case said. Read in ask() before its pop, null unless UNSAFE.
 	private KInductionWitness mWitness;
 
 	private final CfgSmtToolkit mCsToolkit;
@@ -149,11 +155,14 @@ public class KInduction<LETTER extends IAction, STATE> {
 	private PcTransitionSystem<CallNode<STATE>> mSystem;
 	// null unless the abstraction has calls, in which case it holds the resolved call sites
 	private ProcedureSummaries<LETTER, STATE> mSummaries;
-	private final List<Term> mStepTerms = new ArrayList<>();
 	private StepVars mConstants;
+	private KInductionQuery<CallNode<STATE>> mQuery;
 	// pc node of a loop head -> its invariant, over the program variables' term variables
-	private final Map<Integer, Term> mInjectedInvariants = new LinkedHashMap<>();
-	private final Map<Integer, Map<IProgramVar, TermVariable>> mInjectedInvariantVars = new LinkedHashMap<>();
+	private final Map<Integer, Invariant> mInjectedInvariants = new LinkedHashMap<>();
+	// Whether the invariant supplier may interrupt a query, see answer(), and whether a solver that died of such an
+	// interrupt is restarted, see restartSolverAfterInterrupt().
+	private final boolean mProbation;
+	private final boolean mRestartSolver;
 	// Supplied invariants that mention a variable outside the transition system, so that they are reported only once
 	private final Set<Term> mUnusableInvariants = new LinkedHashSet<>();
 	// Whether the supplier was asked about every loop head at least once
@@ -175,6 +184,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 		mKInductionWorkerThread = kInductionWorkerThread;
 		mPref = preferences;
 		mInvariantSupplier = invariantSupplier;
+		mProbation = invariantSupplier.mayInterrupt();
+		mRestartSolver = preferences.restartKInductionSolverAfterInterrupt();
 		run();
 	}
 
@@ -199,6 +210,13 @@ public class KInduction<LETTER extends IAction, STATE> {
 		try {
 			mConstants = new IndexedConstantVars(mWorkerMgdScript.getScript(), mIndexedConstantsWorkerScript,
 					"ki");
+			mQuery = new KInductionQuery<>(mSystem, mWorkerMgdScript, mKILock, mConstants);
+			if (mProbation) {
+				final Script script = mWorkerMgdScript.getScript();
+				// Throws unless the solver is an external process, the only kind that can be interrupted.
+				ExternalSolverInterrupter.findScriptor(script);
+				mInvariantSupplier.setInterrupter(() -> ExternalSolverInterrupter.interrupt(script));
+			}
 
 			final Verdict verdict = kInduction();
 			mSafe = verdict == Verdict.SAFE;
@@ -227,7 +245,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 			}
 			// The supplier may have learned more since the last k; asking never waits.
 			collectInvariants();
-			final LBool base = checkBase(k);
+			final LBool base = answer(Kind.BASE, k);
 			mLogger.info("KInduction: k=%d - base case: %s", k, base);
 			if (base == LBool.SAT) {
 				return Verdict.UNSAFE;
@@ -236,7 +254,7 @@ public class KInduction<LETTER extends IAction, STATE> {
 				mInconclusive = Inconclusive.solverUnknown(k, "base");
 				return Verdict.UNKNOWN;
 			}
-			final LBool step = checkStep(k);
+			final LBool step = answer(Kind.STEP, k);
 			mLogger.info("KInduction: k=%d - step case: %s", k, step);
 			if (step == LBool.UNSAT) {
 				mProvedK = k;
@@ -254,22 +272,46 @@ public class KInduction<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Is {@code pc = FINAL} reachable from {@code pc = INIT} in {@code k} transitions?
+	 * Asks the query of {@code kind} for {@code k} until it is answered. The invariant supplier may abort a query that
+	 * one of its invariants makes slow; it publishes a better invariant first, so the query is asked again with what
+	 * the supplier has now.
 	 */
-	private LBool checkBase(final int k) {
-		final Script script = mWorkerMgdScript.getScript();
-		final List<Term> invariants = prepare(k);
-		mWorkerMgdScript.push(mKILock, 1);
-		mWorkerMgdScript.assertTerm(mKILock, SmtUtils.binaryEquality(script, mConstants.pc(0),
-				PcTransitionSystem.pcValue(script, PcTransitionSystem.INIT)));
-		assertSteps(k);
-		mWorkerMgdScript.assertTerm(mKILock, SmtUtils.binaryEquality(script, mConstants.pc(k),
-				PcTransitionSystem.pcValue(script, PcTransitionSystem.FINAL)));
-		for (final Term invariant : invariants) {
-			mWorkerMgdScript.assertTerm(mKILock, invariant);
+	private LBool answer(final Kind kind, final int k) {
+		while (true) {
+			mInvariantSupplier.queryStarted(kind, k);
+			final long start = System.nanoTime();
+			final LBool result = ask(kind, k);
+			mInvariantSupplier.queryFinished(kind, k, (System.nanoTime() - start) / 1_000_000);
+			if (result != null) {
+				return result;
+			}
+			// The supplier published weaker invariants before the abort; the next query is to use them.
+			collectInvariants();
+			final Optional<LBool> probed = mInvariantSupplier.takeAnswer(kind, k);
+			// Sound for either answer: invariants hold in every reachable state, so the base case does not depend on
+			// them, and a step case that is unsat with weaker invariants is unsat with stronger ones; sat only means
+			// to go on with k + 1. Only a violation is asked again, since its witness is read from this solver's model.
+			if (probed.isPresent() && !(kind == Kind.BASE && probed.get() == LBool.SAT)) {
+				mLogger.info("KInduction: the invariant supplier aborted the %s case at k=%d and answered it: %s",
+						kind, k, probed.get());
+				return probed.get();
+			}
+			mLogger.info("KInduction: the invariant supplier aborted the %s case at k=%d, asking it again", kind, k);
 		}
+	}
+
+	/**
+	 * Asks the query of {@code kind} for {@code k} once. A satisfiable base case is a violation, whose witness is read
+	 * from the model before the pop.
+	 *
+	 * @return the answer, or {@code null} if the invariant supplier aborted the query
+	 */
+	private LBool ask(final Kind kind, final int k) {
+		final List<Term> invariants = mQuery.prepare(k, mInjectedInvariants);
+		mWorkerMgdScript.push(mKILock, 1);
+		mQuery.assertQuery(kind, k, invariants);
 		final LBool result = checkSat();
-		if (result == LBool.SAT) {
+		if (result == LBool.SAT && kind == Kind.BASE) {
 			// The model dies with this scope, so it has to be read now. The constants themselves were declared by
 			// prepare(k), i.e. outside the push, and survive the pop.
 			mWitness = extractWitness(k);
@@ -277,6 +319,43 @@ public class KInduction<LETTER extends IAction, STATE> {
 		}
 		mWorkerMgdScript.pop(mKILock, 1);
 		return result;
+	}
+
+	/**
+	 * @return the answer, or {@code null} if the invariant supplier interrupted the query
+	 */
+	private LBool checkSat() {
+		final LBool result;
+		try {
+			result = mWorkerMgdScript.checkSat(mKILock);
+		} catch (final SMTLIBException e) {
+			if (restartSolverAfterInterrupt(e)) {
+				return null;
+			}
+			throw e;
+		}
+		if (result == LBool.UNKNOWN && mProbation
+				&& ExternalSolverInterrupter.wasInterrupted(mWorkerMgdScript.getScript())) {
+			return null;
+		}
+		return result;
+	}
+
+	/**
+	 * An interrupt of the invariant supplier that arrives just after the solver answered kills the solver. Restarts it
+	 * with the declarations and the stack it had; the interrupted query is then asked again, which rebuilds its
+	 * assertions. Remove this method and its call to drop the restart.
+	 *
+	 * @return whether the solver was restarted, false if {@code e} has another cause
+	 */
+	private boolean restartSolverAfterInterrupt(final SMTLIBException e) {
+		if (!mProbation || !mRestartSolver || !ExternalSolverInterrupter.wasInterrupted(mWorkerMgdScript.getScript())) {
+			return false;
+		}
+		mLogger.warn("KInduction: the solver died of an interrupt that arrived after its answer (%s), restarting it",
+				e.getMessage());
+		ExternalSolverRestarter.restartAndReplay(mWorkerMgdScript.getScript());
+		return true;
 	}
 
 	/**
@@ -340,58 +419,6 @@ public class KInduction<LETTER extends IAction, STATE> {
 		return rational.numerator().intValueExact();
 	}
 
-	/**
-	 * Can {@code k} transitions from an arbitrary non-INIT state, with no error in the first {@code k} states, reach an
-	 * error? UNSAT means the step is inductive.
-	 */
-	private LBool checkStep(final int k) {
-		final Script script = mWorkerMgdScript.getScript();
-		final List<Term> invariants = prepare(k);
-		mWorkerMgdScript.push(mKILock, 1);
-		mWorkerMgdScript.assertTerm(mKILock, SmtUtils.distinct(script, mConstants.pc(0),
-				PcTransitionSystem.pcValue(script, PcTransitionSystem.INIT)));
-		assertSteps(k);
-		for (int j = 0; j < k; j++) {
-			mWorkerMgdScript.assertTerm(mKILock, SmtUtils.distinct(script, mConstants.pc(j),
-					PcTransitionSystem.pcValue(script, PcTransitionSystem.FINAL)));
-		}
-		mWorkerMgdScript.assertTerm(mKILock, SmtUtils.binaryEquality(script, mConstants.pc(k),
-				PcTransitionSystem.pcValue(script, PcTransitionSystem.FINAL)));
-		for (final Term invariant : invariants) {
-			mWorkerMgdScript.assertTerm(mKILock, invariant);
-		}
-		final LBool result = checkSat();
-		mWorkerMgdScript.pop(mKILock, 1);
-		return result;
-	}
-
-	private LBool checkSat() {
-		return mWorkerMgdScript.checkSat(mKILock);
-	}
-
-	/**
-	 * Builds everything that declares constants (the steps up to {@code k}, the pc constants and the invariants). This
-	 * has to happen before the {@code push} of a query: constants declared inside are forgotten by the solver on
-	 * {@code pop}, but stay in {@link #mIndexedConstantsWorkerScript}.
-	 *
-	 * @return the invariant assertions for the states {@code 0..k}
-	 */
-	private List<Term> prepare(final int k) {
-		while (mStepTerms.size() < k) {
-			mStepTerms.add(mSystem.step(mStepTerms.size(), mConstants, mWorkerMgdScript));
-		}
-		for (int j = 0; j <= k; j++) {
-			mConstants.pc(j);
-		}
-		return invariantAssertions(k);
-	}
-
-	private void assertSteps(final int k) {
-		for (int j = 0; j < k; j++) {
-			mWorkerMgdScript.assertTerm(mKILock, mStepTerms.get(j));
-		}
-	}
-
 	// ------------------------------------------------------------------------------------------------------------
 	// Invariant injection
 	// ------------------------------------------------------------------------------------------------------------
@@ -405,59 +432,24 @@ public class KInduction<LETTER extends IAction, STATE> {
 			return;
 		}
 		mInvariantsCollected = true;
-		final Map<TermVariable, IProgramVar> varOfTermVariable = new HashMap<>();
-		for (final IProgramVar pv : mSystem.getVars()) {
-			varOfTermVariable.put(pv.getTermVariable(), pv);
-		}
 		for (final Map.Entry<CallNode<STATE>, Integer> head : mSystem.getHeadNodes().entrySet()) {
 			final Optional<Term> invariant = mInvariantSupplier.getInvariant(head.getKey(), mWorkerMgdScript);
 			// Terms are unified by the script, so an unchanged invariant is the very same object.
-			if (invariant.isEmpty() || invariant.get() == mInjectedInvariants.get(head.getValue())
+			final Invariant injected = mInjectedInvariants.get(head.getValue());
+			if (invariant.isEmpty() || injected != null && invariant.get() == injected.term()
 					|| mUnusableInvariants.contains(invariant.get())) {
 				continue;
 			}
-			final Map<IProgramVar, TermVariable> used = new LinkedHashMap<>();
-			boolean usable = true;
-			for (final TermVariable tv : invariant.get().getFreeVars()) {
-				final IProgramVar pv = varOfTermVariable.get(tv);
-				if (pv == null) {
-					usable = false;
-					mUnusableInvariants.add(invariant.get());
-					mLogger.info("KInduction: ignoring invariant of loop head %s, it mentions %s which occurs in "
-							+ "no transition", head.getKey(), tv);
-					break;
-				}
-				used.put(pv, tv);
+			final Map<IProgramVar, TermVariable> used = mQuery.variablesOf(invariant.get());
+			if (used == null) {
+				mUnusableInvariants.add(invariant.get());
+				mLogger.info("KInduction: ignoring invariant of loop head %s, it mentions a variable which occurs in "
+						+ "no transition", head.getKey());
+				continue;
 			}
-			if (usable) {
-				mInjectedInvariants.put(head.getValue(), invariant.get());
-				mInjectedInvariantVars.put(head.getValue(), used);
-				mLogger.info("KInduction: using invariant of loop head %s: %s", head.getKey(), invariant.get());
-			}
+			mInjectedInvariants.put(head.getValue(), new Invariant(invariant.get(), used));
+			mLogger.info("KInduction: using invariant of loop head %s: %s", head.getKey(), invariant.get());
 		}
-	}
-
-	/**
-	 * For every step {@code 0..k}: if the pc is a loop head with an invariant, the invariant holds. Returns the
-	 * assertions.
-	 */
-	private List<Term> invariantAssertions(final int k) {
-		final List<Term> result = new ArrayList<>();
-		final Script script = mWorkerMgdScript.getScript();
-		for (final Map.Entry<Integer, Term> entry : mInjectedInvariants.entrySet()) {
-			for (int j = 0; j <= k; j++) {
-				final Map<Term, Term> substitution = new HashMap<>();
-				for (final Map.Entry<IProgramVar, TermVariable> var : mInjectedInvariantVars.get(entry.getKey())
-						.entrySet()) {
-					substitution.put(var.getValue(), mConstants.var(var.getKey(), j));
-				}
-				final Term instantiated = PureSubstitution.apply(mWorkerMgdScript, substitution, entry.getValue());
-				final Term atHead = SmtUtils.binaryEquality(script, mConstants.pc(j),
-						PcTransitionSystem.pcValue(script, entry.getKey()));
-				result.add(SmtUtils.implies(script, atHead, instantiated));
-			}
-		}
-		return result;
 	}
 
 	// ------------------------------------------------------------------------------------------------------------

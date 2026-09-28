@@ -39,6 +39,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
@@ -56,12 +57,14 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttrans
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.TermClassifier;
+import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ParallelNwaCegarLoop;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult.WorkerType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.InvariantMessage.InterpolantSequence;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.InvariantMessage.TrustedInvariants;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.InvariantSubscription.RunningQuery;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.KInduction;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.PcTransitionSystemFactory;
 
@@ -79,6 +82,12 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ki
  * conjuncts. A candidate that was not inductive is kept (up to {@link #MAX_RETRY_POOL}) and tried again once more is
  * known, since a new invariant may be exactly what it was missing.
  * <p>
+ * <b>Probation</b>: if enabled, the supplier watches the queries of k-induction through the subscriptions. When one runs
+ * much longer than the query of its kind before, it asks the same query with the invariants of earlier versions (see
+ * {@link InvariantProbation}). If one answers within the limit, the supplier rolls back to it, never publishes the
+ * conjuncts it dropped again, and interrupts k-induction, which takes the probe's answer (or asks again for a
+ * violation, whose witness it needs from its own solver).
+ * <p>
  * <b>Nonlinear programs</b>: if a transition of the program has nonlinear arithmetic, only the conjuncts over a
  * single variable are published. On such programs bounds keep the queries of k-induction tractable, while a single
  * relation between two variables can make the solver hang, even one over variables that only occur linearly. The
@@ -95,6 +104,23 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 
 	/** How many rejected candidates are kept to be tried again; beyond that the oldest are forgotten. */
 	private static final int MAX_RETRY_POOL = 1000;
+	/** How often the supplier looks at the queries of k-induction when no message arrives, in ms. */
+	private static final long WATCH_INTERVAL_MILLIS = 1000;
+	/** How many earlier versions a probation tries, newest first. */
+	private static final int PROBED_VERSIONS = 3;
+
+	/**
+	 * The settings of the probation.
+	 *
+	 * @param factor
+	 *            a query is on probation once it runs this many times longer than the previous one of its kind
+	 * @param minimumMillis
+	 *            ... and at least this long
+	 * @param solverTimeoutMillis
+	 *            the per-query timeout of the supplier's solver, restored after a probe
+	 */
+	public record Probation(int factor, long minimumMillis, long solverTimeoutMillis) {
+	}
 
 	private record Candidate(IcfgLocation location, Term term) {
 	}
@@ -116,6 +142,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	// Guards mSubscriptions and mPublished, the only state shared with other threads besides the inbox.
 	private final List<InvariantSubscription> mSubscriptions = new ArrayList<>();
 	private final Map<IcfgLocation, Term> mPublished = new HashMap<>();
+	private int mPublishedVersion;
 
 	// Everything below is only touched by the supplier thread.
 	private final Map<ManagedScript, TermTransferrer> mTransferrers = new IdentityHashMap<>();
@@ -125,6 +152,12 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	private final Set<Candidate> mRetryPool = new LinkedHashSet<>();
 	private boolean mKnownGrew;
 	private InductivenessChecker mChecker;
+	// null unless probation is enabled
+	private final InvariantProbation mProbation;
+	// Version i: the conjuncts published per location after the i-th publication; version 0 is empty.
+	private final List<Map<IcfgLocation, Set<Term>>> mVersions = new ArrayList<>(List.of(Map.of()));
+	// Conjuncts that a rollback dropped, never published again at their location.
+	private final Map<IcfgLocation, Set<Term>> mRolledBack = new HashMap<>();
 
 	/**
 	 * Must be called on the main thread. The channels exist from here on, the abstraction follows with
@@ -136,16 +169,21 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	 *            where a crash is reported
 	 * @param shuttingDown
 	 *            whether the CEGAR loop is done, which is why a query may fail
+	 * @param probation
+	 *            the settings of the probation, or {@code null} to disable it
 	 */
 	public InvariantSupplier(final ILogger logger, final IUltimateServiceProvider services,
 			final CfgSmtToolkit csToolkit, final BlockingQueue<WorkerThreadResult<L, A>> resultQueue,
-			final BooleanSupplier shuttingDown) {
+			final BooleanSupplier shuttingDown, final Probation probation) {
 		mLogger = logger;
 		mServices = services;
 		mCsToolkit = csToolkit;
 		mScript = csToolkit.getManagedScript();
 		mResultQueue = resultQueue;
 		mShuttingDown = shuttingDown;
+		mProbation = probation == null ? null
+				: new InvariantProbation(logger, mScript, probation.factor(), probation.minimumMillis(),
+						probation.solverTimeoutMillis());
 	}
 
 	/**
@@ -202,10 +240,10 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	 * @return a new outgoing channel, which starts with everything published so far
 	 */
 	public InvariantSubscription subscribe(final ManagedScript target) {
-		final InvariantSubscription subscription = new InvariantSubscription(mScript, target);
+		final InvariantSubscription subscription = new InvariantSubscription(mScript, target, mProbation != null);
 		synchronized (mSubscriptions) {
 			if (!mPublished.isEmpty()) {
-				subscription.offer(Map.copyOf(mPublished));
+				subscription.offer(mPublishedVersion, Map.copyOf(mPublished));
 			}
 			mSubscriptions.add(subscription);
 		}
@@ -221,13 +259,26 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			}
 			while (true) {
 				final List<InvariantMessage> batch = new ArrayList<>();
-				batch.add(mInbox.take());
+				if (mProbation == null) {
+					batch.add(mInbox.take());
+				} else {
+					// Wakes up now and then without a message, to watch the queries of k-induction.
+					final InvariantMessage first = mInbox.poll(WATCH_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+					if (first != null) {
+						batch.add(first);
+					}
+				}
 				mInbox.drainTo(batch);
 				if (!mServices.getProgressMonitorService().continueProcessing()) {
 					mLogger.info("InvariantSupplier: stopping, the time is up");
 					return;
 				}
-				process(batch);
+				if (!batch.isEmpty()) {
+					process(batch);
+				}
+				if (mProbation != null) {
+					watch();
+				}
 			}
 		} catch (final InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -397,20 +448,29 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 		if (changed.isEmpty()) {
 			return;
 		}
+		final Map<IcfgLocation, Set<Term>> version = new HashMap<>(mVersions.get(mVersions.size() - 1));
 		final Map<IcfgLocation, Term> update = new HashMap<>();
 		int withheld = 0;
 		for (final IcfgLocation location : changed) {
-			final List<Term> published = new ArrayList<>();
+			final Set<Term> published = new LinkedHashSet<>();
+			final Set<Term> rolledBack = mRolledBack.getOrDefault(location, Collections.emptySet());
 			for (final Term conjunct : knownAt(location)) {
 				if (mNonlinear && conjunct.getFreeVars().length > 1) {
 					withheld++;
-				} else {
+				} else if (!rolledBack.contains(conjunct)) {
 					published.add(conjunct);
 				}
 			}
-			if (!published.isEmpty()) {
-				update.put(location, SmtUtils.and(mScript.getScript(), published));
+			if (published.equals(version.getOrDefault(location, Collections.emptySet()))) {
+				continue;
 			}
+			if (published.isEmpty()) {
+				version.remove(location);
+			} else {
+				version.put(location, published);
+			}
+			// An empty invariant is published as true, to replace one that was rolled back.
+			update.put(location, SmtUtils.and(mScript.getScript(), published));
 		}
 		if (withheld > 0) {
 			mLogger.info("InvariantSupplier: withheld %d conjunct(s) relating several variables", withheld);
@@ -418,13 +478,100 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 		if (update.isEmpty()) {
 			return;
 		}
+		mVersions.add(version);
+		final int number = mVersions.size() - 1;
 		synchronized (mSubscriptions) {
 			mPublished.putAll(update);
+			mPublishedVersion = number;
 			for (final InvariantSubscription subscription : mSubscriptions) {
-				subscription.offer(Map.copyOf(update));
+				subscription.offer(number, Map.copyOf(update));
 			}
 		}
-		mLogger.info("InvariantSupplier: published stronger invariants of %d location(s)", update.size());
+		mLogger.info("InvariantSupplier: published version %d, invariants of %d location(s)", number, update.size());
+	}
+
+	// ------------------------------------------------------------------------------------------------------------
+	// Probation
+	// ------------------------------------------------------------------------------------------------------------
+
+	private void watch() {
+		final List<InvariantSubscription> subscriptions;
+		synchronized (mSubscriptions) {
+			subscriptions = new ArrayList<>(mSubscriptions);
+		}
+		for (final InvariantSubscription subscription : subscriptions) {
+			final RunningQuery query = mProbation.due(subscription);
+			if (query != null) {
+				probe(subscription, query);
+			}
+		}
+	}
+
+	/**
+	 * Asks the slow query with the invariants of earlier versions. Rolls back to the first one that answers within the
+	 * limit and interrupts k-induction; otherwise k-induction just goes on.
+	 */
+	private void probe(final InvariantSubscription subscription, final RunningQuery query) {
+		final long limit = mProbation.limitMillis(subscription, query.kind());
+		final Map<IcfgLocation, Set<Term>> current = mVersions.get(query.version());
+		mLogger.info("InvariantSupplier: probation, the %s case at k=%d with version %d runs longer than %d ms",
+				query.kind(), query.k(), query.version(), limit);
+		for (int earlier = query.version() - 1; earlier >= Math.max(0, query.version() - PROBED_VERSIONS); earlier--) {
+			final Map<IcfgLocation, Set<Term>> candidate = mVersions.get(earlier);
+			if (candidate.equals(current) || containsRolledBack(candidate)) {
+				continue;
+			}
+			final long start = System.nanoTime();
+			final LBool answer =
+					mProbation.ask(getChecker().getSystem(), query.kind(), query.k(), candidate, limit);
+			mLogger.info("InvariantSupplier: probation, version %d answers %s in %d ms", earlier, answer,
+					(System.nanoTime() - start) / 1_000_000);
+			if (answer == LBool.UNKNOWN) {
+				continue;
+			}
+			if (!query.equals(subscription.runningQuery())) {
+				mLogger.info("InvariantSupplier: probation, k-induction answered meanwhile, no rollback");
+				return;
+			}
+			rollBack(current, candidate, earlier);
+			if (subscription.interrupt(query.kind(), query.k(), answer)) {
+				mLogger.info("InvariantSupplier: probation, interrupted k-induction and handed it the answer");
+			} else {
+				mLogger.info("InvariantSupplier: probation, k-induction answered before the interrupt");
+			}
+			return;
+		}
+		mLogger.info("InvariantSupplier: probation, no earlier version answers within %d ms, k-induction goes on",
+				limit);
+	}
+
+	private boolean containsRolledBack(final Map<IcfgLocation, Set<Term>> version) {
+		for (final Map.Entry<IcfgLocation, Set<Term>> entry : version.entrySet()) {
+			final Set<Term> rolledBack = mRolledBack.getOrDefault(entry.getKey(), Collections.emptySet());
+			if (!Collections.disjoint(rolledBack, entry.getValue())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Drops what {@code current} has beyond {@code target}, for good, and publishes the result.
+	 */
+	private void rollBack(final Map<IcfgLocation, Set<Term>> current, final Map<IcfgLocation, Set<Term>> target,
+			final int targetVersion) {
+		final Set<IcfgLocation> changed = new LinkedHashSet<>(current.keySet());
+		changed.addAll(target.keySet());
+		int dropped = 0;
+		for (final Map.Entry<IcfgLocation, Set<Term>> entry : current.entrySet()) {
+			final Set<Term> beyond = new LinkedHashSet<>(entry.getValue());
+			beyond.removeAll(target.getOrDefault(entry.getKey(), Collections.emptySet()));
+			dropped += beyond.size();
+			mRolledBack.computeIfAbsent(entry.getKey(), x -> new LinkedHashSet<>()).addAll(beyond);
+		}
+		mLogger.warn("InvariantSupplier: probation, rolling back to version %d, dropping %d conjunct(s)",
+				targetVersion, dropped);
+		publish(changed);
 	}
 
 	private InductivenessChecker getChecker() {

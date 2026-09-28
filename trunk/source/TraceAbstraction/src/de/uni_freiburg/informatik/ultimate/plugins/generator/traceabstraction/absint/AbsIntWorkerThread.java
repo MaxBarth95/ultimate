@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.BlockingQueue;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
@@ -97,6 +98,8 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 	private final IUltimateServiceProvider mServices;
 	private final long mDomainBudgetMs;
 	private final long mHeapBudgetBytes;
+	// True once the CEGAR loop is done, before it shuts the toolchain's services down.
+	private final BooleanSupplier mShuttingDown;
 	private final BlockingQueue<WorkerThreadResult<L, A>> mResultQueue;
 	private final IInvariantSink mSink;
 	// Only this worker builds terms in it; the supplier reads them.
@@ -114,12 +117,14 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 	 * @param heapBudgetPercent
 	 *            how much of the JVM's maximum heap may be in use while a domain runs; a domain that exceeds it is
 	 *            stopped like one that runs out of time
+	 * @param shuttingDown
+	 *            whether the CEGAR loop is done, which is why a service may be gone
 	 */
 	public AbsIntWorkerThread(final ILogger logger, final IUltimateServiceProvider services,
 			final INestedWordAutomaton<L, IPredicate> abstraction, final IIcfg<?> icfg,
 			final CfgSmtToolkit mainCsToolkit, final IInvariantSink sink, final List<String> domains,
 			final int domainBudgetSeconds, final int heapBudgetPercent,
-			final BlockingQueue<WorkerThreadResult<L, A>> resultQueue) {
+			final BlockingQueue<WorkerThreadResult<L, A>> resultQueue, final BooleanSupplier shuttingDown) {
 		if (domainBudgetSeconds <= 0) {
 			throw new IllegalArgumentException("The time budget per domain must be positive: " + domainBudgetSeconds);
 		}
@@ -131,6 +136,7 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 		mServices = services;
 		mDomainBudgetMs = domainBudgetSeconds * 1000L;
 		mHeapBudgetBytes = Runtime.getRuntime().maxMemory() / 100 * heapBudgetPercent;
+		mShuttingDown = shuttingDown;
 		mResultQueue = resultQueue;
 		mSink = sink;
 		// Only used to build terms, never to solve, so an in-process SMTInterpol suffices. Created here, on the main
@@ -211,6 +217,11 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 		} catch (final InterruptedException e) {
 			Thread.currentThread().interrupt();
 		} catch (final Throwable t) {
+			if (mShuttingDown.getAsBoolean()) {
+				// The CEGAR loop is done and took the services down under the running analysis. Nobody waits for it.
+				mLogger.info("AbsInt: stopping, shut down during the analysis (" + t + ")");
+				return;
+			}
 			mLogger.error("AbsInt worker crashed: " + t);
 			for (final StackTraceElement element : t.getStackTrace()) {
 				mLogger.error("\tat " + element);

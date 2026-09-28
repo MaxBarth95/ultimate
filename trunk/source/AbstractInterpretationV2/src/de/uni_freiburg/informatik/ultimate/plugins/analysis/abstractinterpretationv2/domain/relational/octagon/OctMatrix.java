@@ -272,7 +272,12 @@ public class OctMatrix {
 	}
 
 	private static int entriesInBlockLowerTriangular(final int variables) {
-		return 2 * (variables * variables + variables);
+		try {
+			return Math.multiplyExact(2, Math.addExact(Math.multiplyExact(variables, variables), variables));
+		} catch (final ArithmeticException e) {
+			throw new UnsupportedOperationException(
+					"too many variables for an octagon, its matrix would exceed the maximal array size: " + variables);
+		}
 	}
 
 	/**
