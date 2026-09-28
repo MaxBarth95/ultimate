@@ -562,9 +562,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	public static final String LABEL_ABSINT_DOMAINS = "Abstract domains of the abstract interpretation worker";
 	private static final String DESC_ABSINT_DOMAINS =
 			"Comma-separated AbstractInterpretationV2 domains, run in this order: SignDomain, IntervalDomain, "
-					+ "CongruenceDomain, ExplicitValueDomain or OctagonDomain. Their results are trusted: "
-					+ "OctagonDomain is unsound on modular (unsigned) and nonlinear arithmetic.";
-	private static final String DEF_ABSINT_DOMAINS = "IntervalDomain";
+					+ "CongruenceDomain, ExplicitValueDomain or OctagonDomain. Their results are trusted.";
+	private static final String DEF_ABSINT_DOMAINS = "IntervalDomain,OctagonDomain";
 
 	public static final String LABEL_ABSINT_DOMAIN_BUDGET =
 			"Time budget per domain of the abstract interpretation worker (s)";
