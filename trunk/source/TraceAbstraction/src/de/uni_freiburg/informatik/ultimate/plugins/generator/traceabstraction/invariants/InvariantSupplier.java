@@ -43,6 +43,7 @@ import java.util.function.BooleanSupplier;
 
 import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.VpAlphabet;
 import de.uni_freiburg.informatik.ultimate.core.lib.exceptions.ToolchainCanceledException;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
@@ -54,6 +55,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.TermTransferrer;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.TermClassifier;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ParallelNwaCegarLoop;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.WorkerThreadResult;
@@ -77,6 +79,12 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ki
  * conjuncts. A candidate that was not inductive is kept (up to {@link #MAX_RETRY_POOL}) and tried again once more is
  * known, since a new invariant may be exactly what it was missing.
  * <p>
+ * <b>Nonlinear programs</b>: if a transition of the program has nonlinear arithmetic, only the conjuncts over a
+ * single variable are published. On such programs bounds keep the queries of k-induction tractable, while a single
+ * relation between two variables can make the solver hang, even one over variables that only occur linearly. The
+ * supplier itself keeps every conjunct, so relations still help to prove candidates; each conjunct of an invariant is
+ * an invariant, so any subset may be published.
+ * <p>
  * <b>Scripts</b>: the supplier owns its script and is the only one to build terms in it. It copies the producers' terms
  * into it on its own thread; subscribers copy from it on theirs.
  *
@@ -97,6 +105,8 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	private final ManagedScript mScript;
 	// Set once, on the main thread, before the supplier runs.
 	private INestedWordAutomaton<L, IPredicate> mAbstraction;
+	// Whether a transition of the abstraction has nonlinear arithmetic; set with mAbstraction.
+	private boolean mNonlinear;
 	private final BlockingQueue<WorkerThreadResult<L, A>> mResultQueue;
 
 	private final BlockingQueue<InvariantMessage> mInbox = new LinkedBlockingQueue<>();
@@ -149,6 +159,19 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			throw new IllegalStateException("the invariant supplier already has an abstraction");
 		}
 		mAbstraction = abstraction;
+		final TermClassifier classifier = new TermClassifier();
+		final VpAlphabet<L> alphabet = abstraction.getVpAlphabet();
+		for (final Set<L> letters : List.of(alphabet.getInternalAlphabet(), alphabet.getCallAlphabet(),
+				alphabet.getReturnAlphabet())) {
+			for (final L letter : letters) {
+				classifier.checkTerm(letter.getTransformula().getFormula());
+			}
+		}
+		mNonlinear = classifier.hasNonlinearArithmetic();
+		if (mNonlinear) {
+			mLogger.info("InvariantSupplier: the program has nonlinear arithmetic, only single-variable conjuncts "
+					+ "are published");
+		}
 	}
 
 	/**
@@ -375,8 +398,25 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			return;
 		}
 		final Map<IcfgLocation, Term> update = new HashMap<>();
+		int withheld = 0;
 		for (final IcfgLocation location : changed) {
-			update.put(location, SmtUtils.and(mScript.getScript(), knownAt(location)));
+			final List<Term> published = new ArrayList<>();
+			for (final Term conjunct : knownAt(location)) {
+				if (mNonlinear && conjunct.getFreeVars().length > 1) {
+					withheld++;
+				} else {
+					published.add(conjunct);
+				}
+			}
+			if (!published.isEmpty()) {
+				update.put(location, SmtUtils.and(mScript.getScript(), published));
+			}
+		}
+		if (withheld > 0) {
+			mLogger.info("InvariantSupplier: withheld %d conjunct(s) relating several variables", withheld);
+		}
+		if (update.isEmpty()) {
+			return;
 		}
 		synchronized (mSubscriptions) {
 			mPublished.putAll(update);
