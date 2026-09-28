@@ -118,6 +118,12 @@ public class KInduction<LETTER extends IAction, STATE> {
 	 */
 	private static final int MAX_K = 200000;
 
+	/**
+	 * How long an interrupted query may take to end before its solver is killed and restarted, see
+	 * {@link #restartSolverAfterInterrupt}. z3 took minutes to notice an interrupt on nonlinear arithmetic.
+	 */
+	private static final long KILL_GRACE_MILLIS = 1000;
+
 	private final INestedWordAutomaton<LETTER, STATE> mAbstraction;
 	private final ManagedScript mWorkerMgdScript;
 	private final KILock mKILock = new KILock();
@@ -215,7 +221,9 @@ public class KInduction<LETTER extends IAction, STATE> {
 				final Script script = mWorkerMgdScript.getScript();
 				// Throws unless the solver is an external process, the only kind that can be interrupted.
 				ExternalSolverInterrupter.findScriptor(script);
-				mInvariantSupplier.setInterrupter(() -> ExternalSolverInterrupter.interrupt(script));
+				// Killing the solver needs the restart; without it, k-induction waits for the solver to notice.
+				final long grace = mRestartSolver ? KILL_GRACE_MILLIS : -1;
+				mInvariantSupplier.setInterrupter(() -> ExternalSolverInterrupter.interrupt(script, grace));
 			}
 
 			final Verdict verdict = kInduction();
@@ -329,31 +337,39 @@ public class KInduction<LETTER extends IAction, STATE> {
 		try {
 			result = mWorkerMgdScript.checkSat(mKILock);
 		} catch (final SMTLIBException e) {
-			if (restartSolverAfterInterrupt(e)) {
+			if (restartSolverAfterInterrupt(e.getMessage())) {
 				return null;
 			}
 			throw e;
 		}
 		if (result == LBool.UNKNOWN && mProbation
 				&& ExternalSolverInterrupter.wasInterrupted(mWorkerMgdScript.getScript())) {
+			// The solver may have answered the interrupt just before it was killed for being too slow.
+			if (ExternalSolverInterrupter.wasKilled(mWorkerMgdScript.getScript())
+					&& !restartSolverAfterInterrupt("killed after answering the interrupt")) {
+				throw new SMTLIBException("the solver of k-induction was killed after an interrupt, but it may not "
+						+ "be restarted");
+			}
 			return null;
 		}
 		return result;
 	}
 
 	/**
-	 * An interrupt of the invariant supplier that arrives just after the solver answered kills the solver. Restarts it
-	 * with the declarations and the stack it had; the interrupted query is then asked again, which rebuilds its
-	 * assertions. Remove this method and its call to drop the restart.
+	 * An interrupt of the invariant supplier kills the solver if it arrives just after the solver answered, or if the
+	 * solver does not notice it within {@link #KILL_GRACE_MILLIS}. Restarts the solver with the declarations and the
+	 * stack it had; k-induction then takes the supplier's answer or asks the query again, which rebuilds its
+	 * assertions. Remove this method, its call and the grace period to drop the restart.
 	 *
-	 * @return whether the solver was restarted, false if {@code e} has another cause
+	 * @param reason
+	 *            why the solver is to be restarted, for the log
+	 * @return whether the solver was restarted, false if it was not interrupted, so that its failure has another cause
 	 */
-	private boolean restartSolverAfterInterrupt(final SMTLIBException e) {
+	private boolean restartSolverAfterInterrupt(final String reason) {
 		if (!mProbation || !mRestartSolver || !ExternalSolverInterrupter.wasInterrupted(mWorkerMgdScript.getScript())) {
 			return false;
 		}
-		mLogger.warn("KInduction: the solver died of an interrupt that arrived after its answer (%s), restarting it",
-				e.getMessage());
+		mLogger.warn("KInduction: the solver died of an interrupt (%s), restarting it", reason);
 		ExternalSolverRestarter.restartAndReplay(mWorkerMgdScript.getScript());
 		return true;
 	}

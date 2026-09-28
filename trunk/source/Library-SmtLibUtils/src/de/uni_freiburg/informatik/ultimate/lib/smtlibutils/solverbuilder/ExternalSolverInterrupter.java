@@ -72,10 +72,13 @@ public final class ExternalSolverInterrupter {
 	}
 
 	/**
+	 * @param graceMillis
+	 *            how long to wait for the check-sat to end before killing the solver, or negative to never kill it; a
+	 *            killed solver has to be restarted, see {@link ExternalSolverRestarter}
 	 * @return whether a check-sat was running and got the signal
 	 */
-	public static boolean interrupt(final Script script) {
-		return findScriptor(script).interrupt();
+	public static boolean interrupt(final Script script, final long graceMillis) {
+		return findScriptor(script).interrupt(graceMillis);
 	}
 
 	/**
@@ -83,6 +86,14 @@ public final class ExternalSolverInterrupter {
 	 */
 	public static boolean wasInterrupted(final Script script) {
 		return findScriptor(script).wasInterrupted();
+	}
+
+	/**
+	 * @return whether the solver of {@code script} was killed during its last check-sat, by an interrupt it did not
+	 *         notice in time; it may have answered before
+	 */
+	public static boolean wasKilled(final Script script) {
+		return findScriptor(script).wasKilled();
 	}
 
 	/**

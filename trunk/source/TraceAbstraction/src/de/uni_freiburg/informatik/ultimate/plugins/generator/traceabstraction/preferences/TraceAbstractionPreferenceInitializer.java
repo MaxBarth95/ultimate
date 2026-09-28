@@ -567,7 +567,7 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	private static final String DESC_PROBATION_FACTOR =
 			"A query of k-induction is on probation once it runs longer than this many times the previous query of "
 					+ "the same kind (base or step), and at least the probation minimum.";
-	private static final int DEF_PROBATION_FACTOR = 10;
+	private static final int DEF_PROBATION_FACTOR = 2;
 
 	public static final String LABEL_PROBATION_MINIMUM = "Probation limit of invariants: minimum (s)";
 	private static final String DESC_PROBATION_MINIMUM =

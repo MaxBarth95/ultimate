@@ -169,13 +169,15 @@ public class Scriptor extends NoopScript {
 	}
 
 	/**
-	 * Cancels a running {@link #checkSat()}, which then returns {@code unknown}; see {@link Executor#interrupt()}. May be
-	 * called from any thread.
+	 * Cancels a running {@link #checkSat()}, which then returns {@code unknown}, or fails if the solver had to be
+	 * killed; see {@link Executor#interrupt(long)}. May be called from any thread.
 	 *
+	 * @param graceMillis
+	 *            how long to wait for the check-sat to end before killing the solver, or negative to never kill it
 	 * @return whether a check-sat was running and got the signal
 	 */
-	public boolean interrupt() {
-		return mExecutor.interrupt();
+	public boolean interrupt(final long graceMillis) {
+		return mExecutor.interrupt(graceMillis);
 	}
 
 	/**
@@ -183,6 +185,13 @@ public class Scriptor extends NoopScript {
 	 */
 	public boolean wasInterrupted() {
 		return mExecutor.wasInterrupted();
+	}
+
+	/**
+	 * @return whether the solver was killed during the last {@link #checkSat()}, see {@link #interrupt(long)}
+	 */
+	public boolean wasKilled() {
+		return mExecutor.wasKilled();
 	}
 
 	/**

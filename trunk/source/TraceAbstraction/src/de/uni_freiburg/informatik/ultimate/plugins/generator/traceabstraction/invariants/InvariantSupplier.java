@@ -83,10 +83,11 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.ki
  * known, since a new invariant may be exactly what it was missing.
  * <p>
  * <b>Probation</b>: if enabled, the supplier watches the queries of k-induction through the subscriptions. When one runs
- * much longer than the query of its kind before, it asks the same query with the invariants of earlier versions (see
- * {@link InvariantProbation}). If one answers within the limit, the supplier rolls back to it, never publishes the
- * conjuncts it dropped again, and interrupts k-induction, which takes the probe's answer (or asks again for a
- * violation, whose witness it needs from its own solver).
+ * much longer than the query of its kind before, it asks the same query with the invariants of other versions: the
+ * newest, if it arrived after the query started, then earlier ones (see {@link InvariantProbation}). If one answers
+ * within the limit, the supplier interrupts k-induction, which takes the probe's answer (or asks again for a violation,
+ * whose witness it needs from its own solver). When a version is on probation for the second time, the supplier also
+ * rolls back to the earlier version that answered, and never publishes the conjuncts it dropped again.
  * <p>
  * <b>Nonlinear programs</b>: if a transition of the program has nonlinear arithmetic, only the conjuncts over a
  * single variable are published. On such programs bounds keep the queries of k-induction tractable, while a single
@@ -158,6 +159,8 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	private final List<Map<IcfgLocation, Set<Term>>> mVersions = new ArrayList<>(List.of(Map.of()));
 	// Conjuncts that a rollback dropped, never published again at their location.
 	private final Map<IcfgLocation, Set<Term>> mRolledBack = new HashMap<>();
+	// Version -> how many of its queries were on probation.
+	private final Map<Integer, Integer> mStalls = new HashMap<>();
 
 	/**
 	 * Must be called on the main thread. The channels exist from here on, the abstraction follows with
@@ -508,32 +511,46 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	}
 
 	/**
-	 * Asks the slow query with the invariants of earlier versions. Rolls back to the first one that answers within the
-	 * limit and interrupts k-induction; otherwise k-induction just goes on.
+	 * Asks the slow query with other invariants: first the newest version, if the query runs with an older one (e.g. new
+	 * interpolants arrived meanwhile), then earlier versions, newest first. The first one that answers within the limit
+	 * gives k-induction its answer, and k-induction is interrupted. The published invariants are rolled back only if
+	 * the version of the query was already on probation before, and never to an empty version: a single fast probe says
+	 * little about the next queries.
 	 */
 	private void probe(final InvariantSubscription subscription, final RunningQuery query) {
 		final long limit = mProbation.limitMillis(subscription, query.kind());
 		final Map<IcfgLocation, Set<Term>> current = mVersions.get(query.version());
+		final int stalls = mStalls.merge(query.version(), 1, Integer::sum);
 		mLogger.info("InvariantSupplier: probation, the %s case at k=%d with version %d runs longer than %d ms",
 				query.kind(), query.k(), query.version(), limit);
+		final List<Integer> candidates = new ArrayList<>();
+		final int newest = mVersions.size() - 1;
+		if (newest > query.version()) {
+			candidates.add(newest);
+		}
 		for (int earlier = query.version() - 1; earlier >= Math.max(0, query.version() - PROBED_VERSIONS); earlier--) {
-			final Map<IcfgLocation, Set<Term>> candidate = mVersions.get(earlier);
+			candidates.add(earlier);
+		}
+		for (final int version : candidates) {
+			final Map<IcfgLocation, Set<Term>> candidate = mVersions.get(version);
 			if (candidate.equals(current) || containsRolledBack(candidate)) {
 				continue;
 			}
 			final long start = System.nanoTime();
 			final LBool answer =
 					mProbation.ask(getChecker().getSystem(), query.kind(), query.k(), candidate, limit);
-			mLogger.info("InvariantSupplier: probation, version %d answers %s in %d ms", earlier, answer,
+			mLogger.info("InvariantSupplier: probation, version %d answers %s in %d ms", version, answer,
 					(System.nanoTime() - start) / 1_000_000);
 			if (answer == LBool.UNKNOWN) {
 				continue;
 			}
 			if (!query.equals(subscription.runningQuery())) {
-				mLogger.info("InvariantSupplier: probation, k-induction answered meanwhile, no rollback");
+				mLogger.info("InvariantSupplier: probation, k-induction answered meanwhile");
 				return;
 			}
-			rollBack(current, candidate, earlier);
+			if (version < query.version() && stalls > 1 && !candidate.isEmpty()) {
+				rollBack(current, candidate, version);
+			}
 			if (subscription.interrupt(query.kind(), query.k(), answer)) {
 				mLogger.info("InvariantSupplier: probation, interrupted k-induction and handed it the answer");
 			} else {
@@ -541,7 +558,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			}
 			return;
 		}
-		mLogger.info("InvariantSupplier: probation, no earlier version answers within %d ms, k-induction goes on",
+		mLogger.info("InvariantSupplier: probation, no other version answers within %d ms, k-induction goes on",
 				limit);
 	}
 
