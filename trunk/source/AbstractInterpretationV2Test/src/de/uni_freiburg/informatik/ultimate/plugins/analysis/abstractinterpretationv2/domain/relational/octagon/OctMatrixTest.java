@@ -7,10 +7,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import org.junit.Assert;
 import org.junit.Test;
 
+import de.uni_freiburg.informatik.ultimate.logic.Logics;
+import de.uni_freiburg.informatik.ultimate.logic.NoopScript;
+import de.uni_freiburg.informatik.ultimate.logic.Script;
+import de.uni_freiburg.informatik.ultimate.logic.Sort;
+import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.relational.octagon.OctMatrix.WideningStepSupplier;
 
 public class OctMatrixTest {
@@ -739,6 +745,40 @@ public class OctMatrixTest {
 	}
 
 	// @formatter:on
+	// terms ///////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+	/**
+	 * x in [0, 5], y in [0, 3], x - y <= 1. The constraint x + y <= 8 follows from the bounds and is left out of the
+	 * term, x + y <= 7 does not and is kept.
+	 */
+	@Test
+	public void testTermLeavesOutConstraintsImpliedByBounds() {
+		final Script script = new NoopScript();
+		script.setLogic(Logics.QF_LIA);
+		script.declareFun("x", new Sort[0], script.sort("Int"));
+		script.declareFun("y", new Sort[0], script.sort("Int"));
+		final Term[] vars = { script.term("x"), script.term("y") };
+
+		final Set<String> implied = termOf(script, vars, "8");
+		final Set<String> absent = termOf(script, vars, "inf");
+		final Set<String> tighter = termOf(script, vars, "7");
+		Assert.assertEquals(absent, implied);
+		Assert.assertEquals(absent.size() + 1, tighter.size());
+		Assert.assertTrue(tighter.containsAll(absent));
+	}
+
+	/** The matrix of x in [0, 5], y in [0, 3], x - y <= 1, and x + y <= {@code xPlusY}. */
+	private static Set<String> termOf(final Script script, final Term[] vars, final String xPlusY) {
+		// @formatter:off
+		final OctMatrix m = OctMatrix.parseBlockLowerTriangular(
+				  "0 0 "
+				+ "10 0 "
+				+ "1 inf 0 0 "
+				+ xPlusY + " inf 6 0 ");
+		// @formatter:on
+		return m.getTerm(script, vars).stream().map(Term::toString).collect(Collectors.toSet());
+	}
+
 	// utilities ///////////////////////////////////////////////////////////////////////////////////////////////////////
 
 	private void assertIsEqualTo(final OctMatrix expected, final OctMatrix actual) {

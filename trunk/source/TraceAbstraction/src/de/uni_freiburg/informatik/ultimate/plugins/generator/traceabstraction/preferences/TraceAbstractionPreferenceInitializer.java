@@ -572,6 +572,14 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "result and the next one starts.";
 	private static final int DEF_ABSINT_DOMAIN_BUDGET = 60;
 
+	public static final String LABEL_ABSINT_MEMORY_BUDGET =
+			"Memory budget per domain of the abstract interpretation worker (% of max heap)";
+	private static final String DESC_ABSINT_MEMORY_BUDGET =
+			"How much of the JVM's maximum heap may be in use while a domain of the abstract interpretation worker "
+					+ "runs. The heap of the whole JVM counts, including that of the other workers. A domain that "
+					+ "exceeds it gives no result and the next one starts.";
+	private static final int DEF_ABSINT_MEMORY_BUDGET = 20;
+
 	public static final String LABEL_INTERPOLANT_INVARIANTS =
 			"Check interpolants of TA workers for invariants for k-induction";
 	private static final String DESC_INTERPOLANT_INVARIANTS =
@@ -903,6 +911,9 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						PreferenceType.String),
 				new UltimatePreferenceItem<>(LABEL_ABSINT_DOMAIN_BUDGET, DEF_ABSINT_DOMAIN_BUDGET,
 						DESC_ABSINT_DOMAIN_BUDGET, PreferenceType.Integer, IUltimatePreferenceItemValidator.ONLY_POSITIVE),
+				new UltimatePreferenceItem<>(LABEL_ABSINT_MEMORY_BUDGET, DEF_ABSINT_MEMORY_BUDGET,
+						DESC_ABSINT_MEMORY_BUDGET, PreferenceType.Integer,
+						new IUltimatePreferenceItemValidator.IntegerValidator(1, 100)),
 				new UltimatePreferenceItem<>(LABEL_INTERPOLANT_INVARIANTS, DEF_INTERPOLANT_INVARIANTS,
 						DESC_INTERPOLANT_INVARIANTS, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_SEARCH_LOOP_BOUND, DEF_SEARCH_LOOP_BOUND, DESC_SEARCH_LOOP_BOUND,

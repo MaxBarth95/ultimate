@@ -96,6 +96,7 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 	private final ILogger mLogger;
 	private final IUltimateServiceProvider mServices;
 	private final long mDomainBudgetMs;
+	private final long mHeapBudgetBytes;
 	private final BlockingQueue<WorkerThreadResult<L, A>> mResultQueue;
 	private final IInvariantSink mSink;
 	// Only this worker builds terms in it; the supplier reads them.
@@ -110,17 +111,26 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 	 *            the simple class names of flat AbstractInterpretationV2 domains, in the order in which they run
 	 * @param domainBudgetSeconds
 	 *            how long each domain may run; one that runs out gives no result and the next one starts
+	 * @param heapBudgetPercent
+	 *            how much of the JVM's maximum heap may be in use while a domain runs; a domain that exceeds it is
+	 *            stopped like one that runs out of time
 	 */
 	public AbsIntWorkerThread(final ILogger logger, final IUltimateServiceProvider services,
 			final INestedWordAutomaton<L, IPredicate> abstraction, final IIcfg<?> icfg,
 			final CfgSmtToolkit mainCsToolkit, final IInvariantSink sink, final List<String> domains,
-			final int domainBudgetSeconds, final BlockingQueue<WorkerThreadResult<L, A>> resultQueue) {
+			final int domainBudgetSeconds, final int heapBudgetPercent,
+			final BlockingQueue<WorkerThreadResult<L, A>> resultQueue) {
 		if (domainBudgetSeconds <= 0) {
 			throw new IllegalArgumentException("The time budget per domain must be positive: " + domainBudgetSeconds);
+		}
+		if (heapBudgetPercent < 1 || heapBudgetPercent > 100) {
+			throw new IllegalArgumentException(
+					"The memory budget per domain must be 1 to 100 % of the maximum heap: " + heapBudgetPercent);
 		}
 		mLogger = logger;
 		mServices = services;
 		mDomainBudgetMs = domainBudgetSeconds * 1000L;
+		mHeapBudgetBytes = Runtime.getRuntime().maxMemory() / 100 * heapBudgetPercent;
 		mResultQueue = resultQueue;
 		mSink = sink;
 		// Only used to build terms, never to solve, so an in-process SMTInterpol suffices. Created here, on the main
@@ -220,11 +230,20 @@ public class AbsIntWorkerThread<L extends IIcfgTransition<?>, A extends IAutomat
 		}
 		for (final DomainRun run : mRuns) {
 			final IAbstractInterpretationResult<?, IcfgEdge, IPredicate> result;
+			// Created here, the budget starts now.
+			final HeapBudgetTimer timer = new HeapBudgetTimer(
+					mServices.getProgressMonitorService().getChildTimer(mDomainBudgetMs), mHeapBudgetBytes);
 			try {
-				// Created here, the budget starts now.
-				result = run.fixpoint()
-						.apply(mServices.getProgressMonitorService().getChildTimer(mDomainBudgetMs));
+				result = run.fixpoint().apply(timer);
 			} catch (final ToolchainCanceledException e) {
+				if (timer.isHeapBudgetExceeded()) {
+					mLogger.warn("AbsInt: %s exceeded its memory budget (%d MB of heap in use, budget %d MB)",
+							run.domain(), timer.getHeapUsedWhenExceeded() >> 20, mHeapBudgetBytes >> 20);
+					// Most of the heap is the domain's garbage. Collecting it now lets the JVM shrink its heap
+					// instead of keeping it committed while the other workers and their solvers need the memory.
+					System.gc();
+					continue;
+				}
 				if (mServices.getProgressMonitorService().continueProcessing()) {
 					mLogger.warn("AbsInt: %s ran out of its %d s budget", run.domain(), mDomainBudgetMs / 1000);
 					continue;

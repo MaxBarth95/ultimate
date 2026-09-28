@@ -110,6 +110,7 @@ public final class TAPreferences {
 	private final boolean mAbsIntWorker;
 	private final List<String> mAbsIntDomains;
 	private final int mAbsIntDomainBudget;
+	private final int mAbsIntMemoryBudget;
 	private final boolean mInterpolantInvariants;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
@@ -229,6 +230,7 @@ public final class TAPreferences {
 		mAbsIntDomains = Arrays.stream(mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_DOMAINS)
 				.split(",")).map(String::trim).filter(domain -> !domain.isEmpty()).collect(Collectors.toList());
 		mAbsIntDomainBudget = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_DOMAIN_BUDGET);
+		mAbsIntMemoryBudget = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_MEMORY_BUDGET);
 		mInterpolantInvariants =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INTERPOLANT_INVARIANTS);
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
@@ -657,6 +659,14 @@ public final class TAPreferences {
 	 */
 	public int getAbsIntDomainBudget() {
 		return mAbsIntDomainBudget;
+	}
+
+	/**
+	 * @return how many percent of the JVM's maximum heap may be in use while a domain of the abstract interpretation
+	 *         worker runs
+	 */
+	public int getAbsIntMemoryBudget() {
+		return mAbsIntMemoryBudget;
 	}
 
 	/**

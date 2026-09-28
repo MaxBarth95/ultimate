@@ -504,7 +504,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// Runs on the main script's variables and needs no solver of its own.
 			return new AbsIntWorkerThread<>(mLogger, iterationServices, mAbstraction, mIcfg,
 					mCsToolkit, invariantSink(true), mPref.getAbsIntDomains(), mPref.getAbsIntDomainBudget(),
-					mWorkerResultQueue);
+					mPref.getAbsIntMemoryBudget(), mWorkerResultQueue);
 		}
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(
