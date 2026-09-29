@@ -538,7 +538,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			}
 			final long start = System.nanoTime();
 			final LBool answer =
-					mProbation.ask(getChecker().getSystem(), query.kind(), query.k(), candidate, limit);
+					mProbation.ask(getChecker(), query.kind(), query.k(), candidate, limit);
 			mLogger.info("InvariantSupplier: probation, version %d answers %s in %d ms", version, answer,
 					(System.nanoTime() - start) / 1_000_000);
 			if (answer == LBool.UNKNOWN) {

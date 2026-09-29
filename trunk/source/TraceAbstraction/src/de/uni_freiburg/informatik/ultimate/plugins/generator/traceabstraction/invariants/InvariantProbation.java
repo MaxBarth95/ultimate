@@ -45,7 +45,6 @@ import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.invariants.InvariantSubscription.RunningQuery;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.CallNode;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.IndexedConstantVars;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.KInductionQuery;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.KInductionQuery.Invariant;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.KInductionQuery.Kind;
@@ -126,9 +125,10 @@ final class InvariantProbation {
 	 *            conjuncts of the invariant per location, as published
 	 * @return the answer, {@link LBool#UNKNOWN} if the solver did not answer within {@code limitMillis}
 	 */
-	LBool ask(final PcTransitionSystem<CallNode<IPredicate>> system, final Kind kind, final int k,
+	LBool ask(final InductivenessChecker checker, final Kind kind, final int k,
 			final Map<IcfgLocation, Set<Term>> invariants, final long limitMillis) {
-		final KInductionQuery<CallNode<IPredicate>> query = getQuery(system);
+		final PcTransitionSystem<CallNode<IPredicate>> system = checker.getSystem();
+		final KInductionQuery<CallNode<IPredicate>> query = getQuery(checker);
 		final Map<Integer, Invariant> atHeads = new HashMap<>();
 		for (final Map.Entry<CallNode<IPredicate>, Integer> head : system.getHeadNodes().entrySet()) {
 			final Set<Term> conjuncts = invariants.getOrDefault(InvariantSupplier.locationOf(head.getKey().getState()),
@@ -163,11 +163,11 @@ final class InvariantProbation {
 		}
 	}
 
-	private KInductionQuery<CallNode<IPredicate>> getQuery(final PcTransitionSystem<CallNode<IPredicate>> system) {
-		if (mQuery == null || mSystem != system) {
-			mSystem = system;
-			mQuery = new KInductionQuery<>(system, mScript, mLock,
-					new IndexedConstantVars(mScript.getScript(), new HashMap<>(), "probe"));
+	private KInductionQuery<CallNode<IPredicate>> getQuery(final InductivenessChecker checker) {
+		if (mQuery == null || mSystem != checker.getSystem()) {
+			mSystem = checker.getSystem();
+			// The checker's constants: both declare the constants of the program variables on the same script.
+			mQuery = new KInductionQuery<>(mSystem, mScript, mLock, checker.constants("probe"));
 		}
 		return mQuery;
 	}
