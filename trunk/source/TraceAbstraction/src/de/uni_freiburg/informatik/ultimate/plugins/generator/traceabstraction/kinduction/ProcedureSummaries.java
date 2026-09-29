@@ -59,6 +59,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.I
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils.SimplificationTechnique;
+import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.Checkpoint;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.kinduction.LoopTreeFormulaBuilder.LoopTree;
 
@@ -949,10 +950,13 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	 * reads <em>are</em> locals of the callee, and havocing first would destroy them before they are passed. For a
 	 * call between two different procedures the two steps write disjoint variables and commute, so
 	 * {@code havocAfterParameters} only has to be set where recursion is possible.
+	 * <p>
+	 * The parameter assignment is composed as the intraprocedural formula {@link #keepReadVariables} makes of it,
+	 * so the caller's arguments keep their values across the call.
 	 */
 	private UnmodifiableTransFormula callEntryFormula(final ICallAction callAction, final String callee,
 			final boolean havocAfterParameters) {
-		final UnmodifiableTransFormula callTf = callAction.getLocalVarsAssignment();
+		final UnmodifiableTransFormula callTf = keepReadVariables(callAction.getLocalVarsAssignment());
 		final UnmodifiableTransFormula oldVarsAssignment =
 				mCsToolkit.getOldVarsAssignmentCache().getOldVarsAssignment(callee);
 		final UnmodifiableTransFormula globalVarsAssignment =
@@ -969,6 +973,33 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 				: Arrays.asList(havoc, callTf, oldVarsAssignment, globalVarsAssignment);
 		return TransFormulaUtils.sequentialComposition(mLogger, mServices, mMgdScript, false, false, false,
 				SimplificationTechnique.NONE, parts);
+	}
+
+	/**
+	 * {@code callTf} with an outVar for every inVar that has none, the same {@link TermVariable}, i.e. the variable
+	 * keeps its value.
+	 * <p>
+	 * A call's parameter assignment reads the caller's arguments without writing them. For the interprocedural
+	 * compositions it is made for that is harmless, the caller's scope is restored at the return. For
+	 * {@link TransFormulaUtils#sequentialComposition}, however, an inVar without an outVar is havoced
+	 * ({@link TransFormulaUtils#computeAssignedVars}), and in the flat graph the caller's variables live on after the
+	 * call - so every argument would lose its value at the call, an over-approximation under which the base case
+	 * reports violations that no run has. It also keeps a read-only local of the callee (the argument of a
+	 * recursive call) out of {@link UnmodifiableTransFormula#getAssignedVars()}, so the activation havocs it as it
+	 * havocs every other local; {@link KInductionCounterexampleBuilder} does the same.
+	 */
+	private UnmodifiableTransFormula keepReadVariables(final UnmodifiableTransFormula callTf) {
+		final Map<IProgramVar, TermVariable> kept = new LinkedHashMap<>();
+		for (final Map.Entry<IProgramVar, TermVariable> in : callTf.getInVars().entrySet()) {
+			if (!callTf.getOutVars().containsKey(in.getKey())) {
+				kept.put(in.getKey(), in.getValue());
+			}
+		}
+		if (kept.isEmpty()) {
+			return callTf;
+		}
+		return TransFormulaBuilder.constructCopy(mMgdScript, callTf, Collections.emptyList(), Collections.emptyList(),
+				kept);
 	}
 
 	// ----------------------------------------------------------------------------------------------------------
