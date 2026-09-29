@@ -195,6 +195,12 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 
 	// SSA state: the constant that currently holds each variable's value, and the counters behind those constants.
 	private final Map<IProgramVar, Term> mCurrent = new HashMap<>();
+	/**
+	 * The constants {@link #current} made up while the SSA of the letter being considered was built, for variables
+	 * that had none yet. They are declared at the depth the search is at, so they must leave {@link #mCurrent} again
+	 * when the search backtracks above it; see {@link Candidate#mFreshReads}.
+	 */
+	private final Map<IProgramVar, Term> mFreshReads = new LinkedHashMap<>();
 	private final Map<String, Term> mCexConstants = new HashMap<>();
 	private int mSsaCounter;
 	private int mAuxCounter;
@@ -254,6 +260,12 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		/** Non-null exactly for a call: the hierarchical predecessor its return will need. */
 		private final STATE mCallSite;
 		private final Map<IProgramVar, Term> mUpdates = new LinkedHashMap<>();
+		/**
+		 * The first constant of every variable the letter reads without it having one yet. Kept apart from
+		 * {@link #mUpdates} because a call's frame restores exactly what the call updated at the return, while a
+		 * global first read at the call has to keep its constant after the return.
+		 */
+		private final Map<IProgramVar, Term> mFreshReads = new LinkedHashMap<>();
 		private Term mSsa;
 		/**
 		 * This position's entry in the nesting relation: {@link NestedWord#INTERNAL_POSITION},
@@ -409,6 +421,7 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 			// Built before the push on purpose: it declares constants, and a declaration made inside a scope is
 			// forgotten when that scope is popped while the cache would happily hand the stale term out again.
 			candidate.mSsa = ssaOfTransFormula(out.getLetter().getTransformula(), candidate.mUpdates);
+			takeFreshReads(candidate);
 			candidate.mNesting = NestedWord.INTERNAL_POSITION;
 			if (tryLetter(step, candidate, length)) {
 				return true;
@@ -421,6 +434,7 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 			}
 			candidate.mSsa = ssaOfCall(asCallAction(call.getLetter()),
 					call.getLetter().getSucceedingProcedure(), candidate.mUpdates);
+			takeFreshReads(candidate);
 			candidate.mNesting = NestedWord.PLUS_INFINITY;
 			if (tryLetter(step, candidate, length)) {
 				return true;
@@ -438,6 +452,7 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 				candidate.mSsa =
 						ssaOfTransFormula(asReturnAction(ret.getLetter()).getAssignmentOfReturn(),
 								assignedByReturn);
+				takeFreshReads(candidate);
 				// The callee's variables go out of scope with the return, after its outparams were read above.
 				// What the return itself assigns belongs to the caller and has to survive that: in a recursive
 				// call the caller's receiving variable and the callee's local are the same IProgramVar, so
@@ -480,6 +495,8 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 	 * it changed - the run, the SSA, the call stack and the solver scope - is undone if the search comes back.
 	 */
 	private boolean tryLetter(final Step step, final Candidate candidate, final int length) {
+		// Reads first: an update of the same variable has to win.
+		final Map<IProgramVar, Term> undoReads = applyUpdates(candidate.mFreshReads);
 		final Map<IProgramVar, Term> undo = applyUpdates(candidate.mUpdates);
 		push();
 		mMgdScript.assertTerm(mLockOwner, candidate.mSsa);
@@ -524,7 +541,14 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		}
 		pop();
 		applyUpdates(undo);
+		applyUpdates(undoReads);
 		return false;
+	}
+
+	/** Hands the constants {@link #current} made up for the candidate's SSA over to the candidate. */
+	private void takeFreshReads(final Candidate candidate) {
+		candidate.mFreshReads.putAll(mFreshReads);
+		mFreshReads.clear();
 	}
 
 
@@ -728,7 +752,9 @@ public final class KInductionCounterexampleBuilder<LETTER extends IAction, STATE
 		if (pv.isOldvar()) {
 			return pv.getDefaultConstant();
 		}
-		return mCurrent.computeIfAbsent(pv, this::nextConstant);
+		// Not straight into mCurrent: the constant is declared at the current depth, and tryLetter has to be able to
+		// take it out again on backtracking, which it can only for what the candidate carries.
+		return mFreshReads.computeIfAbsent(pv, this::nextConstant);
 	}
 
 	/**

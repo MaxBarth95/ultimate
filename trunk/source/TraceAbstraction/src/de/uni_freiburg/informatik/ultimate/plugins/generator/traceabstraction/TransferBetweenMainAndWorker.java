@@ -189,6 +189,12 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 					+ letter.getClass().getSimpleName() + "; this transferrer knows Call, Return, StatementSequence, "
 					+ "SequentialComposition, Summary and GotoEdge");
 			}
+			if (transferredLetter != null) {
+				// The copy learns its procedures from its source and target, which the inner CodeBlocks of a
+				// composition no longer have. Without them the program execution of a worker counterexample cannot be
+				// backtranslated.
+				((CodeBlock) transferredLetter).copyProceduresFrom((CodeBlock) letter);
+			}
 		}
 		if (transferredLetter == null) {
 			// Never a mere assertion: a null letter is accepted by the automaton being built and only surfaces much
@@ -224,6 +230,8 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 				(BoogieIcfgLocation) call.getTarget(), call.getCallStatement(), mLogger);
 		newCall.setTransitionFormula(transferTransFormulaWithMode(call.getTransformula()));
 		newCall.setPayload(call.getPayload()); // Payload is needed for for example Overapproximation Annotations
+		// Also reached directly as the corresponding call of a return, i.e. not through transferEdge.
+		newCall.copyProceduresFrom(call);
 		return newCall;
 	}
 

@@ -39,6 +39,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -113,6 +115,13 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 */
 	/** z3's value of :timeout for no timeout at all. */
 	private static final long Z3_NO_TIMEOUT = 4294967295L;
+
+	/**
+	 * Stack size of the worker threads. The JVM default is far too small for the recursive parts of the workers, e.g.
+	 * k-induction's counterexample reconstruction on a long run through recursive procedures, or its path expression
+	 * visitor on a deeply nested regex.
+	 */
+	private static final long WORKER_STACK_SIZE_BYTES = 256L * 1024 * 1024;
 
 	private static final Map<String, Entry<Pattern, String>> SOLVER_TIMEOUT_OPTION = Map.of(
 			"z3", Map.entry(Pattern.compile("\\s*-t:\\d+"), " -t:%d"),
@@ -212,9 +221,15 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 					"At least one parallel CEGAR worker thread must be configured (TA/IMC/SymExec/KInduction/AbsInt worker counts are all 0)");
 		}
 
-		mExec = Executors.newFixedThreadPool(mThreadLimit);
+		mExec = Executors.newFixedThreadPool(mThreadLimit, workerThreadFactory("Cegar Worker"));
 		Thread.currentThread().setName("Main Cegar Thread");
 		getServices().getStorage().pushMarker(mDestroyEverything);
+	}
+
+	private static ThreadFactory workerThreadFactory(final String name) {
+		final AtomicInteger counter = new AtomicInteger();
+		return runnable -> new Thread(null, runnable, name + " " + counter.incrementAndGet(),
+				WORKER_STACK_SIZE_BYTES);
 	}
 
 	/*
@@ -419,7 +434,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			}
 			if (mInvariantSupplier != null) {
 				mInvariantSupplier.setAbstraction(transferForInvariantSupplier(invariantTransfer));
-				mInvariantExec = Executors.newSingleThreadExecutor();
+				mInvariantExec = Executors.newSingleThreadExecutor(workerThreadFactory("Invariant Supplier"));
 				mInvariantExec.submit(mInvariantSupplier);
 			}
 			for (int i = 0; i < mNumTaWorkers; i++) {
@@ -674,13 +689,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 
 		removeCounterexampleFromSet(threadResult.getCounterexample());
 
-		final Set<IcfgLocation> hoareAnnotationLocs;
-		// TODO support for HoareAnnotations
-		hoareAnnotationLocs = Collections.emptySet();
-
-		final PredicateFactoryRefinement stateFactoryForRefinement =
-				new PredicateFactoryRefinement(getServices(), threadResult.getWorkerMgdScript(),
-						threadResult.getPredicateFactory(), mComputeHoareAnnotation, hoareAnnotationLocs);
+		// The states of the main abstraction have to come from the main loop's own factory. Each worker has a fresh
+		// predicate factory whose serial numbers start at 1 again, so states of different workers would share serial
+		// numbers in one automaton, which UnknownState.equals rejects. Hoare annotations are not supported here, so
+		// the factory only constructs don't-care states and never touches a worker's script.
+		final PredicateFactoryRefinement stateFactoryForRefinement = mStateFactoryForRefinement;
 		mLogger.info("Difference in Main");
 		final IOpWithDelayedDeadEndRemoval<L, IPredicate> diff =
 				computeAutomataDifference(mAbstraction, threadResult, stateFactoryForRefinement);
@@ -880,7 +893,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		final IPreferenceProvider icfgPrefs = mServices.getPreferenceProvider(
 				de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.Activator.PLUGIN_ID);
 
-		final SolverMode solverMode = mPref.solverMode();
+		final SolverMode solverMode = solverMode(workerType);
 
 		final boolean fakeNonIncrementalScript =
 				taPrefs.getBoolean(IcfgPreferenceInitializer.LABEL_FAKE_NON_INCREMENTAL_SCRIPT);
@@ -903,13 +916,29 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		final Logics logicForExternalSolver = mPref.logicForExternalSolver();
 		final SolverSettings solverSettings =
 				SolverBuilder.constructSolverSettings().setUseFakeIncrementalScript(fakeNonIncrementalScript)
-						.setDumpSmtScriptToFile(dumpSmtScriptToFile, pathOfDumpedScript, filename, compressSmtScript)
+						// The worker type in the name: workers started in the same iteration would otherwise dump into
+						// the same file and garble each other's script.
+						.setDumpSmtScriptToFile(dumpSmtScriptToFile, pathOfDumpedScript, filename + workerType,
+								compressSmtScript)
 						.setDumpUnsatCoreTrackBenchmark(dumpUnsatCoreTrackBenchmark)
 						.setDumpMainTrackBenchmark(dumpMainTrackBenchmark)
 						.setUseExternalSolver(true, commandExternalSolver, logicForExternalSolver)
 						.setSolverMode(solverMode).setAdditionalOptions(additionalSmtOptions);
 
 		return solverSettings;
+	}
+
+	/**
+	 * The solver mode of a worker's solver. k-induction only asks for satisfiability and models, never for an unsat
+	 * core, so its solver does not produce them: cvc4 1.8 in incremental mode segfaults on the counterexample
+	 * reconstruction's queries when unsat cores are enabled, and without them answers the very same script.
+	 */
+	private SolverMode solverMode(final WorkerType workerType) {
+		final SolverMode configured = mPref.solverMode();
+		if (workerType == WorkerType.KINDUCTION && configured == SolverMode.External_ModelsAndUnsatCoreMode) {
+			return SolverMode.External_ModelsMode;
+		}
+		return configured;
 	}
 
 	/**
