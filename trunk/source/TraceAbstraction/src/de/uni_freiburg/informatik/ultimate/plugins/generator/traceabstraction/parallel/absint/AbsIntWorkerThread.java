@@ -72,6 +72,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pa
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.IInvariantSink;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.TrustedInvariants;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantSupplier;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.HeapBudgetTimer;
 
 /**
  * Single-shot worker of {@link ParallelNwaCegarLoop} running abstract interpretation on the initial abstraction, with

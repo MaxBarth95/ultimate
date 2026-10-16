@@ -815,17 +815,24 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Stores one checkpoint edge, and is the one place the build can be cancelled. A scope with several heads
-	 * builds an edge for every (head, checkpoint) pair, so the work is quadratic in the number of heads and a
-	 * pathological abstraction must not be able to run past the toolchain's deadline uninterrupted.
+	 * Throws if the toolchain's deadline has passed, or k-induction's memory budget is exceeded. Polled before every
+	 * composition of formulas: a scope with several heads builds an edge for every (head, checkpoint) pair, so the
+	 * work is quadratic in the number of heads, and evaluating a path expression is exponential in the worst case
+	 * (see {@link RegexToTransFormula}). A pathological abstraction must not run past either limit uninterrupted.
+	 */
+	private void checkCanceled(final String task) {
+		if (!mServices.getProgressMonitorService().continueProcessing()) {
+			throw new ToolchainCanceledException(LoopTreeFormulaBuilder.class, task);
+		}
+	}
+
+	/**
+	 * Stores one checkpoint edge.
 	 */
 	private void addEdge(final Map<Checkpoint<STATE>, Map<Checkpoint<STATE>, UnmodifiableTransFormula>> edges,
 			final Checkpoint<STATE> from, final Checkpoint<STATE> to,
 			final List<UnmodifiableTransFormula> alternatives) {
-		if (!mServices.getProgressMonitorService().continueProcessing()) {
-			throw new ToolchainCanceledException(LoopTreeFormulaBuilder.class,
-					"building the checkpoint edge " + from + " -> " + to);
-		}
+		checkCanceled("building the checkpoint edge " + from + " -> " + to);
 		final UnmodifiableTransFormula tf = combineAlternatives(mLogger, mServices, mMgdScript, alternatives);
 		if (tf != null) {
 			edges.computeIfAbsent(from, k -> new LinkedHashMap<>()).put(to, tf);
@@ -850,6 +857,7 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 
 	private UnmodifiableTransFormula sequential(final UnmodifiableTransFormula first,
 			final UnmodifiableTransFormula second) {
+		checkCanceled("composing the transition formulas of a path in the loop tree");
 		return TransFormulaUtils.sequentialComposition(mLogger, mServices, mMgdScript, false, false, false,
 				SimplificationTechnique.NONE, List.of(first, second));
 	}
@@ -870,6 +878,7 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 		 * result therefore has to be composed afresh, with its own auxiliary variables.
 		 */
 		UnmodifiableTransFormula evaluate(final IRegex<Edge<LETTER>> regex) {
+			checkCanceled("evaluating a path expression of the loop tree");
 			return regex.accept(this);
 		}
 
