@@ -262,6 +262,10 @@ public class KInduction<LETTER extends IAction, STATE> {
 				mInconclusive = Inconclusive.solverUnknown(k, "base");
 				return Verdict.UNKNOWN;
 			}
+			// The step case of k is larger than the base case of k, so check the deadline and the memory budget again.
+			if (!mServices.getProgressMonitorService().continueProcessing()) {
+				throw new ToolchainCanceledException(getClass(), "k-induction at k=" + k + ", before the step case");
+			}
 			final LBool step = answer(Kind.STEP, k);
 			mLogger.info("KInduction: k=%d - step case: %s", k, step);
 			if (step == LBool.UNSAT) {

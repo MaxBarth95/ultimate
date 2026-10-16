@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import de.uni_freiburg.informatik.ultimate.core.lib.exceptions.ToolchainCanceledException;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingCallTransition;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingInternalTransition;
@@ -436,6 +437,11 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 			}
 		}
 		while (!worklist.isEmpty()) {
+			// Every node may resolve call sites, which composes formulas; the summaries poll in LoopTreeFormulaBuilder.
+			if (!mServices.getProgressMonitorService().continueProcessing()) {
+				throw new ToolchainCanceledException(ProcedureSummaries.class, String.format(
+						"unfolding the call sites of the entry scope (%d node(s) so far)", mRootScopeStates.size()));
+			}
 			final CallNode<STATE> node = worklist.poll();
 			final STATE state = node.getState();
 			if (mAbstraction.getFinalStates().contains(state)) {
