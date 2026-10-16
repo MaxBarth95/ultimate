@@ -532,14 +532,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	public static final String LABEL_PARALLEL_CEGAR_LOOP = "Use CEGAR loop for Parallel Trace Abstraction";
 	private static final boolean DEF_PARALLEL_CEGAR_LOOP = false;
 
-	public static final String LABEL_NUM_TA_WORKERS = "Number of TA workers in Parallel Trace Abstraction";
-	private static final Integer DEF_NUM_TA_WORKERS = 1;
-
-	public static final String LABEL_NUM_IMC_WORKERS = "Number of IMC workers in Parallel Trace Abstraction";
-	private static final Integer DEF_NUM_IMC_WORKERS = 0;
-
-	public static final String LABEL_NUM_SYMEXEC_WORKERS = "Number of SymExec workers in Parallel Trace Abstraction";
-	private static final Integer DEF_NUM_SYMEXEC_WORKERS = 0;
+	public static final String LABEL_THREADLIMIT = "Threadlimit for Parallel CEGAR";
+	private static final Integer DEF_THREADLIMIT = 1;
 
 	public static final String LABEL_NUM_KINDUCTION_WORKERS =
 			"Number of K-Induction workers in Parallel Trace Abstraction";
@@ -923,11 +917,7 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 		return new UltimatePreferenceItemContainer("Parallel Trace Abstraction",
 				new UltimatePreferenceItem<>(LABEL_PARALLEL_CEGAR_LOOP, DEF_PARALLEL_CEGAR_LOOP,
 						PreferenceType.Boolean),
-				new UltimatePreferenceItem<>(LABEL_NUM_TA_WORKERS, DEF_NUM_TA_WORKERS, PreferenceType.Integer,
-						new IUltimatePreferenceItemValidator.IntegerValidator(0, 1_0000_000)),
-				new UltimatePreferenceItem<>(LABEL_NUM_IMC_WORKERS, DEF_NUM_IMC_WORKERS, PreferenceType.Integer,
-						new IUltimatePreferenceItemValidator.IntegerValidator(0, 1_0000_000)),
-				new UltimatePreferenceItem<>(LABEL_NUM_SYMEXEC_WORKERS, DEF_NUM_SYMEXEC_WORKERS, PreferenceType.Integer,
+				new UltimatePreferenceItem<>(LABEL_THREADLIMIT, DEF_THREADLIMIT, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(0, 1_0000_000)),
 				new UltimatePreferenceItem<>(LABEL_NUM_KINDUCTION_WORKERS, DEF_NUM_KINDUCTION_WORKERS,
 						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(0, 1_0000_000)),
