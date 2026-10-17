@@ -32,10 +32,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 import de.uni_freiburg.informatik.ultimate.boogie.ast.AssignmentStatement;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.AssumeStatement;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.BooleanLiteral;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.CallStatement;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.Expression;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.HavocStatement;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.IdentifierExpression;
@@ -68,6 +70,8 @@ public class OctStatementProcessor {
 			return mPostOp.getAssumeProcessor().assume(assumption, oldStates);
 		} else if (statement instanceof HavocStatement) {
 			return processHavocStatement((HavocStatement) statement, oldStates);
+		} else if (statement instanceof CallStatement) {
+			return processCallStatement((CallStatement) statement, oldStates);
 		}
 		if (statement instanceof Label) {
 			return oldStates; // nothing to do
@@ -102,7 +106,7 @@ public class OctStatementProcessor {
 				final IProgramVar origVar = mPostOp.getBoogieVar(vLhs);
 				// unique (origVar is unique + braces are not allowed)
 				final String tmpVarName = "octTmp(" + origVar + ")";
-				final IProgramVar tmpVar = AbsIntUtil.createTemporaryIBoogieVar(tmpVarName, vLhs.getType());
+				final IProgramVar tmpVar = AbsIntUtil.createTemporaryIBoogieVar(tmpVarName, origVar.getSort());
 
 				tmpVars.put(tmpVarName, tmpVar);
 				mapLhsToRhs.add(new Pair<>(tmpVar, rhs[i]));
@@ -231,6 +235,25 @@ public class OctStatementProcessor {
 
 		// could not interpret rhs -- return safe over-approximation (targetVar := \top)
 		oldStates.forEach(s -> s.havocVar(targetVar));
+		return oldStates;
+	}
+
+	/**
+	 * A call inside a statement sequence, i.e. of a procedure without implementation (e.g. {@code write~init~int}),
+	 * whose contract is not known here: havocs the call's left-hand sides and every global the procedure may modify,
+	 * which over-approximates any contract.
+	 */
+	private List<OctDomainState> processCallStatement(final CallStatement statement, List<OctDomainState> oldStates) {
+		final List<IProgramVarOrConst> vars = new ArrayList<>();
+		for (final VariableLHS lhs : statement.getLhs()) {
+			vars.add(mPostOp.getBoogieVar(lhs));
+		}
+		vars.addAll(mPostOp.getModifiableGlobals().getModifiedBoogieVars(statement.getMethodName()));
+		oldStates = OctPostOperator.removeBottomStates(oldStates); // important!
+		for (final OctDomainState state : oldStates) {
+			// untracked variables have nothing to forget
+			state.havocVars(vars.stream().filter(state.getVariables()::contains).collect(Collectors.toList()));
+		}
 		return oldStates;
 	}
 

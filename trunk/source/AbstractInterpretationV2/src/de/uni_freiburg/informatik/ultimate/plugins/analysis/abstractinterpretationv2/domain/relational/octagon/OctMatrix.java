@@ -272,7 +272,12 @@ public class OctMatrix {
 	}
 
 	private static int entriesInBlockLowerTriangular(final int variables) {
-		return 2 * (variables * variables + variables);
+		try {
+			return Math.multiplyExact(2, Math.addExact(Math.multiplyExact(variables, variables), variables));
+		} catch (final ArithmeticException e) {
+			throw new UnsupportedOperationException(
+					"too many variables for an octagon, its matrix would exceed the maximal array size: " + variables);
+		}
 	}
 
 	/**
@@ -1658,11 +1663,23 @@ public class OctMatrix {
 					}
 					continue; // constraint of the form (0 <= 1)
 				}
+				if (row / 2 != col / 2 && isImpliedByBounds(row, col, entry)) {
+					continue; // follows from the bounds of both variables, which are part of the term
+				}
 				final Term colVar = selectVar(script, col, vars);
 				rtr.add(createBoundedDiffTerm(script, colVar, rowVar, entry));
 			}
 		}
 		return rtr;
+	}
+
+	/**
+	 * Whether the constraint {@code colVar - rowVar <= entry} of two different variables follows from their bounds
+	 * {@code colVar <= m[col^1][col] / 2} and {@code -rowVar <= m[row][row^1] / 2}.
+	 */
+	private boolean isImpliedByBounds(final int row, final int col, final OctValue entry) {
+		final OctValue sumOfBounds = get(col ^ 1, col).add(get(row, row ^ 1));
+		return !sumOfBounds.isInfinity() && entry.compareTo(sumOfBounds.half()) >= 0;
 	}
 
 	// returns variable in positive or negative form, depending on row or column

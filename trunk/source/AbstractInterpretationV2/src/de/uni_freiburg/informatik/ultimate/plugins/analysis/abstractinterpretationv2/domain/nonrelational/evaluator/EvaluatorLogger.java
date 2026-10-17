@@ -32,7 +32,9 @@ import java.util.Set;
 
 import de.uni_freiburg.informatik.ultimate.boogie.ast.BinaryExpression;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.UnaryExpression;
+import de.uni_freiburg.informatik.ultimate.core.lib.exceptions.ToolchainCanceledException;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.preferences.AbsIntPrefInitializer;
 
 /**
@@ -51,12 +53,32 @@ public class EvaluatorLogger {
 	private final Set<UnaryExpression.Operator> mWarningsUnknownUnaryOps;
 	private final Set<BinaryExpression.Operator> mWarningsUnknownBinaryOps;
 	private final Set<BinaryExpression.Operator> mWarningsOverapproxBinaryOps;
+	// null if evaluations are not bounded
+	private IProgressAwareTimer mTimer;
 
 	public EvaluatorLogger(final ILogger logger) {
 		mLogger = logger;
 		mWarningsUnknownUnaryOps = new HashSet<>(1);
 		mWarningsUnknownBinaryOps = new HashSet<>(1);
 		mWarningsOverapproxBinaryOps = new HashSet<>(1);
+	}
+
+	/**
+	 * Bounds the evaluations of all evaluators that share this logger. A single evaluation of a deeply nested expression
+	 * can take very long, the fixpoint engine only checks its timer between two posts.
+	 */
+	public void setTimer(final IProgressAwareTimer timer) {
+		mTimer = timer;
+	}
+
+	/**
+	 * @throws ToolchainCanceledException
+	 *             if the timer set by {@link #setTimer(IProgressAwareTimer)} ran out
+	 */
+	public void checkTimeout() {
+		if (mTimer != null && !mTimer.continueProcessing()) {
+			throw new ToolchainCanceledException(getClass(), "evaluating an expression");
+		}
 	}
 
 	public void warnUnknownOperator(final UnaryExpression.Operator op) {

@@ -38,6 +38,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.absint.IAbstractState;
@@ -47,6 +48,7 @@ import de.uni_freiburg.informatik.ultimate.logic.Script;
 import de.uni_freiburg.informatik.ultimate.logic.Sort;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.algorithm.LoggingHelper;
+import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.IVariableMappedTermProvider;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.util.typeutils.TypeUtils;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.util.TVBool;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.ImmutableSet;
@@ -59,7 +61,7 @@ import de.uni_freiburg.informatik.ultimate.util.datastructures.ImmutableSet;
  *
  */
 public abstract class NonrelationalState<STATE extends NonrelationalState<STATE, V>, V extends INonrelationalValue<V>>
-		implements IAbstractState<STATE> {
+		implements IAbstractState<STATE>, IVariableMappedTermProvider {
 
 	private static final String MSG_NULL = "NULL";
 	private static final String MSG_BOT = "BOT";
@@ -907,6 +909,11 @@ public abstract class NonrelationalState<STATE extends NonrelationalState<STATE,
 
 	@Override
 	public Term getTerm(final Script script) {
+		return getTerm(script, NonrelationalTermUtils::getTermVar);
+	}
+
+	@Override
+	public Term getTerm(final Script script, final Function<IProgramVarOrConst, Term> variableTerm) {
 		if (isBottom()) {
 			return script.term("false");
 		}
@@ -915,7 +922,7 @@ public abstract class NonrelationalState<STATE extends NonrelationalState<STATE,
 
 		for (final Entry<IProgramVarOrConst, V> entry : getVar2ValueNonrelational().entrySet()) {
 			final IProgramVarOrConst variable = entry.getKey();
-			final Term var = NonrelationalTermUtils.getTermVar(variable);
+			final Term var = variableTerm.apply(variable);
 			assert var != null : "Error during TermVar creation";
 			final Sort sort = var.getSort().getRealSort();
 			if (!sort.isNumericSort()) {
@@ -927,7 +934,7 @@ public abstract class NonrelationalState<STATE extends NonrelationalState<STATE,
 		}
 		for (final Entry<IProgramVarOrConst, BooleanValue> entry : getVar2ValueBoolean().entrySet()) {
 			final IProgramVarOrConst variable = entry.getKey();
-			final Term var = NonrelationalTermUtils.getTermVar(variable);
+			final Term var = variableTerm.apply(variable);
 			assert var != null : "Error during TermVar creation";
 			final Sort sort = var.getSort().getRealSort();
 			acc.add(entry.getValue().getTerm(script, sort, var));

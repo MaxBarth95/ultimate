@@ -109,6 +109,15 @@ public interface INonrelationalValue<V extends INonrelationalValue<V>> extends I
 
 	V modulo(final V other);
 
+	/**
+	 * Whether this value may represent 0. Returning <code>true</code> is always sound.
+	 *
+	 * @return <code>false</code> only if 0 is certainly not represented by this value.
+	 */
+	default boolean mayBeZero() {
+		return true;
+	}
+
 	V greaterThan(final V other);
 
 	V greaterOrEqual(final V other);

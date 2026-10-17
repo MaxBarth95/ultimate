@@ -194,4 +194,34 @@ public class IntervalDomainValueTest {
 		}
 		return new IntervalValue(v);
 	}
+
+	/**
+	 * {@link IntervalDomainValue#mayBeZero()} guards the inverse evaluation of multiplication: a * 0 = 0 holds for every
+	 * a, so a factor that may be 0 must not restrict the other one.
+	 */
+	@Test
+	public void testMayBeZero() {
+		assertTrue(new IntervalDomainValue(0, 0).mayBeZero());
+		assertTrue(new IntervalDomainValue(-1, 1).mayBeZero());
+		assertTrue(new IntervalDomainValue().mayBeZero());
+		assertFalse(new IntervalDomainValue(1, 5).mayBeZero());
+		assertFalse(new IntervalDomainValue(-5, -1).mayBeZero());
+		assertFalse(new IntervalDomainValue(true).mayBeZero());
+	}
+
+	/**
+	 * The inverse of a comparison with an operand that has no value has no solution. It used to build an interval
+	 * from the missing bounds of bottom.
+	 */
+	@Test
+	public void testInverseComparisonWithBottomOperand() {
+		final IntervalDomainValue bottom = new IntervalDomainValue(true);
+		final IntervalDomainValue old = new IntervalDomainValue(0, 5);
+		for (final boolean isLeft : new boolean[] { true, false }) {
+			assertTrue(bottom.inverseLessOrEqual(old, isLeft).isBottom());
+			assertTrue(bottom.inverseGreaterOrEqual(old, isLeft).isBottom());
+			assertTrue(bottom.inverseLessThan(old, isLeft).isBottom());
+			assertTrue(bottom.inverseGreaterThan(old, isLeft).isBottom());
+		}
+	}
 }

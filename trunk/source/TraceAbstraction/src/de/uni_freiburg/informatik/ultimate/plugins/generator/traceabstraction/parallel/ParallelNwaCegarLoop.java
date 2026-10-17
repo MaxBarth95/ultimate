@@ -87,6 +87,7 @@ import de.uni_freiburg.informatik.ultimate.logic.Logics;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.preferences.IcfgPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult.WorkerType;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.absint.AbsIntWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization.AutomataMinimizationTimeout;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.IInvariantSink;
@@ -137,10 +138,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private final int mThreadLimit;
 	private final int mNumTaWorkers;
 	private final int mNumKInductionWorkers;
+	private final boolean mUseAbsIntWorker;
 	private int mRunningThreads = 0;
 	// Workers that finished without a verdict. They are gone from the pool and will produce nothing more.
 	private int mRetiredWorkers = 0;
-	// Collects invariants from the TA workers for the k-induction workers. Null unless there is a
+	// Collects invariants from the AbsInt and TA workers for the k-induction workers. Null unless there is a
 	// k-induction worker and someone to feed it; runs on mInvariantExec, outside the worker pool, since it never
 	// decides the program.
 	private InvariantSupplier<L, A> mInvariantSupplier;
@@ -206,7 +208,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			mNumTaWorkers = mPref.getThreadLimit();
 		}
 		mNumKInductionWorkers = mPref.getNumKInductionWorkers();
-		mThreadLimit = mNumTaWorkers + mNumKInductionWorkers;
+		mUseAbsIntWorker = mPref.useAbsIntWorker();
+		mThreadLimit = mNumTaWorkers + mNumKInductionWorkers + (mUseAbsIntWorker ? 1 : 0);
 		if (mThreadLimit == 0) {
 			throw new AssertionError("At least one parallel CEGAR worker thread must be configured");
 		}
@@ -357,9 +360,10 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				updateAndPrintStatistics(true);
 				return true;
 			}
-			// K-induction proves the whole program safe at once, it has no subtrahend to
+			// K-induction and abstract interpretation prove the whole program safe at once, they have no subtrahend to
 			// refine with. The null automaton type is what distinguishes that sentinel from the refutation above.
-			if (workerResult.mWorkerType.equals(WorkerType.KINDUCTION)
+			if ((workerResult.mWorkerType.equals(WorkerType.KINDUCTION)
+					|| workerResult.mWorkerType.equals(WorkerType.ABSINT))
 					&& (workerResult.getSubtrahend() == null) && (workerResult.getAutomatonType() == null)) {
 				mAbstraction = new NestedWordAutomaton(new AutomataLibraryServices(getServices()),
 						mAbstraction.getVpAlphabet(), mPredicateFactoryInterpolantAutomata);
@@ -412,6 +416,12 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			} else {
 				invariantTransfer = null;
 			}
+			// First, while no pool thread exists yet: its constructor walks the ICFG, whose edge lists the other
+			// workers mutate whenever they transfer a letter.
+			if (mUseAbsIntWorker) {
+				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.ABSINT));
+				id++;
+			}
 			if (mInvariantSupplier != null) {
 				mInvariantSupplier.setAbstraction(transferForInvariantSupplier(invariantTransfer));
 				mInvariantExec = Executors.newSingleThreadExecutor(workerThreadFactory("Invariant Supplier"));
@@ -456,10 +466,10 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	/**
-	 * Only k-induction consumes invariants, the TA workers produce them.
+	 * Only k-induction consumes invariants, AbsInt and the TA workers produce them.
 	 */
 	private boolean needsInvariantSupplier() {
-		return mNumKInductionWorkers > 0 && interpolantsFeedInvariantSupplier();
+		return mNumKInductionWorkers > 0 && (mUseAbsIntWorker || interpolantsFeedInvariantSupplier());
 	}
 
 	private boolean interpolantsFeedInvariantSupplier() {
@@ -490,6 +500,13 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 */
 	private ICegarNwaWorkerThread<L, A> setUpWorkerThread(final IUltimateServiceProvider iterationServices,
 			final int id, final WorkerType workerType) throws InterruptedException {
+		if (workerType == WorkerType.ABSINT) {
+			// Runs on the main script's variables and needs no solver of its own.
+			return new AbsIntWorkerThread<>(mLogger, iterationServices, mAbstraction, mIcfg,
+					mCsToolkit, invariantSink(true), mPref.getAbsIntDomains(), mPref.getAbsIntDomainBudget(),
+					mPref.getAbsIntMemoryBudget(), mWorkerResultQueue, this::isShuttingDown);
+		}
+
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(
 				new AutomataLibraryServices(mServices), mLogger, mCsToolkit.getManagedScript(), iterationServices,
 				getSolverSettings(workerType,

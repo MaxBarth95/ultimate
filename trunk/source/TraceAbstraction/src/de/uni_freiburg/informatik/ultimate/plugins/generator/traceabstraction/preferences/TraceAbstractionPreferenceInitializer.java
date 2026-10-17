@@ -621,6 +621,33 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "k-induction crashes.";
 	private static final boolean DEF_KINDUCTION_SOLVER_RESTART = true;
 
+	public static final String LABEL_ABSINT_WORKER = "Use abstract interpretation worker in Parallel Trace Abstraction";
+	private static final String DESC_ABSINT_WORKER =
+			"Runs abstract interpretation on the initial abstraction, one domain after the other, and hands every "
+					+ "invariant it finds to the k-induction workers while they run.";
+	private static final boolean DEF_ABSINT_WORKER = false;
+
+	public static final String LABEL_ABSINT_DOMAINS = "Abstract domains of the abstract interpretation worker";
+	private static final String DESC_ABSINT_DOMAINS =
+			"Comma-separated AbstractInterpretationV2 domains, run in this order: SignDomain, IntervalDomain, "
+					+ "CongruenceDomain, ExplicitValueDomain or OctagonDomain. Their results are trusted.";
+	private static final String DEF_ABSINT_DOMAINS = "IntervalDomain,OctagonDomain";
+
+	public static final String LABEL_ABSINT_DOMAIN_BUDGET =
+			"Time budget per domain of the abstract interpretation worker (s)";
+	private static final String DESC_ABSINT_DOMAIN_BUDGET =
+			"How long each domain of the abstract interpretation worker may run. A domain that runs out gives no "
+					+ "result and the next one starts.";
+	private static final int DEF_ABSINT_DOMAIN_BUDGET = 60;
+
+	public static final String LABEL_ABSINT_MEMORY_BUDGET =
+			"Memory budget per domain of the abstract interpretation worker (% of max heap)";
+	private static final String DESC_ABSINT_MEMORY_BUDGET =
+			"How much of the JVM's maximum heap may be in use while a domain of the abstract interpretation worker "
+					+ "runs. The heap of the whole JVM counts, including that of the other workers. A domain that "
+					+ "exceeds it gives no result and the next one starts.";
+	private static final int DEF_ABSINT_MEMORY_BUDGET = 20;
+
 	public static final String LABEL_INTERPOLANT_INVARIANTS =
 			"Check interpolants of TA workers for invariants for k-induction";
 	private static final String DESC_INTERPOLANT_INVARIANTS =
@@ -969,6 +996,15 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						PreferenceType.Integer, IUltimatePreferenceItemValidator.ONLY_POSITIVE),
 				new UltimatePreferenceItem<>(LABEL_KINDUCTION_SOLVER_RESTART, DEF_KINDUCTION_SOLVER_RESTART,
 						DESC_KINDUCTION_SOLVER_RESTART, PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_ABSINT_WORKER, DEF_ABSINT_WORKER, DESC_ABSINT_WORKER,
+						PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_ABSINT_DOMAINS, DEF_ABSINT_DOMAINS, DESC_ABSINT_DOMAINS,
+						PreferenceType.String),
+				new UltimatePreferenceItem<>(LABEL_ABSINT_DOMAIN_BUDGET, DEF_ABSINT_DOMAIN_BUDGET,
+						DESC_ABSINT_DOMAIN_BUDGET, PreferenceType.Integer, IUltimatePreferenceItemValidator.ONLY_POSITIVE),
+				new UltimatePreferenceItem<>(LABEL_ABSINT_MEMORY_BUDGET, DEF_ABSINT_MEMORY_BUDGET,
+						DESC_ABSINT_MEMORY_BUDGET, PreferenceType.Integer,
+						new IUltimatePreferenceItemValidator.IntegerValidator(1, 100)),
 				new UltimatePreferenceItem<>(LABEL_INTERPOLANT_INVARIANTS, DEF_INTERPOLANT_INVARIANTS,
 						DESC_INTERPOLANT_INVARIANTS, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_SEARCH_LOOP_BOUND, DEF_SEARCH_LOOP_BOUND, DESC_SEARCH_LOOP_BOUND,

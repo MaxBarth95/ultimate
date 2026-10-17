@@ -56,6 +56,7 @@ import de.uni_freiburg.informatik.ultimate.logic.Script;
 import de.uni_freiburg.informatik.ultimate.logic.Sort;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.algorithm.FixpointEngine;
+import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.domain.IVariableMappedTermProvider;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.util.AbsIntUtil;
 import de.uni_freiburg.informatik.ultimate.plugins.analysis.abstractinterpretationv2.util.TVBool;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.ImmutableSet;
@@ -74,7 +75,7 @@ import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
  *
  * @author schaetzc@informatik.uni-freiburg.de
  */
-public final class OctDomainState implements IAbstractState<OctDomainState> {
+public final class OctDomainState implements IAbstractState<OctDomainState>, IVariableMappedTermProvider {
 
 	private final static Comparator<IProgramVarOrConst> LEXICAL_VAR_COMPARATOR =
 			Comparator.comparing(IProgramVarOrConst::getGloballyUniqueId);
@@ -737,30 +738,37 @@ public final class OctDomainState implements IAbstractState<OctDomainState> {
 
 	@Override
 	public Term getTerm(final Script script) {
+		return getTerm(script, OctDomainState::getTermVar);
+	}
+
+	@Override
+	public Term getTerm(final Script script, final Function<IProgramVarOrConst, Term> variableTerm) {
 		if (isBottom()) {
 			return script.term("false");
 		}
 
-		final List<Term> terms = new ArrayList<>(getTermNumericAbstraction(script));
-		terms.addAll(getTermBooleanAbstraction(script));
+		final List<Term> terms = new ArrayList<>(getTermNumericAbstraction(script, variableTerm));
+		terms.addAll(getTermBooleanAbstraction(script, variableTerm));
 		return SmtUtils.and(script, terms);
 	}
 
-	/** For internal use in {@link #getTerm(Script))}. */
-	private List<Term> getTermNumericAbstraction(final Script script) {
+	/** For internal use in {@link #getTerm(Script, Function)}. */
+	private List<Term> getTermNumericAbstraction(final Script script,
+			final Function<IProgramVarOrConst, Term> variableTerm) {
 		final Term[] mapIndexToTerm = new Term[mMapNumericVarToIndex.size()];
 		for (final Entry<IProgramVarOrConst, Integer> entry : mMapNumericVarToIndex.entrySet()) {
-			final Term termVar = getTermVar(entry.getKey());
+			final Term termVar = variableTerm.apply(entry.getKey());
 			mapIndexToTerm[entry.getValue()] = termVar;
 		}
 		return cachedSelectiveClosure().getTerm(script, mapIndexToTerm);
 	}
 
-	/** For internal use in {@link #getTerm(Script))}. */
-	private List<Term> getTermBooleanAbstraction(final Script script) {
+	/** For internal use in {@link #getTerm(Script, Function)}. */
+	private List<Term> getTermBooleanAbstraction(final Script script,
+			final Function<IProgramVarOrConst, Term> variableTerm) {
 		final List<Term> resultTerm = new ArrayList<>(mBooleanAbstraction.size());
 		for (final Entry<IProgramVarOrConst, BoolValue> entry : mBooleanAbstraction.entrySet()) {
-			final Term termVar = getTermVar(entry.getKey());
+			final Term termVar = variableTerm.apply(entry.getKey());
 			final Sort sort = termVar.getSort().getRealSort();
 			final Term newTerm = entry.getValue().getTerm(script, sort, termVar);
 			resultTerm.add(newTerm);

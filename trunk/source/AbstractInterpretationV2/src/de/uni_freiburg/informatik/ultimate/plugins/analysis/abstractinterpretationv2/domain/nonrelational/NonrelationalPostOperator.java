@@ -55,6 +55,7 @@ import de.uni_freiburg.informatik.ultimate.boogie.output.BoogiePrettyPrinter;
 import de.uni_freiburg.informatik.ultimate.boogie.symboltable.BoogieSymbolTable;
 import de.uni_freiburg.informatik.ultimate.boogie.type.BoogieType;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.Call;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.Return;
 import de.uni_freiburg.informatik.ultimate.lib.icfg.Summary;
@@ -101,6 +102,7 @@ public abstract class NonrelationalPostOperator<STATE extends NonrelationalState
 	private final Boogie2SMT mBoogie2Smt;
 	private final CallInfoCache mCallInfoCache;
 	private AbsIntBenchmark<IcfgEdge> mAbsIntBenchmark = null;
+	private boolean mRefineArgumentsOnReturn = true;
 	private final MappedTerm2Expression mMappedTerm2Expression;
 	private final NonrelationalEvaluator<STATE, V> mEvaluator;
 
@@ -112,7 +114,8 @@ public abstract class NonrelationalPostOperator<STATE extends NonrelationalState
 		mStatementExtractor = new RcfgStatementExtractor();
 		mBoogie2SmtSymbolTable = bpl2SmtSymbolTable;
 		mStatementProcessor =
-				new NonrelationalStatementProcessor<>(logger, boogie2Smt.getBoogie2SmtSymbolTable(), evaluator);
+				new NonrelationalStatementProcessor<>(logger, boogie2Smt.getBoogie2SmtSymbolTable(),
+						cfgSmtToolkit.getModifiableGlobalsTable(), evaluator);
 		mEvaluator = evaluator;
 		mSymbolTable = symbolTable;
 		mParallelStates = parallelStates;
@@ -206,6 +209,23 @@ public abstract class NonrelationalPostOperator<STATE extends NonrelationalState
 			}
 		}
 		return EvalResult.selectTF(allTrue, allFalse);
+	}
+
+	/**
+	 * Whether a return also constrains the call's argument expressions by the callee's in-parameters at its exit.
+	 * That refinement translates the arguments into terms of {@link Boogie2SMT}'s script, so it must be off when the
+	 * post operator runs on a thread that must not use that script. Without it the post is less precise, but sound.
+	 */
+	public void setRefineArgumentsOnReturn(final boolean refineArgumentsOnReturn) {
+		mRefineArgumentsOnReturn = refineArgumentsOnReturn;
+	}
+
+	/**
+	 * Bounds every post by the timer, or by none if it is null. The fixpoint engine checks its timer only between two
+	 * posts, a single one of a deeply nested assumption can take very long.
+	 */
+	public void setTimer(final IProgressAwareTimer timer) {
+		mEvaluator.setTimer(timer);
 	}
 
 	/**
@@ -327,7 +347,7 @@ public abstract class NonrelationalPostOperator<STATE extends NonrelationalState
 		final List<Expression> inputParameterExpressionTerms = new ArrayList<>();
 
 		// Update input expressions wrt. parameter values at the end of the executed procedure
-		for (int i = 0; i < inVals.size(); i++) {
+		for (int i = 0; mRefineArgumentsOnReturn && i < inVals.size(); i++) {
 			final ITermProvider inValue = inVals.get(i);
 			final Expression inExpression = args[i];
 

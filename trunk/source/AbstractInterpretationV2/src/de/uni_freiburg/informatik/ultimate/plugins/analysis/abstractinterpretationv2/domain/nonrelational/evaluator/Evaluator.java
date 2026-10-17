@@ -92,6 +92,7 @@ public abstract class Evaluator<VALUE extends INonrelationalValue<VALUE>, STATE 
 		if (mCurrentEvaluationRecursion < currentRecursion) {
 			mCurrentEvaluationRecursion = currentRecursion;
 		}
+		mLogger.checkTimeout();
 
 		return evaluate(currentState);
 	}
@@ -126,6 +127,7 @@ public abstract class Evaluator<VALUE extends INonrelationalValue<VALUE>, STATE 
 		if (mCurrentInverseEvaluationRecursion < currentRecursion) {
 			mCurrentInverseEvaluationRecursion = currentRecursion;
 		}
+		mLogger.checkTimeout();
 		// mLogger.getLogger().info(
 		// String.format("Inverse evaluation in depth %s for state %s", currentRecursion, oldstate.hashCode()));
 		return inverseEvaluate(evalResult, oldstate);

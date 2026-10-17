@@ -42,13 +42,16 @@ import de.uni_freiburg.informatik.ultimate.boogie.BoogieVisitor;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.AssignmentStatement;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.AssumeStatement;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.BooleanLiteral;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.CallStatement;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.Expression;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.HavocStatement;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.Label;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.LeftHandSide;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.Statement;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.VariableLHS;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.boogie.IBoogieSymbolTableVariableProvider;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.ModifiableGlobalsTable;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgEdge;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVarOrConst;
@@ -72,6 +75,8 @@ public class NonrelationalStatementProcessor<STATE extends NonrelationalState<ST
 		extends BoogieVisitor {
 
 	private final IBoogieSymbolTableVariableProvider mBoogie2SmtSymbolTable;
+	// null if unknown, then calls cannot be processed
+	private final ModifiableGlobalsTable mModifiableGlobals;
 	private final ILogger mLogger;
 
 	private STATE mOldState;
@@ -84,7 +89,18 @@ public class NonrelationalStatementProcessor<STATE extends NonrelationalState<ST
 
 	public NonrelationalStatementProcessor(final ILogger logger, final IBoogieSymbolTableVariableProvider bpl2SmtTable,
 			final NonrelationalEvaluator<STATE, V> evaluator) {
+		this(logger, bpl2SmtTable, null, evaluator);
+	}
+
+	/**
+	 * @param modifiableGlobals
+	 *            the globals each procedure may modify, needed for the calls that stay inside a statement sequence
+	 *            (calls of procedures without implementation), or null if there are none
+	 */
+	public NonrelationalStatementProcessor(final ILogger logger, final IBoogieSymbolTableVariableProvider bpl2SmtTable,
+			final ModifiableGlobalsTable modifiableGlobals, final NonrelationalEvaluator<STATE, V> evaluator) {
 		mBoogie2SmtSymbolTable = bpl2SmtTable;
+		mModifiableGlobals = modifiableGlobals;
 		mLogger = logger;
 		mEvaluator = evaluator;
 		mLhsVariable = null;
@@ -158,8 +174,15 @@ public class NonrelationalStatementProcessor<STATE extends NonrelationalState<ST
 		} else if (statement instanceof HavocStatement) {
 			handleHavocStatement((HavocStatement) statement);
 			return statement;
+		} else if (statement instanceof CallStatement) {
+			handleCallStatement((CallStatement) statement);
+			return statement;
+		} else if (statement instanceof Label) {
+			mReturnState.add(mOldState);
+			return statement;
 		}
-		return super.processStatement(statement);
+		// Adding no state would make the post bottom, i.e. claim the statement is never executed.
+		throw new UnsupportedOperationException("Unsupported type of statement: " + statement);
 	}
 
 	/**
@@ -316,6 +339,38 @@ public class NonrelationalStatementProcessor<STATE extends NonrelationalState<ST
 			mAbsIntBenchmark.recordEvaluationRecursionDepth(evaluator.getEvaluationRecursionDepth());
 			mAbsIntBenchmark.recordInverseEvaluationRecursionDepth(evaluator.getInverseEvaluationRecursionDepth());
 		}
+	}
+
+	/**
+	 * A call inside a statement sequence, i.e. of a procedure without implementation (e.g. {@code write~init~int}),
+	 * whose contract is not known here: havocs the call's left-hand sides and every global the procedure may modify,
+	 * which over-approximates any contract.
+	 */
+	private void handleCallStatement(final CallStatement statement) {
+		if (mModifiableGlobals == null) {
+			throw new UnsupportedOperationException(
+					"Cannot process the call " + statement.getMethodName() + " without the modifiable globals");
+		}
+		final List<IProgramVarOrConst> havocked = new ArrayList<>();
+		for (final VariableLHS lhs : statement.getLhs()) {
+			havocked.add(getBoogieVar(lhs));
+		}
+		havocked.addAll(mModifiableGlobals.getModifiedBoogieVars(statement.getMethodName()));
+
+		STATE currentNewState = mOldState;
+		for (final IProgramVarOrConst var : havocked) {
+			if (!currentNewState.containsVariable(var)) {
+				// not tracked, so nothing to forget
+				continue;
+			}
+			final STATE finalCurrentNewState = currentNewState;
+			final Function<IProgramVarOrConst, STATE> varFunction =
+					variable -> finalCurrentNewState.setValue(variable, finalCurrentNewState.createTopValue());
+			final Function<IProgramVarOrConst, STATE> boolFunction =
+					variable -> finalCurrentNewState.setBooleanValue(variable, BooleanValue.TOP);
+			currentNewState = TypeUtils.applyVariableFunction(varFunction, boolFunction, null, var);
+		}
+		mReturnState.add(currentNewState);
 	}
 
 	private void handleHavocStatement(final HavocStatement statement) {
