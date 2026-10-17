@@ -349,20 +349,56 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	// Automata dumping
 	// ========================================================================
 
-	public static final String LABEL_DUMPAUTOMATA = "Dump automata to files";
-	private static final boolean DEF_DUMPAUTOMATA = false;
+	public static final String LABEL_DUMP_AUTOMATA = "Dump automata";
+	private static final boolean DEF_DUMP_AUTOMATA = false;
+	private static final String DESC_DUMP_AUTOMATA = "Dump automata to files.";
 
-	public static final String LABEL_AUTOMATAFORMAT = "Output format of dumped automata";
-	private static final Format DEF_AUTOMATAFORMAT = Format.ATS_NUMERATE;
+	public static final String LABEL_DUMP_AUTOMATA_FORMAT = "Dump automata format";
+	private static final Format DEF_DUMP_AUTOMATA_FORMAT = Format.ATS_NUMERATE;
+	private static final String DESC_DUMP_AUTOMATA_FORMAT = "Output format of dumped automata.";
 
-	public static final String LABEL_DUMPPATH = "Dump automata to the following directory";
-	private static final String DEF_DUMPPATH = ".";
+	public static final String LABEL_DUMP_AUTOMATA_DIRECTORY = "Dump automata directory";
+	private static final String DEF_DUMP_AUTOMATA_DIRECTORY = ".";
+	private static final String DESC_DUMP_AUTOMATA_DIRECTORY = "Dump automata to the specified directory.";
 
-	public static final String LABEL_DUMP_ONLY_REUSE = "Dump only reuse-automata";
-	private static final boolean DEF_ONLY_REUSE = false;
-	private static final String DESC_DUMP_ONLY_REUSE =
+	public static final String LABEL_DUMP_AUTOMATA_FILENAME = "Dump automata filename";
+	private static final String DEF_DUMP_AUTOMATA_FILENAME = "automata";
+	private static final String DESC_DUMP_AUTOMATA_FILENAME =
+			"The filename of the dumped automata (without file extension).";
+
+	public static final String LABEL_DUMP_AUTOMATA_BESIDE_FILE = "Dump automata besides input file";
+	private static final boolean DEF_DUMP_AUTOMATA_BESIDE_FILE = true;
+	private static final String DESC_DUMP_AUTOMATA_BESIDE_FILE =
+			"Dump automata as \"<inputfilename>-automata.ats\" in the same directory as the input file. "
+					+ "All other output options are ignored.";
+
+	public static final String LABEL_DUMP_AUTOMATA_ONLY_REUSE = "Dump only reuse-automata";
+	private static final boolean DEF_DUMP_AUTOMATA_ONLY_REUSE = false;
+	private static final String DESC_DUMP_AUTOMATA_ONLY_REUSE =
 			"When dumping automata is enabled, we only dump the interpolant automaton and add to that file if it "
 					+ "exists s.t. it can be reused by later verification runs.";
+
+	// Debug information dumping
+	// ========================================================================
+
+	public static final String LABEL_DUMP_DEBUG_INFO = "Dump debug information";
+	private static final boolean DEF_DUMP_DEBUG_INFO = false;
+	private static final String DESC_DUMP_DEBUG_INFO = "Dump debug information to files.";
+
+	public static final String LABEL_DUMP_DEBUG_INFO_DIRECTORY = "Dump debug information directory";
+	private static final String DEF_DUMP_DEBUG_INFO_DIRECTORY = ".";
+	private static final String DESC_DUMP_DEBUG_INFO_DIRECTORY = "Dump debug information to the specified directory.";
+
+	public static final String LABEL_DUMP_DEBUG_INFO_FILENAME = "Dump debug information filename";
+	private static final String DEF_DUMP_DEBUG_INFO_FILENAME = "debug";
+	private static final String DESC_DUMP_DEBUG_INFO_FILENAME =
+			"The filename of the dumped debug information (without file extension).";
+
+	public static final String LABEL_DUMP_DEBUG_INFO_BESIDE_FILE = "Dump debug information besides input file";
+	private static final boolean DEF_DUMP_DEBUG_INFO_BESIDE_FILE = true;
+	private static final String DESC_DUMP_DEBUG_INFO_BESIDE_FILE =
+			"Dump debug information as \"<inputfilename>-debug.txt\" in the same directory as the input file. "
+					+ "All other output options are ignored.";
 
 	// ========================================================================
 
@@ -758,12 +794,28 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						PreferenceType.Combo, HoareTripleChecks.values()),
 
 				new UltimatePreferenceItemGroup("Automata Dumping",
-						new UltimatePreferenceItem<>(LABEL_DUMPAUTOMATA, DEF_DUMPAUTOMATA, PreferenceType.Boolean),
-						new UltimatePreferenceItem<>(LABEL_AUTOMATAFORMAT, DEF_AUTOMATAFORMAT, PreferenceType.Combo,
-								Format.values()),
-						new UltimatePreferenceItem<>(LABEL_DUMPPATH, DEF_DUMPPATH, PreferenceType.Directory),
-						new UltimatePreferenceItem<>(LABEL_DUMP_ONLY_REUSE, DEF_ONLY_REUSE, DESC_DUMP_ONLY_REUSE,
-								PreferenceType.Boolean)),
+						new UltimatePreferenceItem<>(LABEL_DUMP_AUTOMATA, DEF_DUMP_AUTOMATA, DESC_DUMP_AUTOMATA,
+								PreferenceType.Boolean),
+						new UltimatePreferenceItem<>(LABEL_DUMP_AUTOMATA_FORMAT, DEF_DUMP_AUTOMATA_FORMAT,
+								DESC_DUMP_AUTOMATA_FORMAT, PreferenceType.Combo, Format.values()),
+						new UltimatePreferenceItem<>(LABEL_DUMP_AUTOMATA_DIRECTORY, DEF_DUMP_AUTOMATA_DIRECTORY,
+								DESC_DUMP_AUTOMATA_DIRECTORY, PreferenceType.Directory),
+						new UltimatePreferenceItem<>(LABEL_DUMP_AUTOMATA_FILENAME, DEF_DUMP_AUTOMATA_FILENAME,
+								DESC_DUMP_AUTOMATA_FILENAME, PreferenceType.String),
+						new UltimatePreferenceItem<>(LABEL_DUMP_AUTOMATA_BESIDE_FILE, DEF_DUMP_AUTOMATA_BESIDE_FILE,
+								DESC_DUMP_AUTOMATA_BESIDE_FILE, PreferenceType.Boolean),
+						new UltimatePreferenceItem<>(LABEL_DUMP_AUTOMATA_ONLY_REUSE, DEF_DUMP_AUTOMATA_ONLY_REUSE,
+								DESC_DUMP_AUTOMATA_ONLY_REUSE, PreferenceType.Boolean)),
+
+				new UltimatePreferenceItemGroup("Debug Information Dumping",
+						new UltimatePreferenceItem<>(LABEL_DUMP_DEBUG_INFO, DEF_DUMP_DEBUG_INFO, DESC_DUMP_DEBUG_INFO,
+								PreferenceType.Boolean),
+						new UltimatePreferenceItem<>(LABEL_DUMP_DEBUG_INFO_DIRECTORY, DEF_DUMP_DEBUG_INFO_DIRECTORY,
+								DESC_DUMP_DEBUG_INFO_DIRECTORY, PreferenceType.Directory),
+						new UltimatePreferenceItem<>(LABEL_DUMP_DEBUG_INFO_FILENAME, DEF_DUMP_DEBUG_INFO_FILENAME,
+								DESC_DUMP_DEBUG_INFO_FILENAME, PreferenceType.String),
+						new UltimatePreferenceItem<>(LABEL_DUMP_DEBUG_INFO_BESIDE_FILE, DEF_DUMP_DEBUG_INFO_BESIDE_FILE,
+								DESC_DUMP_DEBUG_INFO_BESIDE_FILE, PreferenceType.Boolean)),
 
 				new UltimatePreferenceItem<>(LABEL_LANGUAGE_OPERATION, LanguageOperation.DIFFERENCE,
 						PreferenceType.Combo, LanguageOperation.values()),
@@ -1052,12 +1104,12 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 		 */
 		TOOTHLESS_TAIPAN,
 		/**
-		 * Integer strategy that tries Craig interpolation with SMTInterpol, SP/WP with Z3 and CVC4 with a high
+		 * Integer strategy that tries Craig interpolation with SMTInterpol, SP/WP with Z3 and CVC5 with a high
 		 * interpolant threshold.
 		 */
 		PENGUIN,
 		/**
-		 * Bitvector strategy that tries SP/WP with CVC4, Z3 and Mathsat with a low interpolant threshold
+		 * Bitvector strategy that tries SP/WP with CVC5, Z3 and Mathsat with a low interpolant threshold
 		 */
 		WALRUS,
 		/**
@@ -1089,12 +1141,12 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 		 */
 		BADGER,
 		/**
-		 * Bitvector strategy that tries SP/WP with CVC4, Z3 and Mathsat with a low interpolant threshold
+		 * Bitvector strategy that tries SP/WP with bitwuzla, Z3 and Mathsat with a low interpolant threshold
 		 */
 		WOLF,
 		/**
-		 * Bitvector strategy that tries SP/WP with CVC4, Z3 and Mathsat with a low interpolant threshold (similar to
-		 * {@link #WOLF}, but in a different order and dependent on floats)
+		 * Bitvector strategy that tries SP/WP with bizwuzla, Z3 and Mathsat with a low interpolant threshold (similar
+		 * to {@link #WOLF}, but in a different order and dependent on floats)
 		 */
 		FOX,
 		/**
@@ -1103,7 +1155,7 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 		 */
 		BEAR,
 		/**
-		 * Heavy-weight bitvector strategy that tries SP with CVC4, Z3 and Mathsat with a high interpolant threshold
+		 * Heavy-weight bitvector strategy that tries SP with bitwuzla, Z3 and Mathsat with a high interpolant threshold
 		 */
 		WARTHOG,
 		/**

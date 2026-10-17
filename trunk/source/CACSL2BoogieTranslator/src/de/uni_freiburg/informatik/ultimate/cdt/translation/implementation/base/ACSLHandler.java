@@ -56,7 +56,6 @@ import de.uni_freiburg.informatik.ultimate.boogie.ast.LoopInvariantSpecification
 import de.uni_freiburg.informatik.ultimate.boogie.ast.ModifiesSpecification;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.RequiresSpecification;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.Specification;
-import de.uni_freiburg.informatik.ultimate.boogie.ast.StructAccessExpression;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.UnaryExpression;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.VarList;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.VariableDeclaration;
@@ -72,7 +71,6 @@ import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.contai
 import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.container.c.CPointer;
 import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.container.c.CPrimitive;
 import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.container.c.CPrimitive.CPrimitives;
-import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.container.c.CStructOrUnion;
 import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.container.c.ICType;
 import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.exception.IncorrectSyntaxException;
 import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.exception.UnsupportedSyntaxException;
@@ -830,27 +828,14 @@ public class ACSLHandler implements IACSLHandler {
 		final ILocation loc = mLocationFactory.createACSLLocation(node);
 		final ExpressionResult array = (ExpressionResult) main.dispatch(node.getArray(), main.getAcslHook());
 		final ExpressionResult index = dispatchSwitch(main, node.getIndex(), loc);
-		return mCHandler.handleArraySubscriptExpression(array, index, main.getAcslHook());
+		return mCHandler.handleArraySubscriptExpression(loc, array, index, main.getAcslHook());
 	}
 
 	@Override
 	public Result visit(final IDispatcher main, final FieldAccessExpression node) {
 		final ILocation loc = mLocationFactory.createACSLLocation(node);
-		final ExpressionResultBuilder resultBuilder = new ExpressionResultBuilder();
-		final ExpressionResult r = dispatchSwitch(main, node.getStruct(), loc);
-		assert r.getClass() == ExpressionResult.class;
-		final String field = node.getField();
-
-		resultBuilder.addAllExceptLrValue(r);
-
-		// TODO: CType
-		final StructAccessExpression structAccessExpression =
-				ExpressionFactory.constructStructAccessExpression(loc, r.getLrValue().getValue(), field);
-
-		final RValue rval = new RValue(structAccessExpression,
-				((CStructOrUnion) r.getLrValue().getCType().getUnderlyingType()).getFieldType(field));
-		resultBuilder.setLrValue(rval);
-		return resultBuilder.build();
+		final ExpressionResult struct = (ExpressionResult) main.dispatch(node.getStruct(), main.getAcslHook());
+		return mCHandler.handleFieldReference(loc, struct, node.getField(), main.getAcslHook());
 	}
 
 	@Override
