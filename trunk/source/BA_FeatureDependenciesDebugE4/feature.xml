@@ -2,7 +2,7 @@
 <feature
       id="BA_FeatureDependenciesDebugE4"
       label="BA_FeatureDependenciesDebugE4"
-      version="0.3.1"
+      version="0.3.2"
       provider-name="Ultimate Program Analysis Team"
       arch="x86_64">
 
@@ -233,6 +233,10 @@
 
    <plugin
          id="org.eclipse.ui"
+         version="0.0.0"/>
+
+   <plugin
+         id="org.eclipse.ui.themes"
          version="0.0.0"/>
 
    <plugin

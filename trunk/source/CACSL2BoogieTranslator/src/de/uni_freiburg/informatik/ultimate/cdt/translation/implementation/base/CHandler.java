@@ -154,6 +154,7 @@ import de.uni_freiburg.informatik.ultimate.boogie.ast.NamedType;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.PrimitiveType;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.Specification;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.Statement;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.StructLHS;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.TypeDeclaration;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.Unit;
 import de.uni_freiburg.informatik.ultimate.boogie.ast.VarList;
@@ -409,6 +410,8 @@ public class CHandler {
 
 	private final IMemoryPointer mMemoryPointer;
 
+	private final Map<String, ICType> mTypedefs = new HashMap<>();
+
 	/**
 	 * Constructor for CHandler in pre-run mode.
 	 *
@@ -465,8 +468,7 @@ public class CHandler {
 				mExpressionTranslation, mProcedureManager, mTypeSizeComputer, mAuxVarInfoBuilder, mSettings,
 				mMemoryPointer);
 
-		mStructHandler = new StructHandler(mMemoryHandler, mTypeSizeComputer, mExpressionTranslation, mTypeHandler,
-				mLocationFactory);
+		mStructHandler = new StructHandler(mMemoryHandler, mTypeSizeComputer, mExpressionTranslation, mTypeHandler);
 		mDataRaceChecker =
 				mSettings.checkDataRaces()
 						? new DataRaceChecker(mAuxVarInfoBuilder, mMemoryHandler, mTypeHandler, mTypeSizeComputer,
@@ -479,7 +481,7 @@ public class CHandler {
 				mTypeHandler, mReporter, mAuxVarInfoBuilder, this, mLocationFactory, mSymbolTable,
 				mExprResultTransformer, mVariablesOnHeap, mMemoryPointer);
 		mArrayHandler = new ArrayHandler(mSettings, mExpressionTranslation, mTypeHandler, mTypeSizes,
-				mExprResultTransformer, mMemoryHandler, mLocationFactory);
+				mExprResultTransformer, mMemoryHandler);
 		mInitHandler = new InitializationHandler(mSettings, mMemoryHandler, mExpressionTranslation, mTypeHandler,
 				mAuxVarInfoBuilder, mTypeSizeComputer, mTypeSizes, this, mExprResultTransformer, mMemoryPointer);
 		mCExpressionTranslator = new CExpressionTranslator(mSettings, mMemoryHandler, mExpressionTranslation,
@@ -559,8 +561,7 @@ public class CHandler {
 		// the memory handler also retains information from the prerun
 		mMemoryHandler = new MemoryHandler(prerunCHandler.mMemoryHandler, typeSizes, nameHandler, typeHandler,
 				expressionTranslation, procedureManager, typeSizeAndOffsetComputer, mAuxVarInfoBuilder, mSettings);
-		mStructHandler = new StructHandler(mMemoryHandler, mTypeSizeComputer, mExpressionTranslation, mTypeHandler,
-				mLocationFactory);
+		mStructHandler = new StructHandler(mMemoryHandler, mTypeSizeComputer, mExpressionTranslation, mTypeHandler);
 		mDataRaceChecker =
 				mSettings.checkDataRaces()
 						? new DataRaceChecker(mAuxVarInfoBuilder, mMemoryHandler, mTypeHandler, mTypeSizeComputer,
@@ -573,7 +574,7 @@ public class CHandler {
 				mTypeHandler, mReporter, mAuxVarInfoBuilder, this, mLocationFactory, mSymbolTable,
 				mExprResultTransformer, mVariablesOnHeap, mMemoryPointer);
 		mArrayHandler = new ArrayHandler(mSettings, mExpressionTranslation, mTypeHandler, mTypeSizes,
-				mExprResultTransformer, mMemoryHandler, mLocationFactory);
+				mExprResultTransformer, mMemoryHandler);
 		mInitHandler = new InitializationHandler(mSettings, mMemoryHandler, mExpressionTranslation, mTypeHandler,
 				mAuxVarInfoBuilder, mTypeSizeComputer, mTypeSizes, this, mExprResultTransformer, mMemoryPointer);
 
@@ -638,14 +639,15 @@ public class CHandler {
 						mTypeSizes, mMemoryHandler, mDataRaceChecker, mTypeHandler),
 				new StdlibLibraryModel(helper, mExprResultTransformer, mTypeSizes, mTypeSizeComputer,
 						mExpressionTranslation, mAuxVarInfoBuilder, mMemoryHandler, mProcedureManager, mNameHandler,
-						mSettings.checkSignedIntegerBounds()),
+						mSettings.checkSignedIntegerBounds(), mMemoryPointer,
+						mSettings.assumeHeapAllocationAlwaysSucceeds()),
 				new StringLibraryModel(helper, mExprResultTransformer, mAuxVarInfoBuilder, mMemoryHandler,
 						mProcedureManager, mExpressionTranslation, mTypeSizeComputer, mMemoryPointer),
 				new SvcompLibraryModel(helper, mAuxVarInfoBuilder, mExpressionTranslation, mNameHandler,
 						mSettings.checkErrorFunction(), mExprResultTransformer),
 				new TimeLibraryModel(helper, mExpressionTranslation, mAuxVarInfoBuilder),
 				new VariadicLibraryModel(helper, mMemoryHandler, mProcedureManager, mTypeHandler,
-						mExprResultTransformer, mExpressionTranslation, mAuxVarInfoBuilder),
+						mExprResultTransformer, mAuxVarInfoBuilder),
 				new StdintLibraryModel(), new LimitsLibraryModel(mTypeSizes, helper), new StdboolLibraryModel(helper));
 	}
 
@@ -829,12 +831,12 @@ public class CHandler {
 		final ExpressionResult array = (ExpressionResult) main.dispatch(node.getArrayExpression());
 		final ExpressionResult subscript =
 				mExprResultTransformer.transformDispatchSwitchRexBoolToInt(main, loc, node.getArgument());
-		return handleArraySubscriptExpression(array, subscript, node);
+		return handleArraySubscriptExpression(loc, array, subscript, node);
 	}
 
-	public ExpressionResult handleArraySubscriptExpression(final ExpressionResult array,
+	public ExpressionResult handleArraySubscriptExpression(final ILocation loc, final ExpressionResult array,
 			final ExpressionResult subscript, final IASTNode hook) {
-		return mArrayHandler.handleArraySubscriptExpression(array, subscript, hook);
+		return mArrayHandler.handleArraySubscriptExpression(loc, array, subscript, hook);
 	}
 
 	public Result visit(final IDispatcher main, final IASTASMDeclaration node) {
@@ -1626,7 +1628,16 @@ public class CHandler {
 	}
 
 	public Result visit(final IDispatcher main, final IASTFieldReference node) {
-		return mStructHandler.handleFieldReference(main, mExprResultTransformer, node);
+		final ILocation loc = mLocationFactory.createCLocation(node);
+		final String field = node.getFieldName().toString();
+		final ExpressionResult fieldOwner = (ExpressionResult) main.dispatch(node.getFieldOwner());
+		return mStructHandler.handleFieldReference(loc, mExprResultTransformer, fieldOwner, field,
+				node.isPointerDereference(), node);
+	}
+
+	public ExpressionResult handleFieldReference(final ILocation loc, final ExpressionResult struct, final String field,
+			final IASTNode hook) {
+		return mStructHandler.handleFieldReference(loc, mExprResultTransformer, struct, field, false, hook);
 	}
 
 	/**
@@ -3012,8 +3023,8 @@ public class CHandler {
 		} else {
 			rhsWithBitfieldTreatment = rightHandSideValueWithConversionsApplied.getValue();
 		}
-		final AssignmentStatement assignStmt = StatementFactory.constructAssignmentStatement(loc,
-				new LeftHandSide[] { lValue.getLhs() }, new Expression[] { rhsWithBitfieldTreatment });
+		final AssignmentStatement assignStmt =
+				constructAssignmentWithoutFlexibleArray(loc, lValue, rhsWithBitfieldTreatment);
 
 		if (leftHandSide.getCType().isAtomic()) {
 			// For atomic types, make this assignment into an atomic block
@@ -3038,6 +3049,41 @@ public class CHandler {
 			mDataRaceChecker.checkOnWrite(builder, loc, leftHandSide);
 		}
 		return builder.build();
+	}
+
+	/**
+	 * Construct an assignment "lhs := rhs", but if the LHS type is a struct with a flexible array member, assign each
+	 * field separately, but skip flexible. Otherwise, construct just a simple assignment (same as
+	 * {@link StatementFactory#constructAssignmentStatement}).
+	 */
+	public AssignmentStatement constructAssignmentWithoutFlexibleArray(final ILocation loc, final LocalLValue lhs,
+			final Expression rhs) {
+		final LeftHandSide[] assignLhs;
+		final Expression[] assignRhs;
+		if (lhs.getCType().getUnderlyingType() instanceof final CStructOrUnion structType
+				&& structType.hasFlexibleArrayMember()) {
+			// If the LHS type is a struct with a flexible array member, assign each field separately, but skip flexible
+			// arrays (see C11 6.7.2.1).
+			final List<LeftHandSide> lhsList = new ArrayList<>();
+			final List<Expression> rhsList = new ArrayList<>();
+			for (final String fieldId : structType.getFieldIds()) {
+				final ICType fieldType = structType.getFieldType(fieldId);
+				if (fieldType.getUnderlyingType() instanceof CArray && fieldType.isIncomplete()) {
+					// Assignment of structs ignores flexible arrays, https://en.cppreference.com/w/c/language/struct
+					continue;
+				}
+				final Expression fieldValue = ExpressionFactory.constructStructAccessExpression(loc, rhs, fieldId);
+				lhsList.add(new StructLHS(loc, fieldValue.getType(), lhs.getLhs(), fieldId));
+				rhsList.add(fieldValue);
+			}
+			assignLhs = lhsList.toArray(LeftHandSide[]::new);
+			assignRhs = rhsList.toArray(Expression[]::new);
+		} else {
+			// Otherwise, construct just a simple assignment.
+			assignLhs = new LeftHandSide[] { lhs.getLhs() };
+			assignRhs = new Expression[] { rhs };
+		}
+		return StatementFactory.constructAssignmentStatement(loc, assignLhs, assignRhs);
 	}
 
 	/**
@@ -3162,6 +3208,18 @@ public class CHandler {
 		final Declaration boogieDec;
 		final Result result;
 		if (storageClass == CStorageClass.TYPEDEF) {
+			result = skipOrSideEffects(declResult);
+			final ICType existingType = mTypedefs.put(bId, cDec.getType());
+			if (existingType != null) {
+				// C11 6.7.3: there shall be no more than one declaration of the identifier [...]
+				// except that a typedef name can be redefined to denote the same type as it currently does
+				if (existingType.getUnderlyingType().equals(cDec.getType().getUnderlyingType())) {
+					// Avoid adding duplicate Boogie declarations (otherwise the solver crashes later)
+					return result;
+				}
+				throw new AssertionError("error: conflicting types for " + cDec.getType() + "; have " + existingType);
+			}
+
 			boogieDec = new TypeDeclaration(loc, new Attribute[0], false, bId, new String[0], translatedType);
 
 			final BoogieType boogieType = mTypeHandler.getBoogieTypeForCType(cDec.getType());
@@ -3183,8 +3241,6 @@ public class CHandler {
 			}
 			// TODO: add a sizeof-constant for the type??
 			mStaticObjectsHandler.addGlobalTypeDeclaration((TypeDeclaration) boogieDec, cDec);
-
-			result = skipOrSideEffects(declResult);
 		} else if (storageClass == CStorageClass.STATIC && !mProcedureManager.isGlobalScope()) {
 			// we have a local static variable -> special treatment
 			// global static variables are treated like normal global variables..
@@ -3652,10 +3708,9 @@ public class CHandler {
 	 * Handle the address operator according to Section 6.5.3.2 of C11.
 	 */
 	private Result handleAddressOfOperator(final ExpressionResult er, final IASTNode hook) throws AssertionError {
-		final RValue rVal;
-		if (er.getLrValue() instanceof HeapLValue) {
-			rVal = ((HeapLValue) er.getLrValue()).getAddressAsPointerRValue(mTypeHandler.getBoogiePointerType());
-		} else if (er.getLrValue() instanceof LocalLValue) {
+		final RValue rVal = switch (er.getLrValue()) {
+		case final HeapLValue heapLValue -> heapLValue.getAddressAsPointerRValue(mTypeHandler.getBoogiePointerType());
+		case final LocalLValue localLValue -> {
 			if (!mIsPrerun) {
 				throw new AssertionError("cannot take address of LocalLValue: this is a on-heap/off-heap bug");
 			}
@@ -3664,19 +3719,17 @@ public class CHandler {
 			// instead of the address. But we add variables to the
 			// heapVars and hence in the non-prerun mode the input
 			// will be a HeapLValue instead of a LocalLValue.
-			final Expression expr = er.getLrValue().getValue();
+			final Expression expr = localLValue.getValue();
 			if (expr instanceof IdentifierExpression) {
 				final IdentifierExpression idExpr = (IdentifierExpression) expr;
 				moveIdOnHeap(idExpr, hook);
 			} else {
-				moveArrayAndStructIdsOnHeap(er.getLrValue().getUnderlyingType(), expr, hook);
+				moveArrayAndStructIdsOnHeap(localLValue.getUnderlyingType(), expr, hook);
 			}
-			rVal = convertToPointerRValue(er.getLrValue(), mTypeHandler.getBoogiePointerType());
-		} else if (er.getLrValue() instanceof RValue) {
-			throw new AssertionError("cannot take address of RValue");
-		} else {
-			throw new AssertionError("Unknown value");
+			yield convertToPointerRValue(localLValue, mTypeHandler.getBoogiePointerType());
 		}
+		case final RValue rValue -> throw new AssertionError("cannot take address of RValue");
+		};
 		return new ExpressionResultBuilder().addAllExceptLrValue(er).setLrValue(rVal).build();
 	}
 

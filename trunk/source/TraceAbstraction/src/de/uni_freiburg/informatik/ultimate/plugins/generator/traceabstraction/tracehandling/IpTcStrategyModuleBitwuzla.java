@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2019 Daniel Dietsch (dietsch@informatik.uni-freiburg.de)
- * Copyright (C) 2019 University of Freiburg
+ * Copyright (C) 2026 Frank Schüssele (schuessf@informatik.uni-freiburg.de)
+ * Copyright (C) 2026 University of Freiburg
  *
  * This file is part of the ULTIMATE TraceAbstraction plug-in.
  *
@@ -40,29 +40,24 @@ import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracechec
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracecheck.TraceCheckSpWp;
 
 /**
- * Creates external instance of CVC 4 using {@link TraceCheckSpWp}.
+ * Creates external instance of bitwuzla using {@link TraceCheckSpWp}.
  *
- * @author Daniel Dietsch (dietsch@informatik.uni-freiburg.de)
+ * @author Frank Schüssele (schuessf@informatik.uni-freiburg.de)
  *
  */
-public class IpTcStrategyModuleCvc4<LETTER extends IIcfgTransition<?>> extends IpTcStrategyModuleSpWp<LETTER> {
-	private final long mTimeoutInMillis;
-
-	public IpTcStrategyModuleCvc4(final TaskIdentifier taskIdentifier, final IUltimateServiceProvider services,
-			final TaCheckAndRefinementPreferences<LETTER> prefs, final Counterexample<LETTER> counterexample,
+public class IpTcStrategyModuleBitwuzla<LETTER extends IIcfgTransition<?>> extends IpTcStrategyModuleSpWp<LETTER> {
+	public IpTcStrategyModuleBitwuzla(final TaskIdentifier taskIdentifier, final IUltimateServiceProvider services,
+			final TaCheckAndRefinementPreferences<LETTER> prefs, final Counterexample<LETTER> counterExample,
 			final IPredicate precondition, final IPredicate postcondition,
 			final AssertionOrderModulation<LETTER> assertionOrderModulation, final IPredicateUnifier predicateUnifier,
-			final PredicateFactory predicateFactory, final long timeoutInMillis,
-			final InterpolationTechnique interpolationTechnique) {
-		super(taskIdentifier, services, prefs, counterexample, precondition, postcondition, assertionOrderModulation,
+			final PredicateFactory predicateFactory, final InterpolationTechnique interpolationTechnique) {
+		super(taskIdentifier, services, prefs, counterExample, precondition, postcondition, assertionOrderModulation,
 				predicateUnifier, predicateFactory, interpolationTechnique);
-		mTimeoutInMillis = timeoutInMillis;
 	}
 
 	@Override
 	protected SolverSettings getSolverSettings() {
-		final long timeout = computeTimeout(mTimeoutInMillis);
-		return mPrefs.constructSolverSettings(mTaskIdentifier).setUseExternalSolver(ExternalSolver.CVC4, timeout)
+		return mPrefs.constructSolverSettings(mTaskIdentifier).setUseExternalSolver(ExternalSolver.BITWUZLA)
 				.setSolverMode(SolverMode.External_ModelsAndUnsatCoreMode);
 	}
 }
