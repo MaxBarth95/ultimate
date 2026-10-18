@@ -88,7 +88,7 @@ public class IcfgInterpreter implements IEnterCallRegistrar {
 		logCallGraphComputed();
 		mLoiPredStorage = new MapBasedStorage(logger);
 		mEnterCallWorklist = new PriorityWorklist<>(mCallGraph.relevantProceduresTopsorted(), domain::join);
-		mProcResCache = new ProcedureResourceCache(stats, mCallGraph, icfg);
+		mProcResCache = new ProcedureResourceCache(stats, mCallGraph, icfg, timer);
 		enqueInitial();
 		mDagInterpreter = new DagInterpreter(logger, stats, timer, tools, domain, fluid, loopSumFactory.apply(this),
 				callSumFactory.apply(this));

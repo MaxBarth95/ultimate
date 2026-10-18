@@ -29,6 +29,7 @@ package de.uni_freiburg.informatik.ultimate.lib.sifa;
 import java.util.HashMap;
 import java.util.Map;
 
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfg;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
 import de.uni_freiburg.informatik.ultimate.lib.sifa.statistics.SifaStats;
@@ -39,9 +40,12 @@ public class ProcedureResourceCache {
 	private final CallGraph mCallGraph;
 	private final IIcfg<IcfgLocation> mIcfg;
 	private final Map<String, ProcedureResources> mProcResources = new HashMap<>();
+	private final IProgressAwareTimer mTimer;
 
-	public ProcedureResourceCache(final SifaStats stats, final CallGraph callGraph, final IIcfg<IcfgLocation> icfg) {
+	public ProcedureResourceCache(final SifaStats stats, final CallGraph callGraph, final IIcfg<IcfgLocation> icfg,
+			final IProgressAwareTimer timer) {
 		mStats = stats;
+		mTimer = timer;
 		mCallGraph = callGraph;
 		mIcfg = icfg;
 	}
@@ -52,6 +56,6 @@ public class ProcedureResourceCache {
 
 	private ProcedureResources computeProcResources(final String procedure) {
 		return new ProcedureResources(mStats, mIcfg, procedure, mCallGraph.locationsOfInterest(procedure),
-				mCallGraph.successorsOfInterest(procedure));
+				mCallGraph.successorsOfInterest(procedure), mTimer);
 	}
 }

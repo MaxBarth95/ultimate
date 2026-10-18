@@ -119,7 +119,23 @@ public final class PathProgram extends BasePayloadContainer implements IIcfg<Icf
 			final IIcfg<?> originalIcfg, final Set<? extends IIcfgTransition<?>> allowedTransitions,
 			final Set<IcfgLocation> additionalInitialLocations, final Predicate<IcfgLocation> loopLocationFilter) {
 		return new PathProgramConstructor(originalIcfg, allowedTransitions, identifier, additionalInitialLocations,
-				loopLocationFilter).getResult();
+				loopLocationFilter, null).getResult();
+	}
+
+	/**
+	 * Like {@link #constructPathProgram(String, IIcfg, Set, Set, Predicate)}, but the path program gets the given
+	 * {@link CfgSmtToolkit} instead of one derived from the original {@link IIcfg}. Use it when the transitions belong
+	 * to another script than the original {@link IIcfg}, e.g. copies of its transitions in a script of their own.
+	 *
+	 * @param cfgSmtToolkit
+	 *            the toolkit of the path program, whose script and variables the transitions belong to
+	 */
+	public static PathProgramConstructionResult constructPathProgram(final String identifier,
+			final IIcfg<?> originalIcfg, final Set<? extends IIcfgTransition<?>> allowedTransitions,
+			final Set<IcfgLocation> additionalInitialLocations, final Predicate<IcfgLocation> loopLocationFilter,
+			final CfgSmtToolkit cfgSmtToolkit) {
+		return new PathProgramConstructor(originalIcfg, allowedTransitions, identifier, additionalInitialLocations,
+				loopLocationFilter, Objects.requireNonNull(cfgSmtToolkit)).getResult();
 	}
 
 	@Override
@@ -230,7 +246,8 @@ public final class PathProgram extends BasePayloadContainer implements IIcfg<Icf
 
 		private PathProgramConstructor(final IIcfg<?> originalIcfg,
 				final Set<? extends IIcfgTransition<?>> allowedTransitions, final String newIdentifier,
-				final Set<IcfgLocation> additionalInitialLocations, final Predicate<IcfgLocation> loopLocationFilter) {
+				final Set<IcfgLocation> additionalInitialLocations, final Predicate<IcfgLocation> loopLocationFilter,
+				final CfgSmtToolkit cfgSmtToolkit) {
 			final String nonNullIdentifier = Objects.requireNonNull(newIdentifier);
 			final Set<? extends IIcfgTransition<?>> nonNullTransitions = Objects.requireNonNull(allowedTransitions);
 			mOriginalIcfg = Objects.requireNonNull(originalIcfg);
@@ -261,18 +278,21 @@ public final class PathProgram extends BasePayloadContainer implements IIcfg<Icf
 			nonNullTransitions.stream().filter(onlyReturn.negate()).forEach(this::createPathProgramTransition);
 			nonNullTransitions.stream().filter(onlyReturn).forEach(this::createPathProgramTransition);
 
-			final CfgSmtToolkit oldCfgSmtToolkit = originalIcfg.getCfgSmtToolkit();
-			final ModifiableGlobalsTable newModGlobTable =
-					constructModifiableGlobalsTable(oldCfgSmtToolkit.getModifiableGlobalsTable());
-
 			if (IcfgUtils.isConcurrent(originalIcfg)) {
 				throw new UnsupportedOperationException(
 						"Construction of path programs is not yet supported for concurrent programs");
 			}
-			final CfgSmtToolkit newCfgSmtToolkit =
-					new CfgSmtToolkit(newModGlobTable, oldCfgSmtToolkit.getManagedScript(), mSymbolTable, mProcedures,
-							oldCfgSmtToolkit.getInParams(), oldCfgSmtToolkit.getOutParams(),
-							oldCfgSmtToolkit.getIcfgEdgeFactory(), null, oldCfgSmtToolkit.getSmtFunctionsAndAxioms());
+			final CfgSmtToolkit newCfgSmtToolkit;
+			if (cfgSmtToolkit != null) {
+				newCfgSmtToolkit = cfgSmtToolkit;
+			} else {
+				final CfgSmtToolkit oldCfgSmtToolkit = originalIcfg.getCfgSmtToolkit();
+				final ModifiableGlobalsTable newModGlobTable =
+						constructModifiableGlobalsTable(oldCfgSmtToolkit.getModifiableGlobalsTable());
+				newCfgSmtToolkit = new CfgSmtToolkit(newModGlobTable, oldCfgSmtToolkit.getManagedScript(), mSymbolTable,
+						mProcedures, oldCfgSmtToolkit.getInParams(), oldCfgSmtToolkit.getOutParams(),
+						oldCfgSmtToolkit.getIcfgEdgeFactory(), null, oldCfgSmtToolkit.getSmtFunctionsAndAxioms());
+			}
 
 			final PathProgram pp = new PathProgram(nonNullIdentifier, newCfgSmtToolkit, mProgramPoints, mProcEntries,
 					mProcExits, mProcError, mInitialNodes, mLoopLocations, mLocationsOfInterest);

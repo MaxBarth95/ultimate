@@ -26,6 +26,8 @@
  */
 package de.uni_freiburg.informatik.ultimate.lib.sifa.regexdag;
 
+import de.uni_freiburg.informatik.ultimate.core.lib.exceptions.ToolchainCanceledException;
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.lib.pathexpressions.regex.Concatenation;
 import de.uni_freiburg.informatik.ultimate.lib.pathexpressions.regex.EmptySet;
 import de.uni_freiburg.informatik.ultimate.lib.pathexpressions.regex.Epsilon;
@@ -47,9 +49,26 @@ import de.uni_freiburg.informatik.ultimate.lib.pathexpressions.regex.Union;
  */
 public class RegexToDag<L> implements IRegexVisitor<L, RegexDagNode<L>, RegexDagNode<L>> {
 
+	/**
+	 * How many nodes are created between two checks of the timer.
+	 */
+	private static final int NODES_PER_TIMER_CHECK = 4096;
+
 	private RegexDag<L> mDag;
+	private final IProgressAwareTimer mTimer;
+	private int mNodesSinceTimerCheck;
 
 	public RegexToDag() {
+		this(null);
+	}
+
+	/**
+	 * @param timer
+	 *            stops the conversion, which can create many nodes, by a {@link ToolchainCanceledException}; null for
+	 *            no limit
+	 */
+	public RegexToDag(final IProgressAwareTimer timer) {
+		mTimer = timer;
 		resetDag();
 	}
 
@@ -124,6 +143,12 @@ public class RegexToDag<L> implements IRegexVisitor<L, RegexDagNode<L>, RegexDag
 	}
 
 	private RegexDagNode<L> appendAsNode(final IRegex<L> regex, final RegexDagNode<L> parent) {
+		if (mTimer != null && ++mNodesSinceTimerCheck >= NODES_PER_TIMER_CHECK) {
+			mNodesSinceTimerCheck = 0;
+			if (!mTimer.continueProcessing()) {
+				throw new ToolchainCanceledException(getClass());
+			}
+		}
 		final RegexDagNode<L> newSink = new RegexDagNode<>(regex);
 		parent.connectOutgoing(newSink);
 		return newSink;

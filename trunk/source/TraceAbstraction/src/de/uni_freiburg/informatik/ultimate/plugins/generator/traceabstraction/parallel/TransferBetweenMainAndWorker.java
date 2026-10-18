@@ -174,6 +174,15 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 		return workerCounterexample;
 	}
 
+	/**
+	 * Transfers a single letter, e.g. every letter of an automaton's alphabet. Cached like the letters of a run, so a
+	 * letter transferred twice gives the same copy.
+	 */
+	public LETTER transferLetter(final LETTER letter, final TransferMode mode) {
+		mMode = mode;
+		return transferEdge(letter);
+	}
+
 	// Caches every transferred Edge bidirectional
 	private LETTER transferEdge(final LETTER letter) {
 		LETTER transferredLetter = null;
@@ -232,8 +241,6 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 				(BoogieIcfgLocation) call.getTarget(), call.getCallStatement(), mLogger);
 		newCall.setTransitionFormula(transferTransFormulaWithMode(call.getTransformula()));
 		newCall.setPayload(call.getPayload()); // Payload is needed for for example Overapproximation Annotations
-		// Also reached directly as the corresponding call of a return, i.e. not through transferEdge.
-		newCall.copyProceduresFrom(call);
 		return newCall;
 	}
 
@@ -248,8 +255,10 @@ public class TransferBetweenMainAndWorker<LETTER, STATE> {
 	}
 
 	private Return getTransferReturn(final Return re) {
+		// The cached copy of the call, i.e. the call letter of the transferred automaton or run: a copy of its own would
+		// be a call nobody else knows, so a call and its return could not be matched (e.g. in a PathProgram).
 		final Return newReturn = new Return(re.getSerialNumber(), (BoogieIcfgLocation) re.getSource(),
-				(BoogieIcfgLocation) re.getTarget(), getTransferCall(re.getCorrespondingCall()), mLogger);
+				(BoogieIcfgLocation) re.getTarget(), (Call) transferEdge((LETTER) re.getCorrespondingCall()), mLogger);
 		newReturn.setTransitionFormula(transferTransFormulaWithMode(re.getTransformula()));
 		newReturn.setPayload(re.getPayload());
 		return newReturn;

@@ -88,6 +88,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.prefere
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult.WorkerType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.absint.AbsIntWorkerThread;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.sifa.SifaWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization.AutomataMinimizationTimeout;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.IInvariantSink;
@@ -139,10 +140,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private final int mNumTaWorkers;
 	private final int mNumKInductionWorkers;
 	private final boolean mUseAbsIntWorker;
+	private final boolean mUseSifaWorker;
 	private int mRunningThreads = 0;
 	// Workers that finished without a verdict. They are gone from the pool and will produce nothing more.
 	private int mRetiredWorkers = 0;
-	// Collects invariants from the AbsInt and TA workers for the k-induction workers. Null unless there is a
+	// Collects invariants from the AbsInt, SIFA and TA workers for the k-induction workers. Null unless there is a
 	// k-induction worker and someone to feed it; runs on mInvariantExec, outside the worker pool, since it never
 	// decides the program.
 	private InvariantSupplier<L, A> mInvariantSupplier;
@@ -209,7 +211,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		}
 		mNumKInductionWorkers = mPref.getNumKInductionWorkers();
 		mUseAbsIntWorker = mPref.useAbsIntWorker();
-		mThreadLimit = mNumTaWorkers + mNumKInductionWorkers + (mUseAbsIntWorker ? 1 : 0);
+		mUseSifaWorker = mPref.useSifaWorker();
+		mThreadLimit = mNumTaWorkers + mNumKInductionWorkers + (mUseAbsIntWorker ? 1 : 0) + (mUseSifaWorker ? 1 : 0);
 		if (mThreadLimit == 0) {
 			throw new AssertionError("At least one parallel CEGAR worker thread must be configured");
 		}
@@ -360,10 +363,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				updateAndPrintStatistics(true);
 				return true;
 			}
-			// K-induction and abstract interpretation prove the whole program safe at once, they have no subtrahend to
-			// refine with. The null automaton type is what distinguishes that sentinel from the refutation above.
+			// K-induction, abstract interpretation and SIFA prove the whole program safe at once, they have no subtrahend
+			// to refine with. The null automaton type is what distinguishes that sentinel from the refutation above.
 			if ((workerResult.mWorkerType.equals(WorkerType.KINDUCTION)
-					|| workerResult.mWorkerType.equals(WorkerType.ABSINT))
+					|| workerResult.mWorkerType.equals(WorkerType.ABSINT)
+					|| workerResult.mWorkerType.equals(WorkerType.SIFA))
 					&& (workerResult.getSubtrahend() == null) && (workerResult.getAutomatonType() == null)) {
 				mAbstraction = new NestedWordAutomaton(new AutomataLibraryServices(getServices()),
 						mAbstraction.getVpAlphabet(), mPredicateFactoryInterpolantAutomata);
@@ -422,6 +426,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.ABSINT));
 				id++;
 			}
+			// Likewise: its constructor transfers every letter and attaches the copies to the ICFG's locations.
+			if (mUseSifaWorker) {
+				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.SIFA));
+				id++;
+			}
 			if (mInvariantSupplier != null) {
 				mInvariantSupplier.setAbstraction(transferForInvariantSupplier(invariantTransfer));
 				mInvariantExec = Executors.newSingleThreadExecutor(workerThreadFactory("Invariant Supplier"));
@@ -460,16 +469,20 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		case INVARIANT:
 			// Builds the same loop tree as k-induction, so it is exposed to the same collision.
 			return "inv_";
+		case SIFA:
+			// Its strongest posts and quantifier elimination mint many auxiliary variables, too.
+			return "sifa" + id + "_";
 		default:
 			return "";
 		}
 	}
 
 	/**
-	 * Only k-induction consumes invariants, AbsInt and the TA workers produce them.
+	 * Only k-induction consumes invariants, AbsInt, SIFA and the TA workers produce them.
 	 */
 	private boolean needsInvariantSupplier() {
-		return mNumKInductionWorkers > 0 && (mUseAbsIntWorker || interpolantsFeedInvariantSupplier());
+		return mNumKInductionWorkers > 0
+				&& (mUseAbsIntWorker || mUseSifaWorker || interpolantsFeedInvariantSupplier());
 	}
 
 	private boolean interpolantsFeedInvariantSupplier() {
@@ -505,6 +518,18 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			return new AbsIntWorkerThread<>(mLogger, iterationServices, mAbstraction, mIcfg,
 					mCsToolkit, invariantSink(true), mPref.getAbsIntDomains(), mPref.getAbsIntDomainBudget(),
 					mPref.getAbsIntMemoryBudget(), mWorkerResultQueue, this::isShuttingDown);
+		}
+		if (workerType == WorkerType.SIFA) {
+			// One solver per domain; all are created now, on the main thread, as the main script's declarations are
+			// replayed onto them.
+			final AtomicInteger domain = new AtomicInteger();
+			return new SifaWorkerThread<>(mLogger, iterationServices, mAbstraction, mIcfg, invariantSink(true),
+					mPref.getSifaDomains(), mPref.getSifaDomainBudget(), mPref.getSifaMemoryBudget(),
+					() -> new TransferBetweenMainAndWorker<>(new AutomataLibraryServices(mServices), mLogger,
+							mCsToolkit.getManagedScript(), iterationServices,
+							getSolverSettings(workerType, "Sifa" + domain.incrementAndGet()), mCsToolkit,
+							freshVarPrefix(workerType, id)),
+					mWorkerResultQueue, this::isShuttingDown);
 		}
 
 		final TransferBetweenMainAndWorker<L, IPredicate> transferUtils = new TransferBetweenMainAndWorker<>(

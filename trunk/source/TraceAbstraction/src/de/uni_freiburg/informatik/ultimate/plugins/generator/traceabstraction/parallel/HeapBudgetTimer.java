@@ -30,12 +30,13 @@ package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.p
 import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 
 /**
- * A timer that also expires when the JVM uses more heap than a budget allows. It bounds a domain of the AbsInt worker
- * in memory the way the wrapped timer bounds it in time: everything that polls {@link #continueProcessing()} (the
- * fixpoint engine between posts, the nonrelational evaluators inside a post) stops once either budget is exceeded.
+ * A timer that also expires when the JVM uses more heap than a budget allows. It bounds a domain of the AbsInt or the
+ * SIFA worker in memory the way the wrapped timer bounds it in time: everything that polls
+ * {@link #continueProcessing()} (the fixpoint engine between posts, the nonrelational evaluators inside a post, SIFA's
+ * interpreters and domains) stops once either budget is exceeded.
  * <p>
  * By default the used heap of the whole JVM counts, garbage included, so the heap of other workers counts as well.
- * That is intended for the AbsInt worker: a domain that allocates faster than the collector frees makes the JVM grow
+ * That is intended for the AbsInt and the SIFA worker: a domain that allocates faster than the collector frees makes the JVM grow
  * its heap, which it does not return, and that is what exceeds the memory limit of the process.
  * <p>
  * With {@code confirmWithGc}, as the k-induction worker uses it, only the live heap counts for stopping: a used or

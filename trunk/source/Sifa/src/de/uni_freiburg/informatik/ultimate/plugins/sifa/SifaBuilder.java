@@ -28,6 +28,7 @@ package de.uni_freiburg.informatik.ultimate.plugins.sifa;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -69,6 +70,13 @@ import de.uni_freiburg.informatik.ultimate.plugins.sifa.preferences.SifaPreferen
  */
 public class SifaBuilder {
 
+	/**
+	 * The names of the domains {@link #construct(IIcfg, IProgressAwareTimer, Collection, String)} accepts.
+	 */
+	public static final Set<String> DOMAINS = Set.of(ExplicitValueDomain.class.getSimpleName(),
+			IntervalDomain.class.getSimpleName(), OctagonDomain.class.getSimpleName(), EqDomain.class.getSimpleName(),
+			CompoundDomain.class.getSimpleName());
+
 	private final IUltimateServiceProvider mServices;
 	private final ILogger mLogger;
 	private final IPreferenceProvider mPrefs;
@@ -85,9 +93,22 @@ public class SifaBuilder {
 
 	public SifaComponents construct(final IIcfg<IcfgLocation> icfg, final IProgressAwareTimer timer,
 			final Collection<IcfgLocation> locationsOfInterest) {
+		return construct(icfg, timer, locationsOfInterest, mPrefs.getString(SifaPreferences.LABEL_ABSTRACT_DOMAIN));
+	}
+
+	/**
+	 * Like {@link #construct(IIcfg, IProgressAwareTimer, Collection)}, but with the given domain instead of the one
+	 * from {@link SifaPreferences}. Everything else, e.g. the fluid or the sub-domains of a {@link CompoundDomain},
+	 * still comes from {@link SifaPreferences}.
+	 *
+	 * @param domainName
+	 *            one of {@link #DOMAINS}
+	 */
+	public SifaComponents construct(final IIcfg<IcfgLocation> icfg, final IProgressAwareTimer timer,
+			final Collection<IcfgLocation> locationsOfInterest, final String domainName) {
 		final SifaStats stats = new SifaStats();
 		final SymbolicTools tools = constructTools(stats, icfg);
-		final IDomain domain = constructStatsDomain(stats, tools, timer);
+		final IDomain domain = constructStatsDomain(stats, domainName, tools, timer);
 		final IFluid fluid = constructStatsFluid(stats);
 		final Function<IcfgInterpreter, Function<DagInterpreter, ILoopSummarizer>> loopSum =
 				constructLoopSummarizer(stats, timer, tools, domain, fluid);
@@ -103,13 +124,13 @@ public class SifaBuilder {
 				mPrefs.getEnum(SifaPreferences.LABEL_SIMPLIFICATION, SifaPreferences.CLASS_SIMPLIFICATION));
 	}
 
-	private IDomain constructStatsDomain(final SifaStats stats, final SymbolicTools tools,
+	private IDomain constructStatsDomain(final SifaStats stats, final String domainName, final SymbolicTools tools,
 			final IProgressAwareTimer timer) {
-		return new StatsWrapperDomain(stats, constructDomain(tools, timer));
+		return new StatsWrapperDomain(stats, constructDomain(domainName, tools, timer));
 	}
 
-	private IDomain constructDomain(final SymbolicTools tools, final IProgressAwareTimer timer) {
-		final String prefDomain = mPrefs.getString(SifaPreferences.LABEL_ABSTRACT_DOMAIN);
+	private IDomain constructDomain(final String prefDomain, final SymbolicTools tools,
+			final IProgressAwareTimer timer) {
 		if (CompoundDomain.class.getSimpleName().equals(prefDomain)) {
 			final List<IDomain> subdomains = SifaPreferences.SubdomainValidator
 					.subdomains(mPrefs.getString(SifaPreferences.LABEL_COMPOUNDDOM_SUBDOM))

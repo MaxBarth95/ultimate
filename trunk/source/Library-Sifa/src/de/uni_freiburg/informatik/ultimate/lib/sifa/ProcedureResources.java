@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Map;
 
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfg;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgCallTransition;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
@@ -67,7 +68,8 @@ public class ProcedureResources {
 	private final BackwardClosedOverlay<IIcfgTransition<IcfgLocation>> mDagOverlayPathToLOIsAndEnterCalls;
 
 	public ProcedureResources(final SifaStats stats, final IIcfg<IcfgLocation> icfg, final String procedure,
-			final Collection<IcfgLocation> locationsOfInterest, final Collection<String> enterCallsOfInterest) {
+			final Collection<IcfgLocation> locationsOfInterest, final Collection<String> enterCallsOfInterest,
+			final IProgressAwareTimer timer) {
 
 		// TODO split this function for readability
 
@@ -77,7 +79,7 @@ public class ProcedureResources {
 		final IcfgLocation entry = procedureGraph.getEntryNode();
 		final PathExpressionComputer<IcfgLocation, IIcfgTransition<IcfgLocation>> peComputer =
 				RegexStatUtils.createPEComputer(stats, procedureGraph);
-		final RegexToDag<IIcfgTransition<IcfgLocation>> regexToDag = RegexStatUtils.createRegexToDag(stats);
+		final RegexToDag<IIcfgTransition<IcfgLocation>> regexToDag = RegexStatUtils.createRegexToDag(stats, timer);
 
 		final Collection<RegexDagNode<IIcfgTransition<IcfgLocation>>> loiMarkers =
 				new ArrayList<>(locationsOfInterest.size());

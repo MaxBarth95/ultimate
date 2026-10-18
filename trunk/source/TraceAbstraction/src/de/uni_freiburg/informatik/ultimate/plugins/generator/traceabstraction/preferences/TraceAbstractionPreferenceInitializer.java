@@ -648,6 +648,34 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "exceeds it gives no result and the next one starts.";
 	private static final int DEF_ABSINT_MEMORY_BUDGET = 20;
 
+	public static final String LABEL_SIFA_WORKER = "Use SIFA worker in Parallel Trace Abstraction";
+	private static final String DESC_SIFA_WORKER =
+			"Runs symbolic interpretation with fluid abstractions (SIFA) on the whole program, one domain after the "
+					+ "other, and hands the invariants it finds at loop heads to the k-induction workers while they "
+					+ "run. Everything but the domain, e.g. the fluid, comes from the settings of Sifa.";
+	private static final boolean DEF_SIFA_WORKER = false;
+
+	public static final String LABEL_SIFA_DOMAINS = "Abstract domains of the SIFA worker";
+	private static final String DESC_SIFA_DOMAINS =
+			"Comma-separated SIFA domains, run in this order: ExplicitValueDomain, IntervalDomain, OctagonDomain, "
+					+ "EqDomain or CompoundDomain (with the sub-domains from the settings of Sifa). Their results are "
+					+ "trusted.";
+	private static final String DEF_SIFA_DOMAINS = "ExplicitValueDomain,IntervalDomain,OctagonDomain,EqDomain,CompoundDomain";
+
+	public static final String LABEL_SIFA_DOMAIN_BUDGET = "Time budget per domain of the SIFA worker (s)";
+	private static final String DESC_SIFA_DOMAIN_BUDGET =
+			"How long each domain of the SIFA worker may run. A domain that runs out gives no result and the next "
+					+ "one starts.";
+	private static final int DEF_SIFA_DOMAIN_BUDGET = 60;
+
+	public static final String LABEL_SIFA_MEMORY_BUDGET =
+			"Memory budget per domain of the SIFA worker (% of max heap)";
+	private static final String DESC_SIFA_MEMORY_BUDGET =
+			"How much of the JVM's maximum heap may be in use while a domain of the SIFA worker runs. The heap of "
+					+ "the whole JVM counts, including that of the other workers. A domain that exceeds it gives no "
+					+ "result and the next one starts.";
+	private static final int DEF_SIFA_MEMORY_BUDGET = 20;
+
 	public static final String LABEL_INTERPOLANT_INVARIANTS =
 			"Check interpolants of TA workers for invariants for k-induction";
 	private static final String DESC_INTERPOLANT_INVARIANTS =
@@ -1005,6 +1033,14 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 				new UltimatePreferenceItem<>(LABEL_ABSINT_MEMORY_BUDGET, DEF_ABSINT_MEMORY_BUDGET,
 						DESC_ABSINT_MEMORY_BUDGET, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(1, 100)),
+				new UltimatePreferenceItem<>(LABEL_SIFA_WORKER, DEF_SIFA_WORKER, DESC_SIFA_WORKER,
+						PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_SIFA_DOMAINS, DEF_SIFA_DOMAINS, DESC_SIFA_DOMAINS,
+						PreferenceType.String),
+				new UltimatePreferenceItem<>(LABEL_SIFA_DOMAIN_BUDGET, DEF_SIFA_DOMAIN_BUDGET, DESC_SIFA_DOMAIN_BUDGET,
+						PreferenceType.Integer, IUltimatePreferenceItemValidator.ONLY_POSITIVE),
+				new UltimatePreferenceItem<>(LABEL_SIFA_MEMORY_BUDGET, DEF_SIFA_MEMORY_BUDGET, DESC_SIFA_MEMORY_BUDGET,
+						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(1, 100)),
 				new UltimatePreferenceItem<>(LABEL_INTERPOLANT_INVARIANTS, DEF_INTERPOLANT_INVARIANTS,
 						DESC_INTERPOLANT_INVARIANTS, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_SEARCH_LOOP_BOUND, DEF_SEARCH_LOOP_BOUND, DESC_SEARCH_LOOP_BOUND,

@@ -120,6 +120,10 @@ public final class TAPreferences {
 	private final List<String> mAbsIntDomains;
 	private final int mAbsIntDomainBudget;
 	private final int mAbsIntMemoryBudget;
+	private final boolean mSifaWorker;
+	private final List<String> mSifaDomains;
+	private final int mSifaDomainBudget;
+	private final int mSifaMemoryBudget;
 	private final boolean mInterpolantInvariants;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
@@ -255,6 +259,11 @@ public final class TAPreferences {
 				.split(",")).map(String::trim).filter(domain -> !domain.isEmpty()).collect(Collectors.toList());
 		mAbsIntDomainBudget = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_DOMAIN_BUDGET);
 		mAbsIntMemoryBudget = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_ABSINT_MEMORY_BUDGET);
+		mSifaWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_SIFA_WORKER);
+		mSifaDomains = Arrays.stream(mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_SIFA_DOMAINS)
+				.split(",")).map(String::trim).filter(domain -> !domain.isEmpty()).collect(Collectors.toList());
+		mSifaDomainBudget = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_SIFA_DOMAIN_BUDGET);
+		mSifaMemoryBudget = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_SIFA_MEMORY_BUDGET);
 		mInterpolantInvariants =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INTERPOLANT_INVARIANTS);
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
@@ -770,6 +779,31 @@ public final class TAPreferences {
 	 */
 	public int getAbsIntMemoryBudget() {
 		return mAbsIntMemoryBudget;
+	}
+
+	public boolean useSifaWorker() {
+		return mSifaWorker;
+	}
+
+	/**
+	 * @return the names of the domains the SIFA worker runs, in order
+	 */
+	public List<String> getSifaDomains() {
+		return mSifaDomains;
+	}
+
+	/**
+	 * @return how many seconds each domain of the SIFA worker may run
+	 */
+	public int getSifaDomainBudget() {
+		return mSifaDomainBudget;
+	}
+
+	/**
+	 * @return how many percent of the JVM's maximum heap may be in use while a domain of the SIFA worker runs
+	 */
+	public int getSifaMemoryBudget() {
+		return mSifaMemoryBudget;
 	}
 
 	/**

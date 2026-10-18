@@ -26,6 +26,7 @@
  */
 package de.uni_freiburg.informatik.ultimate.lib.sifa.statistics;
 
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 import de.uni_freiburg.informatik.ultimate.lib.pathexpressions.ILabeledGraph;
 import de.uni_freiburg.informatik.ultimate.lib.pathexpressions.PathExpressionComputer;
 import de.uni_freiburg.informatik.ultimate.lib.pathexpressions.regex.IRegex;
@@ -69,11 +70,11 @@ public final class RegexStatUtils {
 		return result;
 	}
 
-	/** @see RegexToDag#RegexToDag() */
-	public static <L> RegexToDag<L> createRegexToDag(final SifaStats stats) {
+	/** @see RegexToDag#RegexToDag(IProgressAwareTimer) */
+	public static <L> RegexToDag<L> createRegexToDag(final SifaStats stats, final IProgressAwareTimer timer) {
 
 		stats.start(SifaStats.Key.REGEX_TO_DAG_TIME);
-		final RegexToDag<L> result = new RegexToDag<>();
+		final RegexToDag<L> result = new RegexToDag<>(timer);
 		stats.stop(SifaStats.Key.REGEX_TO_DAG_TIME);
 		return result;
 	}
