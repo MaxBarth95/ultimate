@@ -59,6 +59,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.Minimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.OrderOfErrorLocations;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.RefinementStrategy;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.ValueAnalysisSearch;
 import de.uni_freiburg.informatik.ultimate.util.ReflectionUtil.Reflected;
 
 public final class TAPreferences {
@@ -113,6 +114,12 @@ public final class TAPreferences {
 	private final int mProbationMinimum;
 	private final boolean mKInductionSolverRestart;
 	private final boolean mInterpolantInvariants;
+	private final boolean mValueAnalysisWorker;
+	private final ValueAnalysisSearch mValueAnalysisSearch;
+	private final int mValueAnalysisStateBudget;
+	private final int mValueAnalysisMaxChoices;
+	private final int mValueAnalysisMemoryBudget;
+	private final int mValueAnalysisTimeLimit;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
 	private final int mSearchLoopBound;
@@ -244,6 +251,16 @@ public final class TAPreferences {
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_SOLVER_RESTART);
 		mInterpolantInvariants =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INTERPOLANT_INVARIANTS);
+		mValueAnalysisWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_WORKER);
+		mValueAnalysisSearch = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SEARCH,
+				ValueAnalysisSearch.class);
+		mValueAnalysisStateBudget =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_STATE_BUDGET);
+		mValueAnalysisMaxChoices =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_MAX_CHOICES);
+		mValueAnalysisMemoryBudget =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_MEMORY_BUDGET);
+		mValueAnalysisTimeLimit = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_TIME_LIMIT);
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY);
 		mMinimizeAbstractionPerWorker =
@@ -738,6 +755,48 @@ public final class TAPreferences {
 	 */
 	public boolean submitInterpolantInvariants() {
 		return mInterpolantInvariants;
+	}
+
+	/**
+	 * @return whether the parallel CEGAR loop runs the value analysis worker, which can only find violations
+	 */
+	public boolean useValueAnalysisWorker() {
+		return mValueAnalysisWorker;
+	}
+
+	/**
+	 * @return how the value analysis worker explores the concrete states of the program
+	 */
+	public ValueAnalysisSearch getValueAnalysisSearch() {
+		return mValueAnalysisSearch;
+	}
+
+	/**
+	 * @return how many concrete states the value analysis worker explores at most
+	 */
+	public int getValueAnalysisStateBudget() {
+		return mValueAnalysisStateBudget;
+	}
+
+	/**
+	 * @return how many successors the value analysis worker computes at most for one step
+	 */
+	public int getValueAnalysisMaxChoices() {
+		return mValueAnalysisMaxChoices;
+	}
+
+	/**
+	 * @return how many percent of the JVM's maximum heap may be live while the value analysis worker runs
+	 */
+	public int getValueAnalysisMemoryBudget() {
+		return mValueAnalysisMemoryBudget;
+	}
+
+	/**
+	 * @return how many seconds the value analysis worker may run before it stops with the result UNKNOWN
+	 */
+	public int getValueAnalysisTimeLimit() {
+		return mValueAnalysisTimeLimit;
 	}
 
 	public boolean minimizeAbstractionPerWorker() {

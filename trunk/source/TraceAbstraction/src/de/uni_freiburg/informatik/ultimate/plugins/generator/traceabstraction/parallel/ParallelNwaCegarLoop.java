@@ -93,6 +93,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pa
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantSupplier;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.IInvariantSupplier;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.kinduction.KInductionWorkerThread;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.valueanalysis.ValueAnalysisWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.InterpolantAutomatonEnhancement;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.Minimization;
@@ -145,6 +146,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	// decides the program.
 	private InvariantSupplier<L, A> mInvariantSupplier;
 	private ExecutorService mInvariantExec;
+	// Runs the value analysis worker, outside the worker pool and the thread limit: it can only refute the program
+	// (or end with UNKNOWN), so it must not take a slot from the workers that decide it. Null unless enabled.
+	private ExecutorService mValueAnalysisExec;
 	// Set before the workers are shut down and their solvers destroyed: a query failing from then on is no crash.
 	private volatile boolean mShuttingDown;
 
@@ -240,6 +244,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			if (mInvariantExec != null) {
 				mInvariantExec.shutdownNow();
 			}
+			if (mValueAnalysisExec != null) {
+				mValueAnalysisExec.shutdownNow();
+			}
 		}
 	}
 
@@ -326,6 +333,24 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				// program correct
 				shutDownAndDestroy(mDestroyEverything);
 				throw new AssertionError("Worker Crashed!, Exiting CEGAR loop!");
+			}
+			// The value analysis worker reports either a confirmed violation, which it leaves to us to register, or
+			// UNKNOWN. It runs outside the thread limit and can never prove the program, so its UNKNOWN retires none
+			// of the workers that decide it: they go on.
+			if (workerResult.getWorkerType() == WorkerType.VALUE_ANALYSIS && workerResult.noVerdict()) {
+				mLogger.info("Main: %s ended with UNKNOWN, the other workers go on", workerResult.getWorkerType());
+				workerResult = mWorkerResultQueue.poll();
+				continue;
+			}
+			if (workerResult.getWorkerType() == WorkerType.VALUE_ANALYSIS) {
+				mLogger.info("Main: %s refuted the program", workerResult.getWorkerType());
+				// Keeps an UNSAFE that a TA worker already registered for the same location.
+				mResultBuilder.addResultForProgramExecution(Result.UNSAFE, workerResult.getProgramExecution(), null,
+						null);
+				mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
+				shutDownAndDestroy(mDestroyEverything);
+				updateAndPrintStatistics(true);
+				return true;
 			}
 			// A worker that ran to completion without deciding the program (the solver answered unknown). It has
 			// nothing to refine with, so the only thing to do is retire it and let the remaining workers finish.
@@ -425,6 +450,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				mExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.KINDUCTION));
 				id++;
 			}
+			if (mPref.useValueAnalysisWorker()) {
+				mValueAnalysisExec = Executors.newSingleThreadExecutor(workerThreadFactory("Value Analysis"));
+				mValueAnalysisExec.submit(setUpWorkerThread(iterationServices, id, WorkerType.VALUE_ANALYSIS));
+				id++;
+			}
 		} catch (final InterruptedException e) {
 			throw new AssertionError("Interrupted during worker setup " + e);
 		}
@@ -450,6 +480,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		case INVARIANT:
 			// Builds the same loop tree as k-induction, so it is exposed to the same collision.
 			return "inv_";
+		case VALUE_ANALYSIS:
+			// Mints few variables, but costs nothing and keeps it apart from the main thread for sure.
+			return "va_";
 		default:
 			return "";
 		}
@@ -532,6 +565,10 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
 					transferUtils, invariantSink(interpolantsFeedInvariantSupplier()));
+		case VALUE_ANALYSIS:
+			return new ValueAnalysisWorkerThread<>(mLogger, mPref, iterationServices, freshToolKit, predicateFactory,
+					taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata, this, mWorkerResultQueue,
+					transferUtils, mTaskIdentifier);
 		default:
 			throw new AssertionError("Unknown worker type " + workerType);
 		}
@@ -630,6 +667,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		mExec.shutdownNow();
 		if (mInvariantExec != null) {
 			mInvariantExec.shutdownNow();
+		}
+		if (mValueAnalysisExec != null) {
+			mValueAnalysisExec.shutdownNow();
 		}
 		final Set<String> destroyedStorables = getServices().getStorage().destroyMarker(marker);
 		if (!destroyedStorables.isEmpty()) {

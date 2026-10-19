@@ -27,13 +27,17 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel;
 
+import java.util.Objects;
+
 import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.IRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INwaOutgoingLetterAndTransitionProvider;
+import de.uni_freiburg.informatik.ultimate.core.model.translation.IProgramExecution;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicate;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateFactory;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
+import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.NwaCegarLoop.AutomatonType;
 
 public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> {
@@ -45,12 +49,14 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	PredicateFactory mPredicateFactory;
 	private final boolean mWorkerCrashed;
 	private final boolean mNoVerdict;
+	// Only set by violation(..), see there.
+	private IProgramExecution<L, Term> mProgramExecution;
 	WorkerType mWorkerType;
 
 	public enum WorkerType
 
 	{
-		TA, KINDUCTION, INVARIANT
+		TA, KINDUCTION, INVARIANT, VALUE_ANALYSIS
 	}
 
 	/**
@@ -85,6 +91,25 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
 			noVerdict(final WorkerType workerType) {
 		return new WorkerThreadResult<>(workerType, null, null, null, null, null, false, true);
+	}
+
+	/**
+	 * A worker that found a feasible violation and leaves registering it to the main thread. It carries the program
+	 * execution to register, nothing to refine with.
+	 */
+	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
+			violation(final WorkerType workerType, final IProgramExecution<L, Term> programExecution) {
+		final WorkerThreadResult<L, A> result =
+				new WorkerThreadResult<>(workerType, null, AutomatonType.ERROR, null, null, null, false, false);
+		result.mProgramExecution = Objects.requireNonNull(programExecution);
+		return result;
+	}
+
+	/**
+	 * @return the violation of a result made by {@link #violation(WorkerType, IProgramExecution)}, null otherwise
+	 */
+	public IProgramExecution<L, Term> getProgramExecution() {
+		return mProgramExecution;
 	}
 
 	public WorkerType getWorkerType() {
@@ -128,5 +153,6 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 		mMgdScript = null;
 		mCounterexample = null;
 		mPredicateFactory = null;
+		mProgramExecution = null;
 	}
 }
