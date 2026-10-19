@@ -51,6 +51,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.I
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicate;
 import de.uni_freiburg.informatik.ultimate.lib.sifa.IcfgInterpreter;
+import de.uni_freiburg.informatik.ultimate.lib.sifa.RecursiveProgramException;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils.SimplificationTechnique;
@@ -244,6 +245,10 @@ public class SifaWorkerThread<L extends IIcfgTransition<?>, A extends IAutomaton
 					continue;
 				}
 				mLogger.warn("SIFA: stopped during %s, %s", run.domain(), e.getMessage());
+				return WorkerThreadResult.noVerdict(WorkerType.SIFA);
+			} catch (final RecursiveProgramException e) {
+				// The call graph is the same for every domain, none of the others could do better.
+				mLogger.warn("SIFA: gave up, %s", e.getMessage());
 				return WorkerThreadResult.noVerdict(WorkerType.SIFA);
 			} catch (final UnsupportedOperationException e) {
 				mLogger.warn("SIFA: %s gave up, %s", run.domain(), e.getMessage());

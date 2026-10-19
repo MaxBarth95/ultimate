@@ -1,0 +1,43 @@
+/*
+ * Copyright (C) 2026 University of Freiburg
+ * Copyright (C) 2026 LMU Munich
+ * Copyright (C) 2026 Max Barth (Max.Barth@lmu.de)
+ *
+ * This file is part of the ULTIMATE Library-Sifa plug-in.
+ *
+ * The ULTIMATE Library-Sifa plug-in is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ULTIMATE Library-Sifa plug-in is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ULTIMATE Library-Sifa plug-in. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Additional permission under GNU GPL version 3 section 7:
+ * If you modify the ULTIMATE Library-Sifa plug-in, or any covered work, by linking
+ * or combining it with Eclipse RCP (or a modified version of Eclipse RCP),
+ * containing parts covered by the terms of the Eclipse Public License, the
+ * licensors of the ULTIMATE Library-Sifa plug-in grant you additional permission
+ * to convey the resulting work.
+ */
+package de.uni_freiburg.informatik.ultimate.lib.sifa;
+
+/**
+ * Thrown by {@link CallGraph} if the procedures that have to be interpreted call each other recursively, which SIFA does
+ * not support. An {@link IllegalArgumentException}, as before, so callers that do not distinguish it are unaffected.
+ *
+ * @author Max Barth (max.barth@lmu.de)
+ */
+public class RecursiveProgramException extends IllegalArgumentException {
+
+	private static final long serialVersionUID = 1L;
+
+	public RecursiveProgramException() {
+		super("Recursive programs are not supported.");
+	}
+}
