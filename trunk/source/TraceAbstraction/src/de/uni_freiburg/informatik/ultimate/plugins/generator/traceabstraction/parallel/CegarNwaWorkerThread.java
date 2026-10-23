@@ -131,6 +131,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	private final TransferBetweenMainAndWorker<L, IPredicate> mNwaCexTransferrer;
 
 	private final PathProgramCache<L> mProgramCache;
+	// the services of the counterexample check that is running, see run()
+	private TaskScopedServices mTaskServices;
 	// where the interpolants of every infeasible counterexample go, to be checked for invariants
 	private final IInvariantSink mInvariantSink;
 
@@ -203,50 +205,76 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	 * seen). Checks feasibility, interpolates, creates an Error or Interpolant automaton. Calculates the difference to
 	 * generalize the interpolant automaton and then puts a @WorkerThreadResult into the blocking queue for results.
 	 *
-	 * Terminates if the Thread is interrupted (not used atm) or the Executioner service triggers a shutdown.
+	 * Terminates if the Thread is interrupted (not used atm) or the Executioner service triggers a shutdown. If the
+	 * check of a counterexample throws, the worker tells the main thread with a crashed result and takes no more tasks.
 	 */
 	@Override
 	public void run() {
 		while (!Thread.currentThread().isInterrupted()) {
+			// What the task constructs, above all the solvers of its trace checks, is destroyed when it is done.
+			mTaskServices = new TaskScopedServices(mServices);
 			try {
 				mLogger.info("WorkerThread: " + Thread.currentThread() + " is Waiting for a Task");
 				mIteration += 1;
 				final WorkerThreadTask<L> task = mWorkerTaskQueue.take();
-				final IRun<L, ?> mainThreadCounterexample = task.getCounterexample();
-				mProgramCache.copyProgramCache(mMainThread.getCurrentProgramCache());
-				mCounterexample = mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mainThreadCounterexample,
-						TransferMode.MAIN2WORKER);
-				updateAbstractionIfSmaller();
-
-				// set the programCount to x-1, because we will report it again later
-				mProgramCache.setPathProgramCount(mCounterexample.getWord(), task.getPathProgramCount() - 1);
-				final List<L> trace = mCounterexample.getWord().asList();
-				mCurrentErrorLoc = mCounterexample.getSymbol(mCounterexample.getLength() - 2).getTarget();
-				final int traceHash = trace.hashCode();
-				mLogger.info("Starting Thread: " + Thread.currentThread().getId() + "# for Trace Check: " + traceHash);
-				Thread.currentThread().setName("Worker for " + traceHash);
-				try {
-					final var locations = getControlConfigurationsFromCounterexample(mCounterexample);
-					final Counterexample<L> counterexample = new Counterexample<>(mCounterexample.getWord(), locations);
-					final ITARefinementStrategy<L> strategy = setUpStrategy(counterexample);
-					final Pair<LBool, IProgramExecution<L, Term>> isCexResult = isCounterexampleFeasible(strategy);
-					if (isCexResult.getFirst() == LBool.UNSAT) {
-						submitInterpolants();
-					}
-
-					final AbstractCegarLoop.AutomatonType automatonType = processFeasibilityCheckResult(strategy,
-							isCexResult.getFirst(), isCexResult.getSecond(), mCurrentErrorLoc);
-					constructRefinementAutomaton(automatonType);
-					mThreadResult = refineAbstractionInternally();
-				} catch (AutomataLibraryException | ToolchainCanceledException | SMTLIBException e) {
-					throw new AssertionError("WorkerThread Failed: " + e);
-				}
-				mLogger.info("Done with Thread: " + Thread.currentThread().getId() + "#");
-				mBlockingQueueForResults.put(mThreadResult);
+				checkCounterexample(task);
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
+			} catch (final Throwable t) {
+				if (mMainThread.isShuttingDown()) {
+					// Another worker decided and the main thread destroyed our solver under a running query.
+					mLogger.info("WorkerThread: stopping, shut down during a trace check (" + t + ")");
+					return;
+				}
+				mLogger.error("WorkerThread failed: " + t);
+				for (final StackTraceElement element : t.getStackTrace()) {
+					mLogger.error("\tat " + element);
+				}
+				try {
+					mBlockingQueueForResults.put(WorkerThreadResult.crashed(WorkerType.TA, t));
+				} catch (final InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				return;
+			} finally {
+				mTaskServices.destroyAll(mLogger);
+				mTaskServices = null;
 			}
 		}
+	}
+
+	/**
+	 * Checks the counterexample of one task and puts the result into the queue for the main thread.
+	 */
+	private void checkCounterexample(final WorkerThreadTask<L> task)
+			throws AutomataLibraryException, InterruptedException {
+		final IRun<L, ?> mainThreadCounterexample = task.getCounterexample();
+		mProgramCache.copyProgramCache(mMainThread.getCurrentProgramCache());
+		mCounterexample = mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mainThreadCounterexample,
+				TransferMode.MAIN2WORKER);
+		updateAbstractionIfSmaller();
+
+		// set the programCount to x-1, because we will report it again later
+		mProgramCache.setPathProgramCount(mCounterexample.getWord(), task.getPathProgramCount() - 1);
+		final List<L> trace = mCounterexample.getWord().asList();
+		mCurrentErrorLoc = mCounterexample.getSymbol(mCounterexample.getLength() - 2).getTarget();
+		final int traceHash = trace.hashCode();
+		mLogger.info("Starting Thread: " + Thread.currentThread().getId() + "# for Trace Check: " + traceHash);
+		Thread.currentThread().setName("Worker for " + traceHash);
+		final var locations = getControlConfigurationsFromCounterexample(mCounterexample);
+		final Counterexample<L> counterexample = new Counterexample<>(mCounterexample.getWord(), locations);
+		final ITARefinementStrategy<L> strategy = setUpStrategy(counterexample);
+		final Pair<LBool, IProgramExecution<L, Term>> isCexResult = isCounterexampleFeasible(strategy);
+		if (isCexResult.getFirst() == LBool.UNSAT) {
+			submitInterpolants();
+		}
+
+		final AbstractCegarLoop.AutomatonType automatonType = processFeasibilityCheckResult(strategy,
+				isCexResult.getFirst(), isCexResult.getSecond(), mCurrentErrorLoc);
+		constructRefinementAutomaton(automatonType);
+		mThreadResult = refineAbstractionInternally();
+		mLogger.info("Done with Thread: " + Thread.currentThread().getId() + "#");
+		mBlockingQueueForResults.put(mThreadResult);
 	}
 
 	/**
@@ -431,7 +459,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	protected IUltimateServiceProvider getServices() {
-		return mServices;
+		return mTaskServices != null ? mTaskServices : mServices;
 	}
 
 	private WorkerThreadResult<L, A> refineAbstractionInternally() throws AutomataLibraryException {

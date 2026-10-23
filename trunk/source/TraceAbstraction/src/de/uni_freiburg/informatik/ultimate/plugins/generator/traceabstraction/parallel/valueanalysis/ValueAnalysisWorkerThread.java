@@ -60,6 +60,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.Pr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.HeapBudgetTimer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.ICegarNwaWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.ParallelNwaCegarLoop;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TaskScopedServices;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TransferBetweenMainAndWorker;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult;
@@ -261,15 +262,26 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 		mLogger.info("Value analysis: reached an error location with a run of %d letter(s), checking it",
 				run.getWord().length());
 		final Counterexample<L> cex = new Counterexample<>(run.getWord(), locations);
+		// The solvers of this trace check end with it, otherwise every checked run would leave a solver process.
+		final TaskScopedServices checkServices = new TaskScopedServices(mServices);
+		try {
+			return confirm(run, cex, checkServices);
+		} finally {
+			checkServices.destroyAll(mLogger);
+		}
+	}
+
+	private boolean confirm(final NestedRun<L, IPredicate> run, final Counterexample<L> cex,
+			final IUltimateServiceProvider checkServices) {
 		final StrategyFactory<L> strategyFactory = new StrategyFactory<>(mLogger, mPref, mTaCheckAndRefinementPrefs,
 				mCfgSmtToolkit, mPredicateFactory, mPredicateFactoryInterpolantAutomata,
 				mMainThread.mTransitionClazz, mProgramCache);
-		final ITARefinementStrategy<L> strategy = strategyFactory.constructStrategy(mServices, cex, mAbstraction,
+		final ITARefinementStrategy<L> strategy = strategyFactory.constructStrategy(checkServices, cex, mAbstraction,
 				new SubtaskIterationIdentifier(mTaskIdentifier, mTraceChecks), mPredicateFactoryInterpolantAutomata,
 				IPreconditionProvider.constructDefaultPreconditionProvider(),
 				IPostconditionProvider.constructDefaultPostconditionProvider(), mPref.getRefinementStrategy());
 		final IRefinementEngineResult<L, NestedWordAutomaton<L, IPredicate>> refinementResult =
-				new TraceAbstractionRefinementEngine<>(mServices, mLogger, strategy).getResult();
+				new TraceAbstractionRefinementEngine<>(checkServices, mLogger, strategy).getResult();
 
 		final LBool feasibility = refinementResult.getCounterexampleFeasibility();
 		if (feasibility != LBool.SAT) {

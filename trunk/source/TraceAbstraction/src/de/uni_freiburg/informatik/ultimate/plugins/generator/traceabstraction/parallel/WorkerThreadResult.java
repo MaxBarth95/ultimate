@@ -49,6 +49,8 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	PredicateFactory mPredicateFactory;
 	private final boolean mWorkerCrashed;
 	private final boolean mNoVerdict;
+	// Only set by crashed(..), see there.
+	private Throwable mCrashCause;
 	// Only set by violation(..), see there.
 	private IProgramExecution<L, Term> mProgramExecution;
 	WorkerType mWorkerType;
@@ -94,6 +96,21 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	}
 
 	/**
+	 * A worker that failed with an exception and can do nothing more. The main thread decides, by the worker type,
+	 * whether the run can go on without it.
+	 *
+	 * @param cause
+	 *            what the worker threw; the worker has already logged its stack trace
+	 */
+	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
+			crashed(final WorkerType workerType, final Throwable cause) {
+		final WorkerThreadResult<L, A> result =
+				new WorkerThreadResult<>(workerType, null, null, null, null, null, true, false);
+		result.mCrashCause = Objects.requireNonNull(cause);
+		return result;
+	}
+
+	/**
 	 * A worker that found a feasible violation and leaves registering it to the main thread. It carries the program
 	 * execution to register, nothing to refine with.
 	 */
@@ -118,6 +135,13 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 
 	public boolean workerCrashed() {
 		return mWorkerCrashed;
+	}
+
+	/**
+	 * @return what the worker of a result made by {@link #crashed(WorkerType, Throwable)} threw, null otherwise
+	 */
+	public Throwable getCrashCause() {
+		return mCrashCause;
 	}
 
 	/**

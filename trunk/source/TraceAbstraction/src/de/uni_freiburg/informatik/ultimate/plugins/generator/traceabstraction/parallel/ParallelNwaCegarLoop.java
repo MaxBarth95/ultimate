@@ -27,6 +27,8 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -45,6 +47,7 @@ import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryException;
 import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryServices;
@@ -57,6 +60,7 @@ import de.uni_freiburg.informatik.ultimate.automata.nestedword.INwaOutgoingLette
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWord;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWordAutomaton;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.VpAlphabet;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Accepts;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Difference;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.IsEmpty;
@@ -79,11 +83,16 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateFactory;
 import de.uni_freiburg.informatik.ultimate.lib.proofs.floydhoare.NwaHoareProofProducer;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtSortUtils;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SubTermFinder;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder.SolverMode;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.solverbuilder.SolverBuilder.SolverSettings;
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracecheck.InterpolationTechnique;
+import de.uni_freiburg.informatik.ultimate.logic.ConstantTerm;
 import de.uni_freiburg.informatik.ultimate.logic.Logics;
+import de.uni_freiburg.informatik.ultimate.logic.Rational;
+import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder.preferences.IcfgPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult.WorkerType;
@@ -97,6 +106,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pa
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.InterpolantAutomatonEnhancement;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.Minimization;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.RefinementStrategy;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.RelevanceAnalysisMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.PredicateFactoryResultChecking;
@@ -115,6 +125,12 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 
 	/** z3's value of :timeout for no timeout at all. */
 	private static final long Z3_NO_TIMEOUT = 4294967295L;
+
+	/**
+	 * The solver of k-induction and the invariant supplier for a program that bitwuzla rejects although it is
+	 * configured, see {@link #externalSolverCommand(WorkerType)}. The command of the SV-COMP integer settings.
+	 */
+	private static final String Z3_FOR_INT_AND_REAL = "z3 SMTLIB2_COMPLIANT=true -memory:2024 -smt2 -in";
 
 	/**
 	 * Stack size of the worker threads. The JVM default is far too small for the recursive parts of the workers, e.g.
@@ -144,6 +160,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private int mRunningThreads = 0;
 	// Workers that finished without a verdict. They are gone from the pool and will produce nothing more.
 	private int mRetiredWorkers = 0;
+	// TA workers that crashed. They take no more counterexamples.
+	private int mCrashedTaWorkers = 0;
 	// Collects invariants from the TA workers for the k-induction workers. Null unless there is a
 	// k-induction worker and someone to feed it; runs on mInvariantExec, outside the worker pool, since it never
 	// decides the program.
@@ -152,6 +170,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	// Runs the value analysis worker, outside the worker pool and the thread limit: it can only refute the program
 	// (or end with UNKNOWN), so it must not take a slot from the workers that decide it. Null unless enabled.
 	private ExecutorService mValueAnalysisExec;
+	// Computed on first use, see bitwuzlaRejectsProgram()
+	private Boolean mBitwuzlaRejectsProgram;
+	private boolean mLoggedZ3InsteadOfBitwuzla;
 	// Set before the workers are shut down and their solvers destroyed: a query failing from then on is no crash.
 	private volatile boolean mShuttingDown;
 
@@ -299,7 +320,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			 * In the first iteration we search via BFS, then we use IsEmptyParallel
 			 */
 			boolean firstIteration = true;
-			while (mRunningThreads < mThreadLimit && !didntFindCexLastIteration) {
+			while (!noTaWorkerLeft() && mRunningThreads < mThreadLimit && !didntFindCexLastIteration) {
 				assert mRunningThreads >= 0;
 				mCounterexample = searchForErrorTrace(!firstIteration);
 				if (mCounterexample == null) {
@@ -330,12 +351,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 
 			mLogger.info("Main: A Thread is Done");
 			if (workerResult.workerCrashed()) {
-				mLogger.error("Main: Worker Crashed! exiting CEGAR loop.");
-				// TODO we can try to recover, and restart the worker.
-				// It might be that just this counterexample crashes our worker and we can still prove the
-				// program correct
-				shutDownAndDestroy(mDestroyEverything);
-				throw new AssertionError("Worker Crashed!, Exiting CEGAR loop!");
+				if (handleCrashedWorker(workerResult)) {
+					return true;
+				}
+				workerResult = mWorkerResultQueue.poll();
+				continue;
 			}
 			// The value analysis worker reports either a confirmed violation, which it leaves to us to register, or
 			// UNKNOWN. It runs outside the thread limit and can never prove the program, so its UNKNOWN retires none
@@ -420,6 +440,70 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		mLogger.info("No more worker results to process");
 		assert workerResult == null;
 		return false;
+	}
+
+	/**
+	 * A worker failed with an exception. That is no reason to give up the program: as long as a worker that can
+	 * decide it is left, the run goes on without the failed one, which has already logged its stack trace.
+	 * <ul>
+	 * <li>The invariant supplier only feeds k-induction, which goes on with the invariants it already has.</li>
+	 * <li>k-induction retires like a worker without a verdict.</li>
+	 * <li>A TA worker: in the integer translation (any strategy but FOX), the run ends with UNKNOWN at once, so that
+	 * Ultimate.py still has the time for the bit-precise run, which may succeed where the integer run failed. In the
+	 * bit-precise run nothing comes after us, so the worker retires and k-induction and the value analysis may still
+	 * decide the program.</li>
+	 * </ul>
+	 *
+	 * @return true if the CEGAR loop has to terminate
+	 */
+	private boolean handleCrashedWorker(final WorkerThreadResult<L, A> workerResult) {
+		final WorkerType workerType = workerResult.getWorkerType();
+		final Throwable cause = workerResult.getCrashCause();
+		switch (workerType) {
+		case INVARIANT:
+			mLogger.warn("Main: the invariant supplier crashed (%s), k-induction goes on with the invariants it has",
+					cause);
+			return false;
+		case VALUE_ANALYSIS:
+			mLogger.warn("Main: %s crashed (%s), the other workers go on", workerType, cause);
+			return false;
+		case TA:
+			// The counterexample it was checking never comes back.
+			mRunningThreads -= 1;
+			mCrashedTaWorkers += 1;
+			if (mPref.getRefinementStrategy() != RefinementStrategy.FOX) {
+				mLogger.warn("Main: %s crashed (%s), reporting UNKNOWN to leave the time to the bit-precise analysis",
+						workerType, cause);
+				return reportUnknownAndTerminate();
+			}
+			break;
+		case KINDUCTION:
+			break;
+		default:
+			throw new AssertionError("Unknown worker type " + workerType);
+		}
+		mRetiredWorkers += 1;
+		mLogger.warn("Main: %s crashed (%s), it retires without a verdict (%d of %d worker(s) retired)", workerType,
+				cause, mRetiredWorkers, mThreadLimit);
+		if (mRetiredWorkers >= mThreadLimit) {
+			mLogger.warn("Main: every worker finished without a verdict, reporting UNKNOWN");
+			return reportUnknownAndTerminate();
+		}
+		return false;
+	}
+
+	private boolean reportUnknownAndTerminate() {
+		mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
+		shutDownAndDestroy(mDestroyEverything);
+		updateAndPrintStatistics(true);
+		return true;
+	}
+
+	/**
+	 * @return true if no TA worker is left to check counterexamples, because all of them crashed
+	 */
+	private boolean noTaWorkerLeft() {
+		return mCrashedTaWorkers >= mNumTaWorkers;
 	}
 
 	private void setUpWorkerThreads() {
@@ -647,8 +731,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private WorkerThreadResult<L, A> getWorkerResult(final boolean didntFindCexLastIteration) {
 		WorkerThreadResult<L, A> doneFuture = null;
 
-		if (mRunningThreads >= mThreadLimit || didntFindCexLastIteration) {
-			assert mRunningThreads > 0;
+		// Without a TA worker, only k-induction and the value analysis can still answer, and nothing else is to do.
+		if (noTaWorkerLeft() || mRunningThreads >= mThreadLimit || didntFindCexLastIteration) {
+			assert mRunningThreads > 0 || noTaWorkerLeft();
 			mLogger.info("All threads busy, going to sleep.");
 			// No busy waiting via BlockingQueue
 			final long time = System.nanoTime() / 1000000000;
@@ -984,8 +1069,53 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	private static boolean isZ3(final String command) {
+		return "z3".equals(executableName(command));
+	}
+
+	private static String executableName(final String command) {
 		final String executable = command.split("\\s+", 2)[0];
-		return "z3".equals(executable.substring(executable.lastIndexOf('/') + 1));
+		return executable.substring(executable.lastIndexOf('/') + 1);
+	}
+
+	/**
+	 * @return whether some letter of the program has a term that bitwuzla rejects, see {@link #bitwuzlaRejects(Term)}
+	 */
+	private boolean bitwuzlaRejectsProgram() {
+		if (mBitwuzlaRejectsProgram == null) {
+			final VpAlphabet<L> alphabet = mAbstraction.getVpAlphabet();
+			mBitwuzlaRejectsProgram = Stream
+					.of(alphabet.getInternalAlphabet(), alphabet.getCallAlphabet(), alphabet.getReturnAlphabet())
+					.flatMap(Set::stream).map(letter -> letter.getTransformula().getFormula())
+					.anyMatch(formula -> !SubTermFinder.find(formula, ParallelNwaCegarLoop::bitwuzlaRejects, true)
+							.isEmpty());
+		}
+		return mBitwuzlaRejectsProgram;
+	}
+
+	/**
+	 * Bitwuzla knows neither Int nor Real. It only reads a non-negative number as the argument of {@code to_fp},
+	 * which is how the C translation writes a floating-point constant, even in a bit-precise program. A negative one
+	 * is printed as {@code ((_ to_fp 11 53) rm (- 1.0))}, and bitwuzla answers "undefined symbol '-'".
+	 */
+	private static boolean bitwuzlaRejects(final Term term) {
+		final String sort = term.getSort().getName();
+		if (!SmtSortUtils.INT_SORT.equals(sort) && !SmtSortUtils.REAL_SORT.equals(sort)) {
+			return false;
+		}
+		return !(term instanceof final ConstantTerm constant) || isNegative(constant.getValue());
+	}
+
+	private static boolean isNegative(final Object value) {
+		if (value instanceof final BigInteger integer) {
+			return integer.signum() < 0;
+		}
+		if (value instanceof final BigDecimal decimal) {
+			return decimal.signum() < 0;
+		}
+		if (value instanceof final Rational rational) {
+			return rational.isNegative();
+		}
+		return true;
 	}
 
 	/**
@@ -993,7 +1123,19 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	 * and this is a k-induction worker.
 	 */
 	private String externalSolverCommand(final WorkerType workerType) {
-		final String command = mPref.commandExternalSolver().trim();
+		String command = mPref.commandExternalSolver().trim();
+		// k-induction and the invariant supplier ask every query on this one solver. Unlike a trace check, which falls
+		// back to the next solver of its strategy, they crash on the first query bitwuzla rejects.
+		if ((workerType == WorkerType.KINDUCTION || workerType == WorkerType.INVARIANT)
+				&& "bitwuzla".equals(executableName(command)) && bitwuzlaRejectsProgram()) {
+			if (!mLoggedZ3InsteadOfBitwuzla) {
+				mLogger.info("The program has Int or Real terms that bitwuzla does not support, e.g. a negative "
+						+ "floating-point constant; k-induction and the invariant supplier use \"%s\" instead of "
+						+ "\"%s\"", Z3_FOR_INT_AND_REAL, command);
+				mLoggedZ3InsteadOfBitwuzla = true;
+			}
+			command = Z3_FOR_INT_AND_REAL;
+		}
 		final int timeout = mPref.getKInductionSolverTimeout();
 		if (workerType != WorkerType.KINDUCTION || timeout < 0) {
 			// Inherit whatever the configured command says.
