@@ -520,7 +520,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 						freshVarPrefix(WorkerType.INVARIANT, id));
 				mInvariantSupplier = new InvariantSupplier<>(mLogger, iterationServices,
 						invariantTransfer.getWorkerCfgSmtToolKit(), mWorkerResultQueue, this::isShuttingDown,
-						probationSettings());
+						probationSettings(),
+						mPref.invariantSampling() ? new InvariantSupplier.Sampling(mPref.getInvariantSamplingDepth(),
+								mPref.getInvariantSamplesPerDepth()) : null);
 			} else {
 				invariantTransfer = null;
 			}
@@ -576,10 +578,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	/**
-	 * Only k-induction consumes invariants, the TA workers produce them.
+	 * The TA workers produce invariants; k-induction consumes them, and so do the TA workers themselves if they assume
+	 * them.
 	 */
 	private boolean needsInvariantSupplier() {
-		return mNumKInductionWorkers > 0 && interpolantsFeedInvariantSupplier();
+		return (mNumKInductionWorkers > 0 || mPref.taUsesInvariants()) && interpolantsFeedInvariantSupplier();
 	}
 
 	private boolean interpolantsFeedInvariantSupplier() {
@@ -651,11 +654,16 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			return new CegarNwaWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
 					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
-					transferUtils, invariantSink(interpolantsFeedInvariantSupplier()));
+					transferUtils, invariantSink(interpolantsFeedInvariantSupplier()),
+					mInvariantSupplier == null || !mPref.taUsesInvariants() ? null
+							: mInvariantSupplier.subscribeForTa(freshToolKit.getManagedScript()));
 		case VALUE_ANALYSIS:
 			return new ValueAnalysisWorkerThread<>(mLogger, mPref, iterationServices, freshToolKit, predicateFactory,
 					taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata, this, mWorkerResultQueue,
-					transferUtils, mTaskIdentifier);
+					transferUtils, mTaskIdentifier,
+					mInvariantSupplier != null && mPref.invariantSampling() && mPref.valueAnalysisSamples()
+							? mInvariantSupplier.sink()
+							: null);
 		default:
 			throw new AssertionError("Unknown worker type " + workerType);
 		}

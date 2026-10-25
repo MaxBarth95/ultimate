@@ -28,6 +28,7 @@
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.valueanalysis;
 
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
@@ -56,10 +57,12 @@ public interface IConcreteSearchStrategy<L extends IIcfgTransition<?>> {
 	 *            polled regularly; the search stops as soon as it answers false
 	 * @param confirm
 	 *            asked for every error configuration found; true ends the search with it
+	 * @param observer
+	 *            told about every configuration the search visits, once
 	 * @return the confirmed error configuration, or null if the search ended without one
 	 */
 	ConcreteConfiguration<L> search(ConcreteNwaSemantics<L> semantics, int stateBudget, BooleanSupplier keepGoing,
-			Predicate<ConcreteConfiguration<L>> confirm);
+			Predicate<ConcreteConfiguration<L>> confirm, Consumer<ConcreteConfiguration<L>> observer);
 
 	/**
 	 * @return a one-line summary of the last search, for the log

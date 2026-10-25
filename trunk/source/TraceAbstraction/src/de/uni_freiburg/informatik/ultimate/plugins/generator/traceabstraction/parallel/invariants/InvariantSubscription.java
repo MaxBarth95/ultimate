@@ -27,10 +27,12 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants;
 
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.BooleanSupplier;
@@ -206,11 +208,33 @@ public final class InvariantSubscription implements IInvariantSupplier<CallNode<
 					"this subscription delivers terms of " + mTarget + ", but they were asked for " + targetScript);
 		}
 		// A location invariant holds in every calling context, hence for every call node of the location.
-		final Term invariant = mInvariants.get(InvariantSupplier.locationOf(loopHead.getState()));
+		return getInvariantAt(InvariantSupplier.locationOf(loopHead.getState()));
+	}
+
+	/**
+	 * @return the latest invariant of {@code location} taken by {@link #update()}, as a term of the consumer's script;
+	 *         an unchanged invariant is always the very same object
+	 */
+	public Optional<Term> getInvariantAt(final IcfgLocation location) {
+		final Term invariant = mInvariants.get(location);
 		if (invariant == null) {
 			return Optional.empty();
 		}
 		return Optional.of(mTransferred.computeIfAbsent(invariant, this::transfer));
+	}
+
+	/**
+	 * @return the locations that have an invariant
+	 */
+	public Set<IcfgLocation> getLocations() {
+		return Collections.unmodifiableSet(mInvariants.keySet());
+	}
+
+	/**
+	 * @return the version of the published invariants taken by the last {@link #update()}
+	 */
+	public int takenVersion() {
+		return mTakenVersion;
 	}
 
 	private Term transfer(final Term invariant) {

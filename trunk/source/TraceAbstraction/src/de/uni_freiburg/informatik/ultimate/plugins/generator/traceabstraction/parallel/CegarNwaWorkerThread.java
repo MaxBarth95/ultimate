@@ -27,7 +27,10 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel;
 
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.stream.Collectors;
 
@@ -39,6 +42,7 @@ import de.uni_freiburg.informatik.ultimate.automata.IRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INwaOutgoingLetterAndTransitionProvider;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedRun;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWord;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Difference;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.PowersetDeterminizer;
@@ -66,6 +70,11 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.taskidentifier.SubtaskIterationIdentifier;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.tracehandling.IRefinementEngineResult;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.tracehandling.ITraceCheckStrategyModule;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.TransFormula;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateTransformer;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.TermDomainOperationProvider;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils.SimplificationTechnique;
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.Counterexample;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.interpolant.QualifiedTracePredicates;
@@ -82,7 +91,10 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pa
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.errorabstraction.ErrorGeneralizationEngine;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.AbstractInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.IInvariantSink;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantAssumingHoareTripleChecker;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.InterpolantSequence;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantSnapshot;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantSubscription;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.DeterministicInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.NondeterministicInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
@@ -135,6 +147,12 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	private TaskScopedServices mTaskServices;
 	// where the interpolants of every infeasible counterexample go, to be checked for invariants
 	private final IInvariantSink mInvariantSink;
+	// the proven loop invariants of the invariant supplier, or null if the worker does not assume them
+	private final InvariantSubscription mInvariants;
+	// invariant term -> its predicate in this worker's script, since an unchanged invariant is the very same term
+	private final Map<Term, IPredicate> mInvariantPredicates = new HashMap<>();
+	// the invariants taken for the counterexample being checked
+	private InvariantSnapshot mInvariantSnapshot = InvariantSnapshot.empty();
 
 	/**
 	 * CegarNwaWorkerThread is a runnable that will be executed by an executor service. It takes counterexamples from
@@ -160,8 +178,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			final ParallelNwaCegarLoop<L, A> mainThread,
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
 			final BlockingQueue<WorkerThreadTask<L>> workerTaskQueue,
-			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils, final IInvariantSink invariantSink)
-			throws InterruptedException {
+			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils, final IInvariantSink invariantSink,
+			final InvariantSubscription invariants) throws InterruptedException {
 
 		mLogger = logger;
 		mPref = pref;
@@ -186,6 +204,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		mAbstraction = (INestedWordAutomaton<L, IPredicate>) getAbstraction();
 		mProgramCache = new PathProgramCache<>(mLogger);
 		mInvariantSink = invariantSink;
+		mInvariants = invariants;
 
 		final Thread.UncaughtExceptionHandler exhandler = (th, ex) -> {
 			mThreadResult = new WorkerThreadResult<>(WorkerType.TA, null, null, null, mCounterexample, null, true);
@@ -253,6 +272,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		mCounterexample = mNwaCexTransferrer.transferRun((NestedRun<L, ?>) mainThreadCounterexample,
 				TransferMode.MAIN2WORKER);
 		updateAbstractionIfSmaller();
+		takeInvariants();
 
 		// set the programCount to x-1, because we will report it again later
 		mProgramCache.setPathProgramCount(mCounterexample.getWord(), task.getPathProgramCount() - 1);
@@ -295,6 +315,89 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			mInvariantSink.submit(new InterpolantSequence(mCfgSmtToolkit.getManagedScript(), inner, interpolants,
 					"TA " + sequence.getOrigin().getSimpleName()));
 		}
+	}
+
+	/**
+	 * Takes the proven loop invariants the supplier published since the last counterexample.
+	 */
+	private void takeInvariants() {
+		if (mInvariants == null) {
+			return;
+		}
+		final int before = mInvariantSnapshot.getVersion();
+		mInvariantSnapshot = InvariantSnapshot.take(mInvariants, mPredicateFactory, mCfgSmtToolkit.getSymbolTable(),
+				mInvariantPredicates, mLogger);
+		if (mInvariantSnapshot.getVersion() != before) {
+			mLogger.info("TA worker: invariants of %d loop head(s), version %d",
+					mInvariantSnapshot.getLocations().size(), mInvariantSnapshot.getVersion());
+		}
+	}
+
+	/**
+	 * Adds the invariant of every loop head on the counterexample as a state of the interpolant automaton. Both
+	 * enhancements take the states of the input automaton as their successor candidates, so an invariant becomes a
+	 * state the enhanced automaton can go to, e.g. a self-loop around the loop body. Sound whatever the predicates:
+	 * every transition is still checked by the Hoare triple checker.
+	 * <p>
+	 * An invariant at a loop head alone does not lead to {@code false}: the counterexamples of a loop that TA unwinds
+	 * are infeasible already at the loop exit, so the interpolant automaton has no state after the exit that carries
+	 * the invariant on to the error. So the strongest postconditions of the invariant of the last loop head on the
+	 * counterexample along the rest of it are added too, up to {@code false} if the invariant suffices.
+	 */
+	private void seedInvariantStates(final IPredicateUnifier predicateUnifier) {
+		final List<IcfgLocation> locations = getIcfgLocationsFromRun(mCounterexample);
+		int seeded = 0;
+		for (final IcfgLocation location : new LinkedHashSet<>(locations)) {
+			final IPredicate invariant = mInvariantSnapshot.at(location);
+			if (invariant != null && seedState(predicateUnifier.getOrConstructPredicate(invariant.getFormula()))) {
+				seeded++;
+			}
+		}
+		int lastHead = -1;
+		for (int i = 0; i < locations.size(); i++) {
+			if (mInvariantSnapshot.at(locations.get(i)) != null) {
+				lastHead = i;
+			}
+		}
+		int postconditions = 0;
+		boolean reachedFalse = false;
+		if (lastHead >= 0) {
+			final ManagedScript mgdScript = mCfgSmtToolkit.getManagedScript();
+			final PredicateTransformer<Term, IPredicate, TransFormula> transformer =
+					new PredicateTransformer<>(mgdScript, new TermDomainOperationProvider(getServices(), mgdScript));
+			final NestedWord<L> word = ((NestedRun<L, ?>) mCounterexample).getWord();
+			IPredicate current = predicateUnifier
+					.getOrConstructPredicate(mInvariantSnapshot.at(locations.get(lastHead)).getFormula());
+			// Only through internal letters: the postcondition of a call or return needs the calling context.
+			for (int i = lastHead; i < word.length() && word.isInternalPosition(i); i++) {
+				current = predicateUnifier.getOrConstructPredicate(
+						transformer.strongestPostcondition(current, word.getSymbol(i).getTransformula()));
+				if (SmtUtils.isFalseLiteral(current.getFormula())) {
+					reachedFalse = true;
+					break;
+				}
+				if (seedState(current)) {
+					postconditions++;
+				}
+			}
+		}
+		if (seeded > 0 || postconditions > 0) {
+			mLogger.info("TA worker: seeded the interpolant automaton with %d invariant state(s) and %d of their "
+					+ "postcondition(s)%s", seeded, postconditions,
+					reachedFalse ? ", which reach false at the end of the counterexample" : "");
+		}
+	}
+
+	/**
+	 * @return whether {@code state} was added to the interpolant automaton, i.e. it is neither trivial nor there
+	 */
+	private boolean seedState(final IPredicate state) {
+		if (SmtUtils.isTrueLiteral(state.getFormula()) || SmtUtils.isFalseLiteral(state.getFormula())
+				|| mInterpolAutomaton.contains(state)) {
+			return false;
+		}
+		mInterpolAutomaton.addState(false, false, state);
+		return true;
 	}
 
 	protected List<?> getControlConfigurationsFromCounterexample(final IRun<L, ?> run) {
@@ -466,7 +569,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		mStateFactoryForRefinement.setIteration(mIteration);
 		// mCegarLoopBenchmark.start(CegarLoopStatisticsDefinitions.AutomataDifference.toString());
 		final IPredicateUnifier predicateUnifier = mRefinementResult.getPredicateUnifier();
-		final IHoareTripleChecker htc = getHoareTripleChecker();
+		IHoareTripleChecker htc = getHoareTripleChecker();
 
 		final AutomatonType automatonType;
 		final boolean useErrorAutomaton;
@@ -489,6 +592,17 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			exploitSigmaStarConcatOfIa = !mComputeHoareAnnotation;
 			subtrahendBeforeEnhancement = mInterpolAutomaton;
 			enhanceMode = mPref.interpolantAutomatonEnhancement();
+			if (!mInvariantSnapshot.isEmpty() && mPref.taSeedInvariantStates()
+					&& enhanceMode != InterpolantAutomatonEnhancement.NONE) {
+				// The unifier may need the solver, which the Hoare triple checker may still hold.
+				htc.releaseLock();
+				seedInvariantStates(predicateUnifier);
+			}
+			if (!mInvariantSnapshot.isEmpty() && mPref.taAssumeInvariants()) {
+				// Only for Floyd-Hoare automata: an error automaton describes feasible traces, not infeasible ones.
+				htc = new InvariantAssumingHoareTripleChecker(htc, mCfgSmtToolkit, mPredicateFactory,
+						mInvariantSnapshot);
+			}
 			subtrahend = enhanceInterpolantAutomaton(enhanceMode, predicateUnifier, htc, subtrahendBeforeEnhancement);
 
 		}

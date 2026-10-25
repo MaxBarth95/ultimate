@@ -114,6 +114,12 @@ public final class TAPreferences {
 	private final int mProbationMinimum;
 	private final boolean mKInductionSolverRestart;
 	private final boolean mInterpolantInvariants;
+	private final boolean mTaAssumeInvariants;
+	private final boolean mTaSeedInvariantStates;
+	private final boolean mInvariantSampling;
+	private final int mInvariantSamplingDepth;
+	private final int mInvariantSamplesPerDepth;
+	private final boolean mValueAnalysisSamples;
 	private final boolean mValueAnalysisWorker;
 	private final ValueAnalysisSearch mValueAnalysisSearch;
 	private final int mValueAnalysisStateBudget;
@@ -251,6 +257,14 @@ public final class TAPreferences {
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_SOLVER_RESTART);
 		mInterpolantInvariants =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INTERPOLANT_INVARIANTS);
+		mTaAssumeInvariants = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_TA_ASSUME_INVARIANTS);
+		mTaSeedInvariantStates =
+				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_TA_SEED_INVARIANT_STATES);
+		mInvariantSampling = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLING);
+		mInvariantSamplingDepth = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLING_DEPTH);
+		mInvariantSamplesPerDepth =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLES_PER_DEPTH);
+		mValueAnalysisSamples = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SAMPLES);
 		mValueAnalysisWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_WORKER);
 		mValueAnalysisSearch = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SEARCH,
 				ValueAnalysisSearch.class);
@@ -755,6 +769,57 @@ public final class TAPreferences {
 	 */
 	public boolean submitInterpolantInvariants() {
 		return mInterpolantInvariants;
+	}
+
+	/**
+	 * @return whether TA workers assume the proven loop invariants of the invariant supplier in their Hoare triple
+	 *         checks
+	 */
+	public boolean taAssumeInvariants() {
+		return mTaAssumeInvariants;
+	}
+
+	/**
+	 * @return whether TA workers add the proven loop invariants of the invariant supplier as states of their
+	 *         interpolant automata
+	 */
+	public boolean taSeedInvariantStates() {
+		return mTaSeedInvariantStates;
+	}
+
+	/**
+	 * @return whether the invariant supplier proposes candidates from sampled loop-head states and loop conditions
+	 */
+	public boolean invariantSampling() {
+		return mInvariantSampling;
+	}
+
+	/**
+	 * @return how many pc steps the bounded unrollings that sample loop-head states take at most
+	 */
+	public int getInvariantSamplingDepth() {
+		return mInvariantSamplingDepth;
+	}
+
+	/**
+	 * @return how many states the supplier samples per loop head and unrolling depth
+	 */
+	public int getInvariantSamplesPerDepth() {
+		return mInvariantSamplesPerDepth;
+	}
+
+	/**
+	 * @return whether the value analysis worker hands its concrete states to the invariant supplier
+	 */
+	public boolean valueAnalysisSamples() {
+		return mValueAnalysisSamples;
+	}
+
+	/**
+	 * @return whether TA workers take the proven loop invariants of the invariant supplier at all
+	 */
+	public boolean taUsesInvariants() {
+		return mTaAssumeInvariants || mTaSeedInvariantStates;
 	}
 
 	/**

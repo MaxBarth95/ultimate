@@ -32,6 +32,7 @@ import java.util.HashSet;
 import java.util.Queue;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
@@ -56,13 +57,15 @@ public final class BreadthFirstConcreteSearch<L extends IIcfgTransition<?>> impl
 
 	@Override
 	public ConcreteConfiguration<L> search(final ConcreteNwaSemantics<L> semantics, final int stateBudget,
-			final BooleanSupplier keepGoing, final Predicate<ConcreteConfiguration<L>> confirm) {
+			final BooleanSupplier keepGoing, final Predicate<ConcreteConfiguration<L>> confirm,
+			final Consumer<ConcreteConfiguration<L>> observer) {
 		// Stays if something is thrown out of the search, e.g. by a cancelled confirmation.
 		mOutcome = "aborted";
 		final Set<ConcreteConfiguration<L>> visited = new HashSet<>();
 		final Queue<ConcreteConfiguration<L>> queue = new ArrayDeque<>();
 		for (final ConcreteConfiguration<L> initial : semantics.initialConfigurations()) {
 			if (visited.add(initial)) {
+				observer.accept(initial);
 				queue.add(initial);
 			}
 		}
@@ -78,6 +81,7 @@ public final class BreadthFirstConcreteSearch<L extends IIcfgTransition<?>> impl
 				if (!visited.add(successor)) {
 					continue;
 				}
+				observer.accept(successor);
 				mVisited = visited.size();
 				mMaxLength = Math.max(mMaxLength, successor.getLength());
 				if (semantics.isError(successor)) {

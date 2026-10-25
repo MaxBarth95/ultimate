@@ -28,7 +28,9 @@
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.valueanalysis;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 
 import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
@@ -43,6 +45,8 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolk
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.IcfgProgramExecution;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVarOrConst;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicate;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.ISLPredicate;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.PredicateFactory;
@@ -51,6 +55,8 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.taskidentifier.
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.tracehandling.IRefinementEngineResult;
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.Counterexample;
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.singletracecheck.TraceCheckUtils;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtSortUtils;
+import de.uni_freiburg.informatik.ultimate.logic.Rational;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.IPostconditionProvider;
@@ -65,6 +71,9 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pa
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TransferBetweenMainAndWorker.TransferMode;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult.WorkerType;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.IInvariantSink;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.Sample;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.SamplePoints;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.ValueAnalysisSearch;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.StrategyFactory;
@@ -113,10 +122,24 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 	private long mTimeLimitDeadline;
 	private final ConcreteTransFormulaExecutor mExecutor;
 	private final IConcreteSearchStrategy<L> mSearch;
+	/** How many states per location go to the invariant supplier at most. */
+	private static final int SAMPLES_PER_LOCATION = 32;
+	/** How many states are sent to the invariant supplier in one message. */
+	private static final int SAMPLE_BATCH = 256;
 
 	private int mTraceChecks;
 	private IProgramExecution<L, Term> mViolation;
 
+	// Where the states of the search go as samples for the invariant supplier, or null if they go nowhere.
+	private final IInvariantSink mSampleSink;
+	private final Map<IcfgLocation, Integer> mSamplesPerLocation = new HashMap<>();
+	private final List<Sample> mSampleBatch = new ArrayList<>();
+	private int mSamplesSent;
+
+	/**
+	 * @param sampleSink
+	 *            where the states the search visits go as samples for the invariant supplier, or null
+	 */
 	public ValueAnalysisWorkerThread(final ILogger logger, final TAPreferences pref,
 			final IUltimateServiceProvider services, final CfgSmtToolkit cfgSmtToolkit,
 			final PredicateFactory predicateFactory, final TaCheckAndRefinementPreferences<L> taCheckAndRefinementPrefs,
@@ -124,7 +147,8 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 			final ParallelNwaCegarLoop<L, A> mainThread,
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
 			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils,
-			final TaskIdentifier taskIdentifier) {
+			final TaskIdentifier taskIdentifier, final IInvariantSink sampleSink) {
+		mSampleSink = sampleSink;
 		mLogger = logger;
 		mPref = pref;
 		mCfgSmtToolkit = cfgSmtToolkit;
@@ -168,7 +192,8 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 			final ConcreteNwaSemantics<L> semantics =
 					new ConcreteNwaSemantics<>(mAbstraction, mCfgSmtToolkit.getModifiableGlobalsTable(), mExecutor);
 			final ConcreteConfiguration<L> violation = mSearch.search(semantics, mPref.getValueAnalysisStateBudget(),
-					this::keepGoing, configuration -> confirm(semantics.toNestedRun(configuration)));
+					this::keepGoing, configuration -> confirm(semantics.toNestedRun(configuration)), this::sample);
+			flushSamples();
 			if (violation != null) {
 				mLogger.info("Value analysis: confirmed a violation of %d letter(s)", violation.getLength());
 				mBlockingQueueForResults.put(WorkerThreadResult.violation(WorkerType.VALUE_ANALYSIS, mViolation));
@@ -193,9 +218,51 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 			}
 		} finally {
 			mLogger.info("Value analysis: %s; %d step(s) executed, %d lost successors to unsupported terms, %d to "
-					+ "the choice limit; %d trace check(s)", mSearch.getStatistics(), mExecutor.getSteps(),
-					mExecutor.getUnsupportedSteps(), mExecutor.getTruncatedSteps(), mTraceChecks);
+					+ "the choice limit; %d trace check(s)%s", mSearch.getStatistics(), mExecutor.getSteps(),
+					mExecutor.getUnsupportedSteps(), mExecutor.getTruncatedSteps(), mTraceChecks,
+					mSampleSink == null ? "" : "; " + mSamplesSent + " state(s) sent to the invariant supplier");
 		}
+	}
+
+	/**
+	 * Hands a visited configuration to the invariant supplier as a sample: the values of the integer program variables
+	 * visible at its location, only a few per location. A state reached in any calling context is a reachable state of
+	 * the location, which is all a location invariant is about.
+	 */
+	private void sample(final ConcreteConfiguration<L> configuration) {
+		if (mSampleSink == null || !(configuration.getState() instanceof final ISLPredicate state)) {
+			return;
+		}
+		final IcfgLocation location = state.getProgramPoint();
+		if (mSamplesPerLocation.getOrDefault(location, 0) >= SAMPLES_PER_LOCATION) {
+			return;
+		}
+		final Map<Term, Rational> values = new HashMap<>();
+		for (final Map.Entry<IProgramVarOrConst, IConcreteValue> entry : configuration.getValuation().entrySet()) {
+			if (entry.getKey() instanceof final IProgramVar pv && !pv.isOldvar()
+					&& SmtSortUtils.isIntSort(pv.getTermVariable().getSort())
+					&& entry.getValue() instanceof final IConcreteValue.NumberValue number
+					&& number.value().isIntegral()) {
+				values.put(pv.getTermVariable(), number.value());
+			}
+		}
+		if (values.isEmpty()) {
+			return;
+		}
+		mSamplesPerLocation.merge(location, 1, Integer::sum);
+		mSampleBatch.add(new Sample(location, values));
+		if (mSampleBatch.size() >= SAMPLE_BATCH) {
+			flushSamples();
+		}
+	}
+
+	private void flushSamples() {
+		if (mSampleSink == null || mSampleBatch.isEmpty()) {
+			return;
+		}
+		mSampleSink.submit(new SamplePoints(mCfgSmtToolkit.getManagedScript(), mSampleBatch, "value analysis"));
+		mSamplesSent += mSampleBatch.size();
+		mSampleBatch.clear();
 	}
 
 	/**

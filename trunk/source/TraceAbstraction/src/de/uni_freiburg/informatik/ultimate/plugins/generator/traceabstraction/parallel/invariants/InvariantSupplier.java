@@ -57,15 +57,20 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttrans
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.TermClassifier;
+import de.uni_freiburg.informatik.ultimate.logic.Rational;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
+import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.ParallelNwaCegarLoop;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult.WorkerType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.InterpolantSequence;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.Sample;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.SamplePoints;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.TrustedInvariants;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantSubscription.RunningQuery;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.KInduction;
+import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.CallNode;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.CounterSort;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.PcTransitionSystemFactory;
 
@@ -77,6 +82,12 @@ import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.PcTransitionS
  * infeasible trace) only yields candidates: every conjunct of an interpolant at a loop head or waypoint of the
  * program. {@link InductivenessChecker} keeps the ones that are inductive relative to everything known so far, on the
  * same {@link KInduction} transition system of the initial abstraction.
+ * <p>
+ * <b>Sampling</b>: if enabled, the supplier also proposes candidates TA does not produce. It collects reachable states
+ * at the loop heads, from bounded unrollings of the transition system ({@link ReachableStateSampler}), from
+ * interpolants that fix the values of variables, and from {@link SamplePoints} of producers such as the value
+ * analysis; {@link SampleCandidates} turns them into the equalities, bounds and orderings they satisfy. The comparisons
+ * in the conditions of the loops are candidates too ({@link GuardTemplates}). All of them go through the same check.
  * <p>
  * <b>Outgoing</b>: every {@link #subscribe subscriber} gets its own channel. Whenever the invariant of a location got
  * stronger, it receives the location's whole current invariant, the conjunction of all trusted and all proven
@@ -124,6 +135,17 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	public record Probation(int factor, long minimumMillis, long solverTimeoutMillis) {
 	}
 
+	/**
+	 * The settings of the candidates from sampled loop-head states, see {@link SampleCandidates}.
+	 *
+	 * @param depth
+	 *            how many pc steps the bounded unrollings that sample states take at most
+	 * @param perDepth
+	 *            how many states are sampled per head node and depth
+	 */
+	public record Sampling(int depth, int perDepth) {
+	}
+
 	private record Candidate(IcfgLocation location, Term term) {
 	}
 
@@ -141,10 +163,17 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	private volatile boolean mStopped;
 	// True once the CEGAR loop is done, before it shuts the supplier down and destroys its solver.
 	private final BooleanSupplier mShuttingDown;
-	// Guards mSubscriptions and mPublished, the only state shared with other threads besides the inbox.
+	// Guards mSubscriptions, mTaSubscriptions, mPublished and mTaLocations, the only state shared with other threads
+	// besides the inbox.
 	private final List<InvariantSubscription> mSubscriptions = new ArrayList<>();
+	// The subscriptions of TA workers. They only get the invariants of mTaLocations and are never on probation.
+	private final List<InvariantSubscription> mTaSubscriptions = new ArrayList<>();
 	private final Map<IcfgLocation, Term> mPublished = new HashMap<>();
 	private int mPublishedVersion;
+	// The locations every pc node of which is a loop head, empty until the transition system is built. A waypoint is
+	// a checkpoint only for some of the paths through its location, so what is proven there is no location invariant:
+	// k-induction assumes it only at loop heads, and a TA worker, which assumes it at the location, must not get it.
+	private Set<IcfgLocation> mTaLocations = Collections.emptySet();
 
 	// Everything below is only touched by the supplier thread.
 	private final Map<ManagedScript, TermTransferrer> mTransferrers = new IdentityHashMap<>();
@@ -162,6 +191,15 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	private final Map<IcfgLocation, Set<Term>> mRolledBack = new HashMap<>();
 	// Version -> how many of its queries were on probation.
 	private final Map<Integer, Integer> mStalls = new HashMap<>();
+	// null unless candidates from sampled states are enabled
+	private final Sampling mSampling;
+	private final SampleCandidates mSamples;
+	// The locations of the loop heads, set with mChecker.
+	private Set<IcfgLocation> mHeadLocations = Collections.emptySet();
+	// Candidates that wait for the next round of checks, e.g. from the conditions of the loops.
+	private final Map<IcfgLocation, Set<Term>> mPendingCandidates = new LinkedHashMap<>();
+	private int mCandidatesFromSamples;
+	private int mCandidatesFromGuards;
 
 	/**
 	 * Must be called on the main thread. The channels exist from here on, the abstraction follows with
@@ -175,10 +213,12 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	 *            whether the CEGAR loop is done, which is why a query may fail
 	 * @param probation
 	 *            the settings of the probation, or {@code null} to disable it
+	 * @param sampling
+	 *            the settings of the candidates from sampled loop-head states, or {@code null} to disable them
 	 */
 	public InvariantSupplier(final ILogger logger, final IUltimateServiceProvider services,
 			final CfgSmtToolkit csToolkit, final BlockingQueue<WorkerThreadResult<L, A>> resultQueue,
-			final BooleanSupplier shuttingDown, final Probation probation) {
+			final BooleanSupplier shuttingDown, final Probation probation, final Sampling sampling) {
 		mLogger = logger;
 		mServices = services;
 		mCsToolkit = csToolkit;
@@ -188,6 +228,8 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 		mProbation = probation == null ? null
 				: new InvariantProbation(logger, mScript, probation.factor(), probation.minimumMillis(),
 						probation.solverTimeoutMillis());
+		mSampling = sampling;
+		mSamples = sampling == null ? null : new SampleCandidates(mScript.getScript());
 	}
 
 	/**
@@ -254,12 +296,52 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 		return subscription;
 	}
 
+	/**
+	 * A channel for a TA worker: it only delivers the invariants of loop-head locations, see {@link #mTaLocations},
+	 * and is never on probation.
+	 *
+	 * @param target
+	 *            the worker's script
+	 * @return a new outgoing channel, which starts with everything published so far at loop heads
+	 */
+	public InvariantSubscription subscribeForTa(final ManagedScript target) {
+		final InvariantSubscription subscription = new InvariantSubscription(mScript, target, false);
+		synchronized (mSubscriptions) {
+			final Map<IcfgLocation, Term> published = forTa(mPublished);
+			if (!published.isEmpty()) {
+				subscription.offer(mPublishedVersion, published);
+			}
+			mTaSubscriptions.add(subscription);
+		}
+		return subscription;
+	}
+
+	/**
+	 * Must hold the lock of {@link #mSubscriptions}.
+	 *
+	 * @return the invariants of {@code update} that a TA worker may assume
+	 */
+	private Map<IcfgLocation, Term> forTa(final Map<IcfgLocation, Term> update) {
+		final Map<IcfgLocation, Term> result = new HashMap<>();
+		for (final Map.Entry<IcfgLocation, Term> entry : update.entrySet()) {
+			if (mTaLocations.contains(entry.getKey())) {
+				result.put(entry.getKey(), entry.getValue());
+			}
+		}
+		return Map.copyOf(result);
+	}
+
 	@Override
 	public void run() {
 		Thread.currentThread().setName("Invariant Supplier Thread");
 		try {
 			if (mAbstraction == null) {
 				throw new IllegalStateException("the invariant supplier was started without an abstraction");
+			}
+			if (mSamples != null) {
+				// Needs no message: the conditions of the loops and the sampled states are there from the start.
+				proposeInitialCandidates();
+				process(Collections.emptyList());
 			}
 			while (true) {
 				final List<InvariantMessage> batch = new ArrayList<>();
@@ -307,6 +389,55 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 		} finally {
 			mStopped = true;
 			mInbox.clear();
+			logStatistics();
+		}
+	}
+
+	/**
+	 * Logs per location what the supplier saw and proved, to tell whether it proves anything at the loop heads at all.
+	 * Only touches the supplier's own state, so it never asks the solver, which may already be destroyed.
+	 */
+	private void logStatistics() {
+		if (mChecker == null) {
+			mLogger.info("InvariantSupplier statistics: no interpolant arrived, %d location(s) with trusted invariants",
+					mTrusted.size());
+			return;
+		}
+		final Set<IcfgLocation> heads = new LinkedHashSet<>();
+		for (final CallNode<IPredicate> node : mChecker.getSystem().getHeadNodes().keySet()) {
+			heads.add(locationOf(node.getState()));
+		}
+		final Map<IcfgLocation, Integer> pooled = new HashMap<>();
+		for (final Candidate candidate : mRetryPool) {
+			pooled.merge(candidate.location(), 1, Integer::sum);
+		}
+		final Set<IcfgLocation> locations = new LinkedHashSet<>(mTried.keySet());
+		locations.addAll(mTrusted.keySet());
+		locations.addAll(mProven.keySet());
+		int provenAtHeads = 0;
+		int provenAtWaypoints = 0;
+		for (final IcfgLocation location : locations) {
+			final int proven = mProven.getOrDefault(location, Collections.emptySet()).size();
+			final boolean head = heads.contains(location);
+			if (head) {
+				provenAtHeads += proven;
+			} else {
+				provenAtWaypoints += proven;
+			}
+			mLogger.info("InvariantSupplier statistics: %s %s - %d candidate(s) seen, %d proven, %d trusted, %d in the "
+					+ "retry pool%s%s", head ? "loop head" : "waypoint", location,
+					mTried.getOrDefault(location, Collections.emptySet()).size(), proven,
+					mTrusted.getOrDefault(location, Collections.emptySet()).size(), pooled.getOrDefault(location, 0),
+					mSamples == null ? "" : ", " + mSamples.count(location) + " sampled state(s)",
+					proven == 0 ? "" : ", proven: " + mProven.get(location));
+		}
+		mLogger.info("InvariantSupplier statistics: %d conjunct(s) proven at %d loop head(s), %d at waypoints, %d "
+				+ "version(s) published, %d conjunct(s) rolled back", provenAtHeads, heads.size(), provenAtWaypoints,
+				mVersions.size() - 1, mRolledBack.values().stream().mapToInt(Set::size).sum());
+		if (mSamples != null) {
+			mLogger.info("InvariantSupplier statistics: %d sampled state(s), %d candidate(s) from sampled states, %d "
+					+ "from the conditions of the loops", mSamples.count(), mCandidatesFromSamples,
+					mCandidatesFromGuards);
 		}
 	}
 
@@ -328,11 +459,28 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			if (message instanceof final InterpolantSequence sequence) {
 				takeCandidates(sequence, candidates);
 				sequences++;
+			} else if (message instanceof final SamplePoints points) {
+				takeSamples(points);
 			}
 		}
 		if (mChecker == null) {
 			// No interpolant arrived yet, so there is nothing to check and nothing was rejected.
 			return;
+		}
+		for (final Map.Entry<IcfgLocation, Set<Term>> pending : mPendingCandidates.entrySet()) {
+			for (final Term candidate : pending.getValue()) {
+				offerCandidate(pending.getKey(), candidate, candidates);
+			}
+		}
+		mPendingCandidates.clear();
+		if (mSamples != null) {
+			for (final IcfgLocation location : mSamples.takeChanged()) {
+				for (final Term candidate : mSamples.candidates(location)) {
+					if (offerCandidate(location, candidate, candidates)) {
+						mCandidatesFromSamples++;
+					}
+				}
+			}
 		}
 		int checked = 0;
 		int proven = 0;
@@ -386,16 +534,96 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			if (!checker.hasNode(location)) {
 				continue;
 			}
-			final Set<Term> tried = mTried.computeIfAbsent(location, x -> new LinkedHashSet<>());
-			for (final Term conjunct : SmtUtils.getConjuncts(transfer(message.source(), message.interpolants().get(i)))) {
-				if (SmtUtils.isTrueLiteral(conjunct) || isKnown(location, conjunct) || !tried.add(conjunct)) {
-					continue;
-				}
-				if (checker.isExpressible(conjunct)) {
-					candidates.computeIfAbsent(location, x -> new LinkedHashSet<>()).add(conjunct);
-				}
+			final List<Term> conjuncts =
+					List.of(SmtUtils.getConjuncts(transfer(message.source(), message.interpolants().get(i))));
+			for (final Term conjunct : conjuncts) {
+				offerCandidate(location, conjunct, candidates);
+			}
+			if (mSamples != null && mHeadLocations.contains(location)) {
+				// An interpolant that fixes values, e.g. i = 3 and x = 6 in an unwinding of a loop, is a reachable
+				// state on this trace, or the trace is infeasible before; either way a state worth fitting.
+				addPoint(location, SampleCandidates.pointOf(conjuncts));
 			}
 		}
+	}
+
+	/**
+	 * Adds {@code candidate} to {@code candidates} unless it is trivial, known, tried before or not expressible.
+	 *
+	 * @return whether it was added
+	 */
+	private boolean offerCandidate(final IcfgLocation location, final Term candidate,
+			final Map<IcfgLocation, Set<Term>> candidates) {
+		final Set<Term> tried = mTried.computeIfAbsent(location, x -> new LinkedHashSet<>());
+		if (SmtUtils.isTrueLiteral(candidate) || isKnown(location, candidate) || !tried.add(candidate)) {
+			return false;
+		}
+		if (!mChecker.isExpressible(candidate)) {
+			return false;
+		}
+		candidates.computeIfAbsent(location, x -> new LinkedHashSet<>()).add(candidate);
+		return true;
+	}
+
+	/**
+	 * Takes the states of a producer, e.g. the value analysis, at the loop heads.
+	 */
+	private void takeSamples(final SamplePoints message) {
+		if (mSamples == null) {
+			return;
+		}
+		getChecker();
+		int added = 0;
+		for (final Sample sample : message.samples()) {
+			if (!mHeadLocations.contains(sample.location())) {
+				continue;
+			}
+			final Map<TermVariable, Rational> point = new LinkedHashMap<>();
+			for (final Map.Entry<Term, Rational> value : sample.values().entrySet()) {
+				final Term variable = transfer(message.source(), value.getKey());
+				if (variable instanceof final TermVariable tv && SampleCandidates.isSampled(tv)) {
+					point.put(tv, value.getValue());
+				}
+			}
+			if (addPoint(sample.location(), point)) {
+				added++;
+			}
+		}
+		mLogger.info("InvariantSupplier: took %d new state(s) at loop heads from %s", added, message.origin());
+	}
+
+	/**
+	 * Adds a point, restricted to the variables of the transition system.
+	 *
+	 * @return whether it was new
+	 */
+	private boolean addPoint(final IcfgLocation location, final Map<TermVariable, Rational> point) {
+		final Map<TermVariable, Rational> restricted = new LinkedHashMap<>();
+		for (final Map.Entry<TermVariable, Rational> entry : point.entrySet()) {
+			if (mChecker.isExpressible(entry.getKey())) {
+				restricted.put(entry.getKey(), entry.getValue());
+			}
+		}
+		return mSamples.add(location, restricted);
+	}
+
+	/**
+	 * Samples states at the loop heads by bounded unrollings, and proposes the comparisons in the conditions of the
+	 * loops; the candidates are checked by the next call of {@link #process}.
+	 */
+	private void proposeInitialCandidates() {
+		final InductivenessChecker checker = getChecker();
+		for (final Map.Entry<IcfgLocation, Set<Term>> entry : GuardTemplates
+				.compute(mScript, mAbstraction, mHeadLocations).entrySet()) {
+			mPendingCandidates.computeIfAbsent(entry.getKey(), x -> new LinkedHashSet<>()).addAll(entry.getValue());
+			mCandidatesFromGuards += entry.getValue().size();
+		}
+		final long start = System.nanoTime();
+		final int sampled = new ReachableStateSampler(mLogger, mServices, mScript, checker.getSystem(),
+				checker.constants("smp")).sample(mSampling.depth(), mSampling.perDepth(), mSamples);
+		mLogger.info("InvariantSupplier: sampled %d state(s) at %d loop head location(s) in %d ms, %d candidate(s) "
+				+ "from the conditions of the loops", sampled, mSamples.locations(),
+				(System.nanoTime() - start) / 1_000_000, mCandidatesFromGuards);
 	}
 
 	private void takeRetryPool(final Map<IcfgLocation, Set<Term>> round) {
@@ -428,6 +656,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 					mProven.computeIfAbsent(entry.getKey(), x -> new LinkedHashSet<>()).add(candidate);
 					changed.add(entry.getKey());
 					proven++;
+					mLogger.info("InvariantSupplier: proven at %s: %s", entry.getKey(), candidate);
 				} else {
 					addToRetryPool(new Candidate(entry.getKey(), candidate));
 				}
@@ -489,6 +718,14 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			mPublishedVersion = number;
 			for (final InvariantSubscription subscription : mSubscriptions) {
 				subscription.offer(number, Map.copyOf(update));
+			}
+			if (!mTaSubscriptions.isEmpty()) {
+				final Map<IcfgLocation, Term> taUpdate = forTa(update);
+				if (!taUpdate.isEmpty()) {
+					for (final InvariantSubscription subscription : mTaSubscriptions) {
+						subscription.offer(number, taUpdate);
+					}
+				}
 			}
 		}
 		mLogger.info("InvariantSupplier: published version %d, invariants of %d location(s)", number, update.size());
@@ -598,6 +835,17 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 					PcTransitionSystemFactory.build(mServices, mLogger, mCsToolkit, mScript, mAbstraction,
 						CounterSort.forProgram(mScript.getScript(), mCsToolkit));
 			mChecker = new InductivenessChecker(mLogger, mScript, encoding.system());
+			final Set<IcfgLocation> taLocations = new LinkedHashSet<>();
+			for (final CallNode<IPredicate> head : encoding.system().getHeadNodes().keySet()) {
+				taLocations.add(locationOf(head.getState()));
+			}
+			mHeadLocations = Set.copyOf(taLocations);
+			for (final CallNode<IPredicate> waypoint : encoding.system().getWaypointNodes().keySet()) {
+				taLocations.remove(locationOf(waypoint.getState()));
+			}
+			synchronized (mSubscriptions) {
+				mTaLocations = Set.copyOf(taLocations);
+			}
 			mLogger.info("InvariantSupplier: transition system with %d pc value(s), %d loop head(s), %d waypoint(s)",
 					encoding.system().getNumNodes(), encoding.system().getHeadNodes().size(),
 					encoding.system().getWaypointNodes().size());

@@ -32,6 +32,7 @@ import java.util.Map;
 
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
+import de.uni_freiburg.informatik.ultimate.logic.Rational;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 
 /**
@@ -79,6 +80,25 @@ public sealed interface InvariantMessage {
 			}
 			locations = List.copyOf(locations);
 			interpolants = List.copyOf(interpolants);
+		}
+	}
+
+	/**
+	 * One reachable state at a location: the values of some integer program variables, keyed by their term variables.
+	 */
+	record Sample(IcfgLocation location, Map<Term, Rational> values) {
+		public Sample {
+			values = Map.copyOf(values);
+		}
+	}
+
+	/**
+	 * Reachable states of the program, e.g. from a concrete execution. They are no invariants: the supplier proposes the
+	 * relations they satisfy as candidates, and publishes only what it proves to be inductive.
+	 */
+	record SamplePoints(ManagedScript source, List<Sample> samples, String origin) implements InvariantMessage {
+		public SamplePoints {
+			samples = List.copyOf(samples);
 		}
 	}
 }

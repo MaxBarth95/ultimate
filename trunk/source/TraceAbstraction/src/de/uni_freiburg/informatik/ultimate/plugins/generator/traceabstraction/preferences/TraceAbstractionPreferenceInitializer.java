@@ -629,6 +629,54 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "gives those to the k-induction workers while they run.";
 	private static final boolean DEF_INTERPOLANT_INVARIANTS = true;
 
+	public static final String LABEL_TA_ASSUME_INVARIANTS =
+			"TA workers assume proven loop invariants in Hoare triple checks";
+	private static final String DESC_TA_ASSUME_INVARIANTS =
+			"Every TA worker also subscribes to the invariant supplier. When it enhances an interpolant automaton, a "
+					+ "Hoare triple that is not valid may still be valid once the proven invariant of the source "
+					+ "location of the letter is assumed in the precondition; such a triple is added too. This lets the "
+					+ "automaton cover all unwindings of a loop. Only invariants of loop heads are used. Needs "
+					+ "interpolants for the invariant supplier.";
+	private static final boolean DEF_TA_ASSUME_INVARIANTS = false;
+
+	public static final String LABEL_TA_SEED_INVARIANT_STATES =
+			"TA workers add proven loop invariants as interpolant automaton states";
+	private static final String DESC_TA_SEED_INVARIANT_STATES =
+			"Before a TA worker enhances an interpolant automaton, it adds the proven invariant of every loop head on "
+					+ "the counterexample as a state, so that the enhancement can use it as a successor, e.g. for a "
+					+ "self-loop around the loop body that covers all its unwindings. Works best together with assuming "
+					+ "the invariants in Hoare triple checks. Needs interpolants for the invariant supplier and an "
+					+ "interpolant automaton enhancement other than NONE.";
+	private static final boolean DEF_TA_SEED_INVARIANT_STATES = false;
+
+	public static final String LABEL_INVARIANT_SAMPLING =
+			"Invariant supplier: candidates from sampled loop-head states";
+	private static final String DESC_INVARIANT_SAMPLING =
+			"The invariant supplier collects states at the loop heads: from bounded unrollings of the program, from "
+					+ "interpolants that fix the values of variables and, if enabled, from the value analysis. It "
+					+ "proposes the linear equalities, bounds and orderings these states satisfy as candidate "
+					+ "invariants, and the comparisons in the conditions of the loops, weakened to non-strict ones. "
+					+ "Like every candidate, they are only published if they are proven inductive.";
+	private static final boolean DEF_INVARIANT_SAMPLING = false;
+
+	public static final String LABEL_INVARIANT_SAMPLING_DEPTH =
+			"Invariant supplier: maximal unrolling for sampled loop-head states";
+	private static final String DESC_INVARIANT_SAMPLING_DEPTH =
+			"How many steps from one loop head or waypoint to the next the bounded unrollings that sample loop-head "
+					+ "states take at most.";
+	private static final int DEF_INVARIANT_SAMPLING_DEPTH = 8;
+
+	public static final String LABEL_INVARIANT_SAMPLES_PER_DEPTH =
+			"Invariant supplier: sampled states per loop head and unrolling";
+	private static final int DEF_INVARIANT_SAMPLES_PER_DEPTH = 3;
+
+	public static final String LABEL_VALUE_ANALYSIS_SAMPLES =
+			"Value analysis sends loop-head states to the invariant supplier";
+	private static final String DESC_VALUE_ANALYSIS_SAMPLES =
+			"The value analysis worker hands the states it executes concretely to the invariant supplier, which uses "
+					+ "them as sampled loop-head states. Needs the candidates from sampled loop-head states.";
+	private static final boolean DEF_VALUE_ANALYSIS_SAMPLES = false;
+
 	public static final String LABEL_VALUE_ANALYSIS_WORKER = "Value analysis worker in Parallel Trace Abstraction";
 	private static final String DESC_VALUE_ANALYSIS_WORKER =
 			"Runs an additional worker that executes the program concretely, without SMT solver calls, to find "
@@ -1008,6 +1056,19 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						DESC_KINDUCTION_SOLVER_RESTART, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_INTERPOLANT_INVARIANTS, DEF_INTERPOLANT_INVARIANTS,
 						DESC_INTERPOLANT_INVARIANTS, PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_TA_ASSUME_INVARIANTS, DEF_TA_ASSUME_INVARIANTS,
+						DESC_TA_ASSUME_INVARIANTS, PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_TA_SEED_INVARIANT_STATES, DEF_TA_SEED_INVARIANT_STATES,
+						DESC_TA_SEED_INVARIANT_STATES, PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_INVARIANT_SAMPLING, DEF_INVARIANT_SAMPLING, DESC_INVARIANT_SAMPLING,
+						PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_INVARIANT_SAMPLING_DEPTH, DEF_INVARIANT_SAMPLING_DEPTH,
+						DESC_INVARIANT_SAMPLING_DEPTH, PreferenceType.Integer,
+						new IUltimatePreferenceItemValidator.IntegerValidator(1, 1000)),
+				new UltimatePreferenceItem<>(LABEL_INVARIANT_SAMPLES_PER_DEPTH, DEF_INVARIANT_SAMPLES_PER_DEPTH,
+						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(1, 1000)),
+				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_SAMPLES, DEF_VALUE_ANALYSIS_SAMPLES,
+						DESC_VALUE_ANALYSIS_SAMPLES, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_WORKER, DEF_VALUE_ANALYSIS_WORKER,
 						DESC_VALUE_ANALYSIS_WORKER, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_SEARCH, DEF_VALUE_ANALYSIS_SEARCH,
