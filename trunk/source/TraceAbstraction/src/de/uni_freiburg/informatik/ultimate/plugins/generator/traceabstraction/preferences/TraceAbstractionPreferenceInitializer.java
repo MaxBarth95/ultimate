@@ -677,6 +677,22 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "them as sampled loop-head states. Needs the candidates from sampled loop-head states.";
 	private static final boolean DEF_VALUE_ANALYSIS_SAMPLES = false;
 
+	public static final String LABEL_TA_ESCALATION_THRESHOLD =
+			"TA workers: escalate the refinement strategy after this many counterexamples of one path program";
+	private static final String DESC_TA_ESCALATION_THRESHOLD =
+			"A TA worker in parallel trace abstraction that sees a counterexample of a path program for this many "
+					+ "times refines with the escalated refinement strategy instead of the usual one, since the usual "
+					+ "one keeps unwinding the loops of this path program. With the threshold T, it does so at the "
+					+ "visits T, 2T, 4T and so on, and only uses an infeasibility proof whose every Hoare triple is "
+					+ "valid. 0 never escalates.";
+	private static final int DEF_TA_ESCALATION_THRESHOLD = 0;
+
+	public static final String LABEL_TA_ESCALATION_STRATEGY = "TA workers: escalated refinement strategy";
+	private static final String DESC_TA_ESCALATION_STRATEGY =
+			"The refinement strategy of a TA worker for the counterexamples of a path program it has seen too often, "
+					+ "e.g. one that computes loop invariants of the path program.";
+	private static final RefinementStrategy DEF_TA_ESCALATION_STRATEGY = RefinementStrategy.ACCELERATED_INTERPOLATION;
+
 	public static final String LABEL_VALUE_ANALYSIS_WORKER = "Value analysis worker in Parallel Trace Abstraction";
 	private static final String DESC_VALUE_ANALYSIS_WORKER =
 			"Runs an additional worker that executes the program concretely, without SMT solver calls, to find "
@@ -1069,6 +1085,11 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(1, 1000)),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_SAMPLES, DEF_VALUE_ANALYSIS_SAMPLES,
 						DESC_VALUE_ANALYSIS_SAMPLES, PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_TA_ESCALATION_THRESHOLD, DEF_TA_ESCALATION_THRESHOLD,
+						DESC_TA_ESCALATION_THRESHOLD, PreferenceType.Integer,
+						new IUltimatePreferenceItemValidator.IntegerValidator(0, 100000)),
+				new UltimatePreferenceItem<>(LABEL_TA_ESCALATION_STRATEGY, DEF_TA_ESCALATION_STRATEGY,
+						DESC_TA_ESCALATION_STRATEGY, PreferenceType.Combo, RefinementStrategy.values()),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_WORKER, DEF_VALUE_ANALYSIS_WORKER,
 						DESC_VALUE_ANALYSIS_WORKER, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_SEARCH, DEF_VALUE_ANALYSIS_SEARCH,

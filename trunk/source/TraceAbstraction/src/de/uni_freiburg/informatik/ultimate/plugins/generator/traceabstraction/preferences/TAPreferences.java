@@ -120,6 +120,8 @@ public final class TAPreferences {
 	private final int mInvariantSamplingDepth;
 	private final int mInvariantSamplesPerDepth;
 	private final boolean mValueAnalysisSamples;
+	private final int mTaEscalationThreshold;
+	private final RefinementStrategy mTaEscalationStrategy;
 	private final boolean mValueAnalysisWorker;
 	private final ValueAnalysisSearch mValueAnalysisSearch;
 	private final int mValueAnalysisStateBudget;
@@ -265,6 +267,9 @@ public final class TAPreferences {
 		mInvariantSamplesPerDepth =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLES_PER_DEPTH);
 		mValueAnalysisSamples = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SAMPLES);
+		mTaEscalationThreshold = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_TA_ESCALATION_THRESHOLD);
+		mTaEscalationStrategy = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_TA_ESCALATION_STRATEGY,
+				RefinementStrategy.class);
 		mValueAnalysisWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_WORKER);
 		mValueAnalysisSearch = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SEARCH,
 				ValueAnalysisSearch.class);
@@ -813,6 +818,21 @@ public final class TAPreferences {
 	 */
 	public boolean valueAnalysisSamples() {
 		return mValueAnalysisSamples;
+	}
+
+	/**
+	 * @return after how many counterexamples of one path program a TA worker escalates its refinement strategy, or 0
+	 *         if it never does
+	 */
+	public int getTaEscalationThreshold() {
+		return mTaEscalationThreshold;
+	}
+
+	/**
+	 * @return the refinement strategy a TA worker escalates to
+	 */
+	public RefinementStrategy getTaEscalationStrategy() {
+		return mTaEscalationStrategy;
 	}
 
 	/**

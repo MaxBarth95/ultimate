@@ -63,6 +63,14 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.I
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.hoaretriple.HoareTripleCheckerCache;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.hoaretriple.HoareTripleCheckerUtils;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.hoaretriple.IHoareTripleChecker;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.hoaretriple.MonolithicHoareTripleChecker;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.ICallAction;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IInternalAction;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IReturnAction;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.IncrementalPlicationChecker.Validity;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingCallTransition;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingInternalTransition;
+import de.uni_freiburg.informatik.ultimate.automata.nestedword.transitions.OutgoingReturnTransition;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicate;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicateUnifier;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.ISLPredicate;
@@ -99,6 +107,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.in
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.NondeterministicInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.InterpolantAutomatonEnhancement;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.RefinementStrategy;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.IpTcStrategyModuleAcceleratedTraceCheck;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.StrategyFactory;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
@@ -153,6 +162,9 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	private final Map<Term, IPredicate> mInvariantPredicates = new HashMap<>();
 	// the invariants taken for the counterexample being checked
 	private InvariantSnapshot mInvariantSnapshot = InvariantSnapshot.empty();
+	// the preferences of the escalated refinement strategy, whose ICFG has this worker's toolkit, or null if the worker
+	// never escalates
+	private final TaCheckAndRefinementPreferences<L> mEscalationPrefs;
 
 	/**
 	 * CegarNwaWorkerThread is a runnable that will be executed by an executor service. It takes counterexamples from
@@ -179,7 +191,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
 			final BlockingQueue<WorkerThreadTask<L>> workerTaskQueue,
 			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils, final IInvariantSink invariantSink,
-			final InvariantSubscription invariants) throws InterruptedException {
+			final InvariantSubscription invariants,
+			final TaCheckAndRefinementPreferences<L> escalationPrefs) throws InterruptedException {
 
 		mLogger = logger;
 		mPref = pref;
@@ -205,6 +218,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		mProgramCache = new PathProgramCache<>(mLogger);
 		mInvariantSink = invariantSink;
 		mInvariants = invariants;
+		mEscalationPrefs = escalationPrefs;
 
 		final Thread.UncaughtExceptionHandler exhandler = (th, ex) -> {
 			mThreadResult = new WorkerThreadResult<>(WorkerType.TA, null, null, null, mCounterexample, null, true);
@@ -283,8 +297,28 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		Thread.currentThread().setName("Worker for " + traceHash);
 		final var locations = getControlConfigurationsFromCounterexample(mCounterexample);
 		final Counterexample<L> counterexample = new Counterexample<>(mCounterexample.getWord(), locations);
-		final ITARefinementStrategy<L> strategy = setUpStrategy(counterexample);
-		final Pair<LBool, IProgramExecution<L, Term>> isCexResult = isCounterexampleFeasible(strategy);
+		final boolean escalate = mEscalationPrefs != null && isEscalationVisit(task.getPathProgramCount());
+		if (escalate) {
+			mLogger.info("TA worker: path program seen %d time(s), refining with %s", task.getPathProgramCount(),
+					mPref.getTaEscalationStrategy());
+		}
+		ITARefinementStrategy<L> strategy = setUpStrategy(counterexample, escalate);
+		Pair<LBool, IProgramExecution<L, Term>> isCexResult;
+		try {
+			isCexResult = isCounterexampleFeasible(strategy);
+		} catch (final ToolchainCanceledException e) {
+			throw e;
+		} catch (final RuntimeException | AssertionError e) {
+			if (!escalate || mMainThread.isShuttingDown()) {
+				throw e;
+			}
+			mLogger.warn("TA worker: escalated strategy failed (%s)", e);
+			isCexResult = new Pair<>(LBool.UNKNOWN, null);
+		}
+		if (escalate && !isTrustworthy(isCexResult.getFirst())) {
+			strategy = setUpStrategy(counterexample, false);
+			isCexResult = isCounterexampleFeasible(strategy);
+		}
 		if (isCexResult.getFirst() == LBool.UNSAT) {
 			submitInterpolants();
 		}
@@ -410,28 +444,83 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	/*
-	 * The worker creates for each counterexample a new strategy module. We can switch between different
-	 * RefinementStrateies here. For example we can use {@link RefinementStrategy.ACCELERATED_TRACE_CHECK} if we have
-	 * seen the pp 7 times.
-	 *
-	 * if (mStrategyFactory.getPathProgramCache().getPathProgramCount(mCounterexample.getWord()) == 7 ) { strategy =
-	 * mStrategyFactory.constructStrategy(getServices(), counterexample, mAbstraction, new
-	 * SubtaskIterationIdentifier(mMainThread.mTaskIdentifier, mIteration), mPredicateFactoryInterpolantAutomata,
-	 * getPreconditionProvider(), getPostconditionProvider(), RefinementStrategy.ACCELERATED_TRACE_CHECK); }
+	 * The worker creates for each counterexample a new strategy module. A path program whose counterexamples the
+	 * worker has seen often enough, i.e. whose loops the usual strategy keeps unwinding, is refined with the escalated
+	 * strategy, e.g. one that computes loop invariants of the path program. Such strategies build path programs from
+	 * the ICFG of their preferences, so they get the preferences with this worker's view of the ICFG.
 	 *
 	 * Warning, we have shared (read and write) access to the PathProgramCache here. But the PathProgramCache uses
 	 * thread save lists and maps.
 	 */
-	private ITARefinementStrategy<L> setUpStrategy(final Counterexample<L> counterexample) {
-		mStrategyFactory = new StrategyFactory<>(mLogger, mPref, mTaCheckAndRefinementPrefs, mCfgSmtToolkit,
-				mPredicateFactory, mPredicateFactoryInterpolantAutomata, mMainThread.mTransitionClazz, mProgramCache);
-
-		final ITARefinementStrategy<L> strategy;
-		strategy = mStrategyFactory.constructStrategy(getServices(), counterexample, mAbstraction,
+	private ITARefinementStrategy<L> setUpStrategy(final Counterexample<L> counterexample, final boolean escalate) {
+		final RefinementStrategy strategyType =
+				escalate ? mPref.getTaEscalationStrategy() : mPref.getRefinementStrategy();
+		mStrategyFactory = new StrategyFactory<>(mLogger, mPref,
+				escalate ? mEscalationPrefs : mTaCheckAndRefinementPrefs, mCfgSmtToolkit, mPredicateFactory,
+				mPredicateFactoryInterpolantAutomata, mMainThread.mTransitionClazz, mProgramCache);
+		return mStrategyFactory.constructStrategy(getServices(), counterexample, mAbstraction,
 				new SubtaskIterationIdentifier(mMainThread.mTaskIdentifier, mIteration),
 				mPredicateFactoryInterpolantAutomata, getPreconditionProvider(), getPostconditionProvider(),
-				mPref.getRefinementStrategy());
-		return strategy;
+				strategyType);
+	}
+
+	/**
+	 * Whether the visit of a path program with the threshold T is refined with the escalated strategy: the visits T, 2T,
+	 * 4T, 8T and so on. The escalated strategy may well give proofs that do not generalize either, and the usual
+	 * strategy varies its proofs with the number of visits (assertion order modulation), so it keeps the visits in
+	 * between.
+	 */
+	private boolean isEscalationVisit(final int pathProgramCount) {
+		final int threshold = mPref.getTaEscalationThreshold();
+		return pathProgramCount >= threshold && pathProgramCount % threshold == 0
+				&& Integer.bitCount(pathProgramCount / threshold) == 1;
+	}
+
+	/**
+	 * Whether the result of an escalated strategy can be used. The escalated strategies are less tried than the usual
+	 * ones, and the triples of their infeasibility proof go into the cache of the Hoare triple checker unchecked. So
+	 * only an infeasibility proof whose every triple is valid is kept; a feasible or unknown counterexample, or a
+	 * proof with an invalid triple, is left to the usual strategy.
+	 */
+	private boolean isTrustworthy(final LBool feasibility) {
+		if (feasibility != LBool.UNSAT) {
+			mLogger.info("TA worker: escalated strategy says %s, checking with %s again", feasibility,
+					mPref.getRefinementStrategy());
+			return false;
+		}
+		final NestedWordAutomaton<L, IPredicate> proof = mRefinementResult.getInfeasibilityProof();
+		final MonolithicHoareTripleChecker checker = new MonolithicHoareTripleChecker(mCfgSmtToolkit);
+		int triples = 0;
+		int invalid = 0;
+		for (final IPredicate state : proof.getStates()) {
+			for (final OutgoingInternalTransition<L, IPredicate> trans : proof.internalSuccessors(state)) {
+				triples++;
+				if (checker.checkInternal(state, (IInternalAction) trans.getLetter(),
+						trans.getSucc()) != Validity.VALID) {
+					invalid++;
+				}
+			}
+			for (final OutgoingCallTransition<L, IPredicate> trans : proof.callSuccessors(state)) {
+				triples++;
+				if (checker.checkCall(state, (ICallAction) trans.getLetter(), trans.getSucc()) != Validity.VALID) {
+					invalid++;
+				}
+			}
+			for (final OutgoingReturnTransition<L, IPredicate> trans : proof.returnSuccessors(state)) {
+				triples++;
+				if (checker.checkReturn(state, trans.getHierPred(), (IReturnAction) trans.getLetter(),
+						trans.getSucc()) != Validity.VALID) {
+					invalid++;
+				}
+			}
+		}
+		checker.releaseLock();
+		if (invalid > 0) {
+			mLogger.warn("TA worker: %d of %d triple(s) of the proof of the escalated strategy are not valid, checking "
+					+ "with %s again", invalid, triples, mPref.getRefinementStrategy());
+			return false;
+		}
+		return true;
 	}
 
 	/**

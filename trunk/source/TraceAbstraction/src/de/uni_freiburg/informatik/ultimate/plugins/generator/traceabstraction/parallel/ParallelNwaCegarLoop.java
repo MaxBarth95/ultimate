@@ -656,7 +656,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
 					transferUtils, invariantSink(interpolantsFeedInvariantSupplier()),
 					mInvariantSupplier == null || !mPref.taUsesInvariants() ? null
-							: mInvariantSupplier.subscribeForTa(freshToolKit.getManagedScript()));
+							: mInvariantSupplier.subscribeForTa(freshToolKit.getManagedScript()),
+					mPref.getTaEscalationThreshold() == 0 ? null
+							: new TaCheckAndRefinementPreferences<>(getServices(), mPref, mPref.interpolation(),
+									mSimplificationTechnique, freshToolKit, predicateFactory,
+									new WorkerIcfgView<>(mIcfg, freshToolKit)));
 		case VALUE_ANALYSIS:
 			return new ValueAnalysisWorkerThread<>(mLogger, mPref, iterationServices, freshToolKit, predicateFactory,
 					taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata, this, mWorkerResultQueue,
