@@ -27,6 +27,8 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -54,6 +56,7 @@ import de.uni_freiburg.informatik.ultimate.core.lib.exceptions.TaskCanceledExcep
 import de.uni_freiburg.informatik.ultimate.core.lib.exceptions.ToolchainCanceledException;
 import de.uni_freiburg.informatik.ultimate.core.lib.results.UnprovabilityReason;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
+import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressMonitorService;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
 import de.uni_freiburg.informatik.ultimate.core.model.translation.IProgramExecution;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
@@ -83,6 +86,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.TermDomainOperationProvider;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.quantifier.QuantifierUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils.SimplificationTechnique;
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.Counterexample;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.interpolant.QualifiedTracePredicates;
@@ -302,26 +306,38 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			mLogger.info("TA worker: path program seen %d time(s), refining with %s", task.getPathProgramCount(),
 					mPref.getTaEscalationStrategy());
 		}
-		ITARefinementStrategy<L> strategy = setUpStrategy(counterexample, escalate);
+		// The escalated strategy gets a time limit of its own: it may take long and still give no usable proof.
+		final IUltimateServiceProvider services = escalate ? escalationServices() : getServices();
+		ITARefinementStrategy<L> strategy = setUpStrategy(counterexample, escalate, services);
 		Pair<LBool, IProgramExecution<L, Term>> isCexResult;
 		try {
-			isCexResult = isCounterexampleFeasible(strategy);
+			isCexResult = isCounterexampleFeasible(strategy, services);
 		} catch (final ToolchainCanceledException e) {
-			throw e;
+			// Only the escalated strategy's own limit is handled here, the worker's deadline ends the task.
+			if (!escalate || mMainThread.isShuttingDown()
+					|| !getServices().getProgressMonitorService().continueProcessing()) {
+				throw e;
+			}
+			checkUnlockedAfterEscalation(e);
+			mLogger.info("TA worker: escalated strategy exceeded its time limit of %d s",
+					mPref.getTaEscalationTimeLimit());
+			isCexResult = new Pair<>(LBool.UNKNOWN, null);
 		} catch (final RuntimeException | AssertionError e) {
 			if (!escalate || mMainThread.isShuttingDown()) {
 				throw e;
 			}
-			if (mCfgSmtToolkit.getManagedScript().isLocked()) {
-				// Whoever held the lock is gone, so nobody can use this worker's script any more.
-				throw new IllegalStateException("the escalated strategy failed and left the script locked", e);
-			}
+			checkUnlockedAfterEscalation(e);
 			mLogger.warn("TA worker: escalated strategy failed (%s)", e);
+			if (mLogger.isDebugEnabled()) {
+				final StringWriter stack = new StringWriter();
+				e.printStackTrace(new PrintWriter(stack));
+				mLogger.debug("TA worker: the escalated strategy failed at %s", stack);
+			}
 			isCexResult = new Pair<>(LBool.UNKNOWN, null);
 		}
 		if (escalate && !isTrustworthy(isCexResult.getFirst())) {
-			strategy = setUpStrategy(counterexample, false);
-			isCexResult = isCounterexampleFeasible(strategy);
+			strategy = setUpStrategy(counterexample, false, getServices());
+			isCexResult = isCounterexampleFeasible(strategy, getServices());
 		}
 		if (isCexResult.getFirst() == LBool.UNSAT) {
 			submitInterpolants();
@@ -456,13 +472,36 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	 * Warning, we have shared (read and write) access to the PathProgramCache here. But the PathProgramCache uses
 	 * thread save lists and maps.
 	 */
-	private ITARefinementStrategy<L> setUpStrategy(final Counterexample<L> counterexample, final boolean escalate) {
+	/**
+	 * @return the services of the task, with the time limit of the escalated strategy if there is one
+	 */
+	private IUltimateServiceProvider escalationServices() {
+		final IUltimateServiceProvider services = getServices();
+		final int seconds = mPref.getTaEscalationTimeLimit();
+		if (seconds <= 0) {
+			return services;
+		}
+		final IProgressMonitorService monitor = services.getProgressMonitorService();
+		return monitor.registerChildTimer(services, monitor.getChildTimer(seconds * 1000L));
+	}
+
+	/**
+	 * A failed escalated strategy may have left the worker's script locked; then nobody can use it any more.
+	 */
+	private void checkUnlockedAfterEscalation(final Throwable failure) {
+		if (mCfgSmtToolkit.getManagedScript().isLocked()) {
+			throw new IllegalStateException("the escalated strategy failed and left the script locked", failure);
+		}
+	}
+
+	private ITARefinementStrategy<L> setUpStrategy(final Counterexample<L> counterexample, final boolean escalate,
+			final IUltimateServiceProvider services) {
 		final RefinementStrategy strategyType =
 				escalate ? mPref.getTaEscalationStrategy() : mPref.getRefinementStrategy();
 		mStrategyFactory = new StrategyFactory<>(mLogger, mPref,
 				escalate ? mEscalationPrefs : mTaCheckAndRefinementPrefs, mCfgSmtToolkit, mPredicateFactory,
 				mPredicateFactoryInterpolantAutomata, mMainThread.mTransitionClazz, mProgramCache);
-		return mStrategyFactory.constructStrategy(getServices(), counterexample, mAbstraction,
+		return mStrategyFactory.constructStrategy(services, counterexample, mAbstraction,
 				new SubtaskIterationIdentifier(mMainThread.mTaskIdentifier, mIteration),
 				mPredicateFactoryInterpolantAutomata, getPreconditionProvider(), getPostconditionProvider(),
 				strategyType);
@@ -484,7 +523,9 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	 * Whether the result of an escalated strategy can be used. The escalated strategies are less tried than the usual
 	 * ones, and the triples of their infeasibility proof go into the cache of the Hoare triple checker unchecked. So
 	 * only an infeasibility proof whose every triple is valid is kept; a feasible or unknown counterexample, or a
-	 * proof with an invalid triple, is left to the usual strategy.
+	 * proof with an invalid triple, is left to the usual strategy. So is a proof with a quantified interpolant, e.g.
+	 * from a loop acceleration of accelerated interpolation: every Hoare triple check of the generalization, of later
+	 * refinements and of the invariant supplier that involves it gets much harder.
 	 */
 	private boolean isTrustworthy(final LBool feasibility) {
 		if (feasibility != LBool.UNSAT) {
@@ -493,6 +534,13 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			return false;
 		}
 		final NestedWordAutomaton<L, IPredicate> proof = mRefinementResult.getInfeasibilityProof();
+		final long quantified =
+				proof.getStates().stream().filter(p -> !QuantifierUtils.isQuantifierFree(p.getFormula())).count();
+		if (quantified > 0) {
+			mLogger.info("TA worker: %d of %d interpolant(s) of the escalated strategy are quantified, checking with %s "
+					+ "again", quantified, proof.getStates().size(), mPref.getRefinementStrategy());
+			return false;
+		}
 		final MonolithicHoareTripleChecker checker = new MonolithicHoareTripleChecker(mCfgSmtToolkit);
 		int triples = 0;
 		int invalid = 0;
@@ -557,7 +605,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	protected Pair<LBool, IProgramExecution<L, Term>>
-			isCounterexampleFeasible(final ITARefinementStrategy<L> strategy) {
+			isCounterexampleFeasible(final ITARefinementStrategy<L> strategy,
+			final IUltimateServiceProvider services) {
 		try {
 			if (mPref.hasLimitPathProgramCount() && mPref.getLimitPathProgramCount() < mStrategyFactory
 					.getPathProgramCache().getPathProgramCount(mCounterexample.getWord())) {
@@ -566,7 +615,7 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			}
 
 			final TraceAbstractionRefinementEngine<L> refinementEngine =
-					new TraceAbstractionRefinementEngine<>(getServices(), mLogger, strategy);
+					new TraceAbstractionRefinementEngine<>(services, mLogger, strategy);
 			mRefinementResult = refinementEngine.getResult();
 
 		} catch (final ToolchainCanceledException | SMTLIBException tce) {

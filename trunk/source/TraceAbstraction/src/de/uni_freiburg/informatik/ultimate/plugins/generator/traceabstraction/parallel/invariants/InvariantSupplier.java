@@ -56,6 +56,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.TermTransferrer;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.quantifier.QuantifierUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.TermClassifier;
 import de.uni_freiburg.informatik.ultimate.logic.Rational;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
@@ -670,7 +671,9 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	}
 
 	/**
-	 * Adds {@code candidate} to {@code candidates} unless it is trivial, known, tried before or not expressible.
+	 * Adds {@code candidate} to {@code candidates} unless it is trivial, known, tried before, not expressible or
+	 * quantified. A quantified invariant, e.g. from the interpolants of accelerated interpolation, would make every
+	 * query that assumes it, in TA workers and in k-induction, much harder.
 	 *
 	 * @return whether it was added
 	 */
@@ -680,7 +683,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 		if (SmtUtils.isTrueLiteral(candidate) || isKnown(location, candidate) || !tried.add(candidate)) {
 			return false;
 		}
-		if (!mChecker.isExpressible(candidate)) {
+		if (!mChecker.isExpressible(candidate) || !QuantifierUtils.isQuantifierFree(candidate)) {
 			return false;
 		}
 		candidates.computeIfAbsent(location, x -> new LinkedHashSet<>()).add(candidate);

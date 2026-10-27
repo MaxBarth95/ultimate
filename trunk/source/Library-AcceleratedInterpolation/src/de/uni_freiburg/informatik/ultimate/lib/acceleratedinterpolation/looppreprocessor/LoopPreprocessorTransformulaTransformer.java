@@ -126,8 +126,8 @@ public class LoopPreprocessorTransformulaTransformer {
 
 		final List<Term> result = new ArrayList<>();
 		if (modTfTransformed != null) {
-			final ApplicationTerm modAppTermTransformed = (ApplicationTerm) modTfTransformed.getFormula();
-			for (final Term param : modAppTermTransformed.getParameters()) {
+			// After the simplification the formula need not be a disjunction, it may e.g. be a single literal.
+			for (final Term param : SmtUtils.getDisjuncts(modTfTransformed.getFormula())) {
 				if (SmtUtils.extractApplicationTerms("mod", param, false).isEmpty()) {
 					result.add(param);
 				}

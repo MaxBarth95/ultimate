@@ -126,6 +126,7 @@ public final class TAPreferences {
 	private final boolean mInvariantInterpolantShapes;
 	private final int mTaEscalationThreshold;
 	private final RefinementStrategy mTaEscalationStrategy;
+	private final int mTaEscalationTimeLimit;
 	private final boolean mValueAnalysisWorker;
 	private final ValueAnalysisSearch mValueAnalysisSearch;
 	private final int mValueAnalysisStateBudget;
@@ -282,6 +283,8 @@ public final class TAPreferences {
 		mTaEscalationThreshold = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_TA_ESCALATION_THRESHOLD);
 		mTaEscalationStrategy = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_TA_ESCALATION_STRATEGY,
 				RefinementStrategy.class);
+		mTaEscalationTimeLimit =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_TA_ESCALATION_TIME_LIMIT);
 		mValueAnalysisWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_WORKER);
 		mValueAnalysisSearch = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SEARCH,
 				ValueAnalysisSearch.class);
@@ -874,6 +877,13 @@ public final class TAPreferences {
 	 */
 	public RefinementStrategy getTaEscalationStrategy() {
 		return mTaEscalationStrategy;
+	}
+
+	/**
+	 * @return after how many seconds a TA worker gives up its escalated strategy, 0 if never
+	 */
+	public int getTaEscalationTimeLimit() {
+		return mTaEscalationTimeLimit;
 	}
 
 	/**

@@ -729,6 +729,13 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "e.g. one that computes loop invariants of the path program.";
 	private static final RefinementStrategy DEF_TA_ESCALATION_STRATEGY = RefinementStrategy.ACCELERATED_INTERPOLATION;
 
+	public static final String LABEL_TA_ESCALATION_TIME_LIMIT =
+			"TA workers: time limit of the escalated refinement strategy in seconds";
+	private static final String DESC_TA_ESCALATION_TIME_LIMIT =
+			"If the escalated refinement strategy of a TA worker has not answered within this time, the worker checks "
+					+ "the counterexample with its usual strategy instead. 0 for no limit.";
+	private static final int DEF_TA_ESCALATION_TIME_LIMIT = 5;
+
 	public static final String LABEL_VALUE_ANALYSIS_WORKER = "Value analysis worker in Parallel Trace Abstraction";
 	private static final String DESC_VALUE_ANALYSIS_WORKER =
 			"Runs an additional worker that executes the program concretely, without SMT solver calls, to find "
@@ -1135,6 +1142,9 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						new IUltimatePreferenceItemValidator.IntegerValidator(0, 100000)),
 				new UltimatePreferenceItem<>(LABEL_TA_ESCALATION_STRATEGY, DEF_TA_ESCALATION_STRATEGY,
 						DESC_TA_ESCALATION_STRATEGY, PreferenceType.Combo, RefinementStrategy.values()),
+				new UltimatePreferenceItem<>(LABEL_TA_ESCALATION_TIME_LIMIT, DEF_TA_ESCALATION_TIME_LIMIT,
+						DESC_TA_ESCALATION_TIME_LIMIT, PreferenceType.Integer,
+						new IUltimatePreferenceItemValidator.IntegerValidator(0, 100000)),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_WORKER, DEF_VALUE_ANALYSIS_WORKER,
 						DESC_VALUE_ANALYSIS_WORKER, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_SEARCH, DEF_VALUE_ANALYSIS_SEARCH,

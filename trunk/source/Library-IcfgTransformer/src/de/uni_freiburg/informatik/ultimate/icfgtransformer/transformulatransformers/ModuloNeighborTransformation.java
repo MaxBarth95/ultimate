@@ -249,7 +249,14 @@ public class ModuloNeighborTransformation extends TransitionPreprocessor {
 			term = SmtUtils.or(script, cases);
 
 		}
-		term = SmtUtils.simplify(mgdScript, term, mServices, SimplificationTechnique.SIMPLIFY_DDA);
+		// The simplification locks the script itself and asserts that nobody else holds the lock. Our scope, in which
+		// MODULO_REPLACEMENT is declared, stays open meanwhile; the simplification pops whatever it pushes.
+		mgdScript.unlock(this);
+		try {
+			term = SmtUtils.simplify(mgdScript, term, mServices, SimplificationTechnique.SIMPLIFY_DDA);
+		} finally {
+			mgdScript.lock(this);
+		}
 
 		while (true) {
 			final Set<ApplicationTerm> auxModTerms = SmtUtils.extractApplicationTerms(MODULO_REPLACEMENT, term, false);

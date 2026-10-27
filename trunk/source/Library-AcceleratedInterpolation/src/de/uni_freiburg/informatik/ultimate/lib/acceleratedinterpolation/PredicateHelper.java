@@ -31,6 +31,7 @@ package de.uni_freiburg.informatik.ultimate.lib.acceleratedinterpolation;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -53,6 +54,7 @@ import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils.SimplificationTechnique;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.Substitution;
+import de.uni_freiburg.informatik.ultimate.logic.QuantifiedFormula;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 
@@ -148,7 +150,9 @@ public class PredicateHelper<LETTER extends IIcfgTransition<?>> {
 			subMap.put(inVar.getValue(), inVar.getKey().getTermVariable());
 			inVars.put(inVar.getKey(), inVar.getKey().getTermVariable());
 		}
-		return Substitution.apply(mScript, subMap, tTerm);
+		final Term substituted = Substitution.apply(mScript, subMap, tTerm);
+		// The auxiliary variables are no program variables, but a predicate may only mention program variables.
+		return SmtUtils.quantifier(mScript.getScript(), QuantifiedFormula.EXISTS, t.getAuxVars(), substituted);
 	}
 
 	/**
@@ -195,7 +199,16 @@ public class PredicateHelper<LETTER extends IIcfgTransition<?>> {
 		final TransFormulaBuilder tfb = new TransFormulaBuilder(inVars, outVars, true, Collections.emptySet(), true,
 				Collections.emptySet(), false);
 		tfb.setFormula(newTerm);
-		tfb.addAuxVarsButRenameToFreshCopies(tf.getAuxVars(), mScript);
+		// A variable of the formula that is neither an in- nor an out-variable is existentially quantified, like an
+		// auxiliary one. The accelerators keep the auxiliary variables of the loop (e.g. a nondeterministic value in a
+		// guard) in their result without declaring them; left undeclared, they are open terms in the trace check.
+		final Set<TermVariable> auxVars = new HashSet<>(tf.getAuxVars());
+		for (final TermVariable tv : newTerm.getFreeVars()) {
+			if (!inVars.containsValue(tv) && !outVars.containsValue(tv)) {
+				auxVars.add(tv);
+			}
+		}
+		tfb.addAuxVarsButRenameToFreshCopies(auxVars, mScript);
 		tfb.setInfeasibility(Infeasibility.NOT_DETERMINED);
 		return tfb.finishConstruction(mScript);
 	}
