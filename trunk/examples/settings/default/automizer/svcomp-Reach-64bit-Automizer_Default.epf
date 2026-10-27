@@ -91,3 +91,4 @@ file_export_version=3.0
 /instance/de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction/TA\ workers\:\ escalated\ refinement\ strategy=ACCELERATED_INTERPOLATION
 /instance/de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction/Invariant\ supplier\:\ k\ of\ the\ k-induction\ for\ candidates\ that\ are\ not\ inductive=3
 /instance/de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction/Invariant\ supplier\:\ generalize\ the\ constants\ of\ interpolants\ across\ traces=true
+/instance/de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction/Invariant\ supplier\:\ hull\ facets,\ octagon\ bounds\ and\ congruences\ of\ sampled\ states=true

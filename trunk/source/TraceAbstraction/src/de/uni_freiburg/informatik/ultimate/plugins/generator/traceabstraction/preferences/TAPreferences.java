@@ -119,6 +119,7 @@ public final class TAPreferences {
 	private final boolean mInvariantSampling;
 	private final int mInvariantSamplingDepth;
 	private final int mInvariantSamplesPerDepth;
+	private final boolean mInvariantSampleRelations;
 	private final boolean mValueAnalysisSamples;
 	private final int mInvariantKInductiveDepth;
 	private final boolean mInvariantInterpolantShapes;
@@ -268,6 +269,8 @@ public final class TAPreferences {
 		mInvariantSamplingDepth = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLING_DEPTH);
 		mInvariantSamplesPerDepth =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLES_PER_DEPTH);
+		mInvariantSampleRelations =
+				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLE_RELATIONS);
 		mValueAnalysisSamples = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SAMPLES);
 		mInvariantKInductiveDepth =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_K_INDUCTIVE_DEPTH);
@@ -817,6 +820,13 @@ public final class TAPreferences {
 	 */
 	public int getInvariantSamplesPerDepth() {
 		return mInvariantSamplesPerDepth;
+	}
+
+	/**
+	 * @return whether the supplier also proposes hull facets, octagon bounds and congruences of the sampled states
+	 */
+	public boolean invariantSampleRelations() {
+		return mInvariantSampleRelations;
 	}
 
 	/**

@@ -31,6 +31,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -53,6 +54,10 @@ import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
  * Reachable states at the loop heads of the program, and the candidate invariants they suggest: the linear equalities
  * of their affine hull, the bounds of each variable and the orderings between two variables. Only integer variables.
  * <p>
+ * With relations enabled, also: per pair of variables the facets of the convex hull of the projected states (e.g.
+ * {@code x <= 3i} for states where x grows by 1 or 3 with i) and the octagon bounds {@code a + b} and {@code a - b};
+ * per variable the congruence {@code v mod m = r} with m the greatest common divisor of the differences of its values.
+ * <p>
  * A state may give values to only some variables, e.g. one taken from an interpolant that fixes them. The candidates
  * are computed per set of variables, from every state that gives a value to all of them.
  * <p>
@@ -73,13 +78,26 @@ final class SampleCandidates {
 	private static final int MAX_ORDERED_VARIABLES = 8;
 	/** Sets of variables with more variables than this get no affine hull, which would be costly and overfitted. */
 	private static final int MAX_HULL_DIMENSION = 32;
+	/** Facets with a larger coefficient are dropped: they rarely are invariants and often only fit the states seen. */
+	private static final int MAX_FACET_COEFFICIENT = 16;
+	/** Congruences need at least that many states, fewer have common divisors by chance. */
+	private static final int MIN_CONGRUENCE_POINTS = 4;
+	/** The largest modulus of a congruence. */
+	private static final int MAX_MODULUS = 64;
 
 	private final Script mScript;
+	private final boolean mRelations;
 	private final Map<IcfgLocation, Set<Map<TermVariable, Rational>>> mPoints = new HashMap<>();
 	private final Set<IcfgLocation> mChanged = new LinkedHashSet<>();
+	private final Map<IcfgLocation, Set<Term>> mProposed = new HashMap<>();
 
-	SampleCandidates(final Script script) {
+	/**
+	 * @param relations
+	 *            whether to also propose hull facets, octagon bounds and congruences
+	 */
+	SampleCandidates(final Script script, final boolean relations) {
 		mScript = script;
+		mRelations = relations;
 	}
 
 	/**
@@ -119,15 +137,18 @@ final class SampleCandidates {
 	}
 
 	/**
-	 * @return the candidate invariants of {@code location}, most promising first: equalities, lower bounds, orderings,
-	 *         upper bounds
+	 * @return the candidate invariants of {@code location} not proposed before, most promising first: equalities,
+	 *         congruences, lower bounds, orderings, hull facets, upper bounds, octagon bounds
 	 */
 	Set<Term> candidates(final IcfgLocation location) {
 		final List<Map<TermVariable, Rational>> points = new ArrayList<>(mPoints.getOrDefault(location, Set.of()));
 		final Set<Term> equalities = new LinkedHashSet<>();
+		final Set<Term> congruences = new LinkedHashSet<>();
 		final Set<Term> lower = new LinkedHashSet<>();
 		final Set<Term> orderings = new LinkedHashSet<>();
+		final Set<Term> facets = new LinkedHashSet<>();
 		final Set<Term> upper = new LinkedHashSet<>();
+		final Set<Term> octagons = new LinkedHashSet<>();
 		final Set<Set<TermVariable>> variableSets = new LinkedHashSet<>();
 		for (final Map<TermVariable, Rational> point : points) {
 			variableSets.add(point.keySet());
@@ -143,17 +164,161 @@ final class SampleCandidates {
 			}
 			addEqualities(variables, projected, equalities);
 			addBoundsAndOrderings(variables, projected, lower, orderings, upper);
+			if (mRelations) {
+				addCongruences(variables, projected, congruences);
+				addFacetsAndOctagons(variables, projected, facets, octagons);
+			}
 		}
+		// What was proposed before is known to the supplier already, so the limit only counts new candidates.
+		final Set<Term> proposed = mProposed.computeIfAbsent(location, x -> new HashSet<>());
 		final Set<Term> result = new LinkedHashSet<>();
-		for (final Set<Term> kind : List.of(equalities, lower, orderings, upper)) {
+		for (final Set<Term> kind : List.of(equalities, congruences, lower, orderings, facets, upper, octagons)) {
 			for (final Term candidate : kind) {
 				if (result.size() >= MAX_CANDIDATES) {
 					return result;
 				}
-				result.add(candidate);
+				if (proposed.add(candidate)) {
+					result.add(candidate);
+				}
 			}
 		}
 		return result;
+	}
+
+	/** Proposes {@code v mod m = r} for every variable whose values differ by multiples of some {@code m > 1}. */
+	private void addCongruences(final List<TermVariable> variables, final List<Rational[]> points,
+			final Set<Term> congruences) {
+		if (points.size() < MIN_CONGRUENCE_POINTS) {
+			return;
+		}
+		for (int i = 0; i < variables.size(); i++) {
+			final BigInteger first = points.get(0)[i].numerator();
+			BigInteger gcd = BigInteger.ZERO;
+			for (final Rational[] point : points) {
+				gcd = gcd.gcd(point[i].numerator().subtract(first));
+			}
+			if (gcd.compareTo(BigInteger.ONE) <= 0 || gcd.compareTo(BigInteger.valueOf(MAX_MODULUS)) > 0) {
+				continue;
+			}
+			final TermVariable variable = variables.get(i);
+			final Term modulus = constant(Rational.valueOf(gcd, BigInteger.ONE), variable.getSort());
+			final Term remainder = constant(Rational.valueOf(first.mod(gcd), BigInteger.ONE), variable.getSort());
+			congruences.add(relation(RelationSymbol.EQ, SmtUtils.mod(mScript, variable, modulus), remainder));
+		}
+	}
+
+	/**
+	 * Proposes, for every pair of variables that take several values, the facets of the convex hull of the states
+	 * projected to the pair that are not parallel to an axis, and the bounds of their sum and difference.
+	 */
+	private void addFacetsAndOctagons(final List<TermVariable> variables, final List<Rational[]> points,
+			final Set<Term> facets, final Set<Term> octagons) {
+		final List<Integer> varying = new ArrayList<>();
+		for (int i = 0; i < variables.size() && varying.size() < MAX_ORDERED_VARIABLES; i++) {
+			final int index = i;
+			if (points.stream().map(p -> p[index]).distinct().count() > 1) {
+				varying.add(i);
+			}
+		}
+		for (int a = 0; a < varying.size(); a++) {
+			for (int b = a + 1; b < varying.size(); b++) {
+				final int i = varying.get(a);
+				final int j = varying.get(b);
+				final TermVariable x = variables.get(i);
+				final TermVariable y = variables.get(j);
+				final Set<List<Rational>> distinct = new LinkedHashSet<>();
+				for (final Rational[] point : points) {
+					distinct.add(List.of(point[i], point[j]));
+				}
+				addFacets(x, y, convexHull(new ArrayList<>(distinct)), facets);
+				Rational minSum = null;
+				Rational maxSum = null;
+				Rational minDifference = null;
+				Rational maxDifference = null;
+				for (final List<Rational> point : distinct) {
+					final Rational sum = point.get(0).add(point.get(1));
+					final Rational difference = point.get(0).sub(point.get(1));
+					minSum = minSum == null || sum.compareTo(minSum) < 0 ? sum : minSum;
+					maxSum = maxSum == null || sum.compareTo(maxSum) > 0 ? sum : maxSum;
+					minDifference = minDifference == null || difference.compareTo(minDifference) < 0 ? difference
+							: minDifference;
+					maxDifference = maxDifference == null || difference.compareTo(maxDifference) > 0 ? difference
+							: maxDifference;
+				}
+				final Term sum = SmtUtils.sum(mScript, x.getSort(), x, y);
+				final Term difference = SmtUtils.sum(mScript, x.getSort(), x, SmtUtils.mul(mScript, Rational.MONE, y));
+				// A constant sum or difference is an equality of the affine hull.
+				if (!minSum.equals(maxSum)) {
+					octagons.add(relation(RelationSymbol.LEQ, sum, constant(maxSum, x.getSort())));
+					octagons.add(relation(RelationSymbol.GEQ, sum, constant(minSum, x.getSort())));
+				}
+				if (!minDifference.equals(maxDifference)) {
+					octagons.add(relation(RelationSymbol.LEQ, difference, constant(maxDifference, x.getSort())));
+					octagons.add(relation(RelationSymbol.GEQ, difference, constant(minDifference, x.getSort())));
+				}
+			}
+		}
+	}
+
+	/**
+	 * For every edge from p to q of a counterclockwise hull, every point r is on its left:
+	 * {@code dx * (r_y - p_y) - dy * (r_x - p_x) >= 0} with {@code (dx, dy) = q - p}.
+	 */
+	private void addFacets(final TermVariable x, final TermVariable y, final List<List<Rational>> hull,
+			final Set<Term> facets) {
+		if (hull.size() < 3) {
+			return;
+		}
+		for (int k = 0; k < hull.size(); k++) {
+			final List<Rational> p = hull.get(k);
+			final List<Rational> q = hull.get((k + 1) % hull.size());
+			Rational dx = q.get(0).sub(p.get(0));
+			Rational dy = q.get(1).sub(p.get(1));
+			if (dx.signum() == 0 || dy.signum() == 0) {
+				// parallel to an axis: a bound of one variable, proposed already
+				continue;
+			}
+			final Rational gcd = dx.gcd(dy);
+			dx = dx.div(gcd);
+			dy = dy.div(gcd);
+			if (dx.abs().compareTo(Rational.valueOf(MAX_FACET_COEFFICIENT, 1)) > 0
+					|| dy.abs().compareTo(Rational.valueOf(MAX_FACET_COEFFICIENT, 1)) > 0) {
+				continue;
+			}
+			final Term lhs = SmtUtils.sum(mScript, x.getSort(), SmtUtils.mul(mScript, dx, y),
+					SmtUtils.mul(mScript, dy.negate(), x));
+			final Rational rhs = dx.mul(p.get(1)).sub(dy.mul(p.get(0)));
+			facets.add(relation(RelationSymbol.GEQ, lhs, constant(rhs, x.getSort())));
+		}
+	}
+
+	/** @return the vertices of the convex hull of {@code points} in counterclockwise order (monotone chain) */
+	private static List<List<Rational>> convexHull(final List<List<Rational>> points) {
+		points.sort(Comparator.<List<Rational>, Rational> comparing(p -> p.get(0)).thenComparing(p -> p.get(1)));
+		if (points.size() < 3) {
+			return points;
+		}
+		final List<List<Rational>> hull = new ArrayList<>();
+		for (int pass = 0; pass < 2; pass++) {
+			final int start = hull.size();
+			for (int k = 0; k < points.size(); k++) {
+				final List<Rational> point = points.get(pass == 0 ? k : points.size() - 1 - k);
+				while (hull.size() >= start + 2
+						&& cross(hull.get(hull.size() - 2), hull.get(hull.size() - 1), point).signum() <= 0) {
+					hull.remove(hull.size() - 1);
+				}
+				hull.add(point);
+			}
+			// the last point of each chain is the first of the other
+			hull.remove(hull.size() - 1);
+		}
+		return hull;
+	}
+
+	/** @return the cross product of {@code a - o} and {@code b - o}, positive if o, a, b turn counterclockwise */
+	private static Rational cross(final List<Rational> o, final List<Rational> a, final List<Rational> b) {
+		return a.get(0).sub(o.get(0)).mul(b.get(1).sub(o.get(1)))
+				.sub(a.get(1).sub(o.get(1)).mul(b.get(0).sub(o.get(0))));
 	}
 
 	private void addEqualities(final List<TermVariable> variables, final List<Rational[]> points,

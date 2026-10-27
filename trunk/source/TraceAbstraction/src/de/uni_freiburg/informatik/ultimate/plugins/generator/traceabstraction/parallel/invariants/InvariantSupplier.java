@@ -145,8 +145,10 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	 *            how many pc steps the bounded unrollings that sample states take at most
 	 * @param perDepth
 	 *            how many states are sampled per head node and depth
+	 * @param relations
+	 *            whether to also propose hull facets, octagon bounds and congruences of the sampled states
 	 */
-	public record Sampling(int depth, int perDepth) {
+	public record Sampling(int depth, int perDepth, boolean relations) {
 	}
 
 	private record Candidate(IcfgLocation location, Term term) {
@@ -244,7 +246,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 				: new InvariantProbation(logger, mScript, probation.factor(), probation.minimumMillis(),
 						probation.solverTimeoutMillis());
 		mSampling = sampling;
-		mSamples = sampling == null ? null : new SampleCandidates(mScript.getScript());
+		mSamples = sampling == null ? null : new SampleCandidates(mScript.getScript(), sampling.relations());
 		mShapes = interpolantShapes ? new InterpolantShapes(mScript.getScript()) : null;
 	}
 

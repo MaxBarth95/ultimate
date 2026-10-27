@@ -670,6 +670,15 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 			"Invariant supplier: sampled states per loop head and unrolling";
 	private static final int DEF_INVARIANT_SAMPLES_PER_DEPTH = 3;
 
+	public static final String LABEL_INVARIANT_SAMPLE_RELATIONS =
+			"Invariant supplier: hull facets, octagon bounds and congruences of sampled states";
+	private static final String DESC_INVARIANT_SAMPLE_RELATIONS =
+			"Besides the equalities, bounds and orderings of the sampled loop-head states, the invariant supplier also "
+					+ "proposes for every pair of variables the facets of the convex hull of the states (e.g. x <= 3i), "
+					+ "the bounds of their sum and difference, and for every variable the congruence v mod m = r its "
+					+ "values satisfy. Needs the candidates from sampled loop-head states.";
+	private static final boolean DEF_INVARIANT_SAMPLE_RELATIONS = false;
+
 	public static final String LABEL_VALUE_ANALYSIS_SAMPLES =
 			"Value analysis sends loop-head states to the invariant supplier";
 	private static final String DESC_VALUE_ANALYSIS_SAMPLES =
@@ -1101,6 +1110,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						new IUltimatePreferenceItemValidator.IntegerValidator(1, 1000)),
 				new UltimatePreferenceItem<>(LABEL_INVARIANT_SAMPLES_PER_DEPTH, DEF_INVARIANT_SAMPLES_PER_DEPTH,
 						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(1, 1000)),
+				new UltimatePreferenceItem<>(LABEL_INVARIANT_SAMPLE_RELATIONS, DEF_INVARIANT_SAMPLE_RELATIONS,
+						DESC_INVARIANT_SAMPLE_RELATIONS, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_SAMPLES, DEF_VALUE_ANALYSIS_SAMPLES,
 						DESC_VALUE_ANALYSIS_SAMPLES, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_INVARIANT_K_INDUCTIVE_DEPTH, DEF_INVARIANT_K_INDUCTIVE_DEPTH,

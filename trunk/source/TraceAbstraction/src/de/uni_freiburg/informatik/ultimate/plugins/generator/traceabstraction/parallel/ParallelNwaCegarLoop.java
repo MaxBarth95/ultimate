@@ -522,7 +522,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 						invariantTransfer.getWorkerCfgSmtToolKit(), mWorkerResultQueue, this::isShuttingDown,
 						probationSettings(),
 						mPref.invariantSampling() ? new InvariantSupplier.Sampling(mPref.getInvariantSamplingDepth(),
-								mPref.getInvariantSamplesPerDepth()) : null,
+								mPref.getInvariantSamplesPerDepth(), mPref.invariantSampleRelations()) : null,
 						mPref.getInvariantKInductiveDepth(), mPref.invariantInterpolantShapes());
 			} else {
 				invariantTransfer = null;
