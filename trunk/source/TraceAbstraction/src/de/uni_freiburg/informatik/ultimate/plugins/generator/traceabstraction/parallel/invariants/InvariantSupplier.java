@@ -64,6 +64,7 @@ import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.ParallelNwaCegarLoop;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadResult.WorkerType;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.CounterexamplesToInduction;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.InterpolantSequence;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.Sample;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.SamplePoints;
@@ -147,8 +148,11 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	 *            how many states are sampled per head node and depth
 	 * @param relations
 	 *            whether to also propose hull facets, octagon bounds and congruences of the sampled states
+	 * @param counterexamples
+	 *            whether to propose the candidates that exclude a counterexample to induction first, from the
+	 *            supplier's own checks and from k-induction
 	 */
-	public record Sampling(int depth, int perDepth, boolean relations) {
+	public record Sampling(int depth, int perDepth, boolean relations, boolean counterexamples) {
 	}
 
 	private record Candidate(IcfgLocation location, Term term) {
@@ -463,6 +467,11 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			mLogger.info("InvariantSupplier statistics: %d sampled state(s), %d candidate(s) from sampled states, %d "
 					+ "from the conditions of the loops", mSamples.count(), mCandidatesFromSamples,
 					mCandidatesFromGuards);
+			if (mSampling.counterexamples()) {
+				mLogger.info("InvariantSupplier statistics: %d counterexample(s) to induction, %d candidate(s) "
+						+ "proposed first because they exclude one", mSamples.countNegatives(),
+						mSamples.countSeparating());
+			}
 		}
 		if (mShapes != null) {
 			mLogger.info("InvariantSupplier statistics: %d candidate(s) from interpolant shapes", mCandidatesFromShapes);
@@ -489,6 +498,8 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 				sequences++;
 			} else if (message instanceof final SamplePoints points) {
 				takeSamples(points);
+			} else if (message instanceof final CounterexamplesToInduction counterexamples) {
+				takeCounterexamples(counterexamples);
 			}
 		}
 		if (mChecker == null) {
@@ -501,15 +512,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			}
 		}
 		mPendingCandidates.clear();
-		if (mSamples != null) {
-			for (final IcfgLocation location : mSamples.takeChanged()) {
-				for (final Term candidate : mSamples.candidates(location)) {
-					if (offerCandidate(location, candidate, candidates)) {
-						mCandidatesFromSamples++;
-					}
-				}
-			}
-		}
+		offerSampleCandidates(candidates);
 		if (mShapes != null) {
 			for (final IcfgLocation location : mShapes.takeChanged()) {
 				mLogger.info("InvariantSupplier: %d interpolant trend(s) at %s: %s",
@@ -536,17 +539,91 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			checked += size;
 			final int newlyProven = checkAndRemember(round, changed);
 			proven += newlyProven;
-			if (newlyProven == 0) {
+			// What was just proven may be what a rejected candidate was missing (retried at the top), and the
+			// counterexamples to induction of this round point to candidates that are missing.
+			round = new LinkedHashMap<>();
+			if (takeCheckerCounterexamples()) {
+				offerSampleCandidates(round);
+			}
+			if (newlyProven == 0 && count(round) == 0) {
 				break;
 			}
-			// What was just proven may be what a rejected candidate was missing.
-			round = new LinkedHashMap<>();
 		}
 		if (sequences > 0 || checked > 0) {
 			mLogger.info("InvariantSupplier: %d interpolant sequence(s), %d candidate check(s), %d proven, "
 					+ "%d waiting for a retry", sequences, checked, proven, mRetryPool.size());
 		}
 		publish(changed);
+	}
+
+	/** Offers the candidates of the sampled states at the locations that got new states or counterexamples. */
+	private void offerSampleCandidates(final Map<IcfgLocation, Set<Term>> candidates) {
+		if (mSamples == null) {
+			return;
+		}
+		for (final IcfgLocation location : mSamples.takeChanged()) {
+			for (final Term candidate : mSamples.candidates(location)) {
+				if (offerCandidate(location, candidate, candidates)) {
+					mCandidatesFromSamples++;
+				}
+			}
+		}
+	}
+
+	/**
+	 * Takes the counterexamples to induction of the checker's last queries as negative states of the sampled ones.
+	 *
+	 * @return whether there was a new one at a loop head
+	 */
+	private boolean takeCheckerCounterexamples() {
+		if (mSamples == null) {
+			return false;
+		}
+		boolean added = false;
+		for (final Sample state : mChecker.takeCounterexamples()) {
+			added |= addNegative(state.location(), state.values());
+		}
+		return added;
+	}
+
+	/**
+	 * Takes the states of the satisfiable step cases of k-induction as negative states of the sampled ones.
+	 */
+	private void takeCounterexamples(final CounterexamplesToInduction message) {
+		if (mSamples == null) {
+			return;
+		}
+		getChecker();
+		int added = 0;
+		for (final Sample state : message.states()) {
+			final Map<Term, Rational> values = new HashMap<>();
+			for (final Map.Entry<Term, Rational> value : state.values().entrySet()) {
+				values.put(transfer(message.source(), value.getKey()), value.getValue());
+			}
+			if (addNegative(state.location(), values)) {
+				added++;
+			}
+		}
+		mLogger.info("InvariantSupplier: took %d new counterexample(s) to induction from %s", added, message.origin());
+	}
+
+	/**
+	 * Adds a negative state at a loop head, restricted to the sampled variables of the transition system.
+	 *
+	 * @return whether it was new
+	 */
+	private boolean addNegative(final IcfgLocation location, final Map<Term, Rational> values) {
+		if (!mHeadLocations.contains(location)) {
+			return false;
+		}
+		final Map<TermVariable, Rational> point = new LinkedHashMap<>();
+		for (final Map.Entry<Term, Rational> entry : values.entrySet()) {
+			if (entry.getKey() instanceof final TermVariable tv && SampleCandidates.isSampled(tv)
+					&& mChecker.isExpressible(tv)) {
+				point.put(tv, entry.getValue());
+			}
+		}
+		return mSamples.addNegative(location, point);
 	}
 
 	private void takeTrusted(final TrustedInvariants message, final Set<IcfgLocation> changed) {
@@ -919,6 +996,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 					PcTransitionSystemFactory.build(mServices, mLogger, mCsToolkit, mScript, mAbstraction,
 						CounterSort.forProgram(mScript.getScript(), mCsToolkit));
 			mChecker = new InductivenessChecker(mLogger, mScript, encoding.system());
+			mChecker.recordCounterexamples(mSampling != null && mSampling.counterexamples());
 			final Set<IcfgLocation> taLocations = new LinkedHashSet<>();
 			for (final CallNode<IPredicate> head : encoding.system().getHeadNodes().keySet()) {
 				taLocations.add(locationOf(head.getState()));

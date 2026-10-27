@@ -99,7 +99,9 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pa
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.automataminimization.AutomataMinimization.AutomataMinimizationTimeout;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.IInvariantSink;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantSubscription;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantSupplier;
+import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.CallNode;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.IInvariantSupplier;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.kinduction.KInductionWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.valueanalysis.ValueAnalysisWorkerThread;
@@ -522,7 +524,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 						invariantTransfer.getWorkerCfgSmtToolKit(), mWorkerResultQueue, this::isShuttingDown,
 						probationSettings(),
 						mPref.invariantSampling() ? new InvariantSupplier.Sampling(mPref.getInvariantSamplingDepth(),
-								mPref.getInvariantSamplesPerDepth(), mPref.invariantSampleRelations()) : null,
+								mPref.getInvariantSamplesPerDepth(), mPref.invariantSampleRelations(),
+								mPref.invariantCounterexamples()) : null,
 						mPref.getInvariantKInductiveDepth(), mPref.invariantInterpolantShapes());
 			} else {
 				invariantTransfer = null;
@@ -595,6 +598,21 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	/**
+	 * @return the invariants of the supplier for a k-induction worker, which reports the states of its satisfiable step
+	 *         cases back if the supplier uses counterexamples to induction
+	 */
+	private IInvariantSupplier<CallNode<IPredicate>> kInductionInvariants(final ManagedScript script) {
+		if (mInvariantSupplier == null) {
+			return IInvariantSupplier.none();
+		}
+		final InvariantSubscription subscription = mInvariantSupplier.subscribe(script);
+		if (mPref.invariantSampling() && mPref.invariantCounterexamples()) {
+			subscription.reportCounterexamplesTo(mInvariantSupplier.sink());
+		}
+		return subscription;
+	}
+
+	/**
 	 * The initial abstraction, as an automaton of the invariant supplier's script.
 	 */
 	private INestedWordAutomaton<L, IPredicate>
@@ -649,8 +667,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			return new KInductionWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
 					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,
 					stateFactoryForRefinement, mComputeHoareAnnotation, this, mWorkerResultQueue, mWorkerTaskQueue,
-					transferUtils, mTaskIdentifier, mInvariantSupplier == null ? IInvariantSupplier.none()
-							: mInvariantSupplier.subscribe(freshToolKit.getManagedScript()));
+					transferUtils, mTaskIdentifier, kInductionInvariants(freshToolKit.getManagedScript()));
 		case TA:
 			return new CegarNwaWorkerThread<>(mLogger, mPref, id, mResultBuilder, iterationServices, freshToolKit,
 					predicateFactory, taCheckAndRefinementPrefs, predicateFactoryInterpolantAutomata,

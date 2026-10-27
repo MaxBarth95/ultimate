@@ -27,9 +27,11 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -38,11 +40,16 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.BooleanSupplier;
 
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicate;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.TermTransferrer;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
+import de.uni_freiburg.informatik.ultimate.logic.Rational;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.CounterexamplesToInduction;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.Sample;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.CallNode;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.IInvariantSupplier;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.KInductionQuery.Kind;
@@ -94,6 +101,8 @@ public final class InvariantSubscription implements IInvariantSupplier<CallNode<
 	// term of mSource -> its copy in mTarget, so that an unchanged invariant is always the very same object
 	private final Map<Term, Term> mTransferred = new HashMap<>();
 	private TermTransferrer mTransferrer;
+	// where the states of satisfiable step cases go, or null if nobody wants them
+	private volatile IInvariantSink mCounterexampleSink;
 
 	/**
 	 * @param mayInterrupt
@@ -103,6 +112,44 @@ public final class InvariantSubscription implements IInvariantSupplier<CallNode<
 		mSource = source;
 		mTarget = target;
 		mMayInterrupt = mayInterrupt;
+	}
+
+	/**
+	 * Lets k-induction report the states of its satisfiable step cases to {@code sink}, as
+	 * {@link CounterexamplesToInduction} over the program variables of {@code target}.
+	 */
+	public void reportCounterexamplesTo(final IInvariantSink sink) {
+		mCounterexampleSink = sink;
+	}
+
+	@Override
+	public boolean wantsCounterexamplesToInduction() {
+		return mCounterexampleSink != null;
+	}
+
+	@Override
+	public void counterexampleToInduction(final int k,
+			final List<Map.Entry<CallNode<IPredicate>, Map<IProgramVar, Term>>> states) {
+		final IInvariantSink sink = mCounterexampleSink;
+		if (sink == null) {
+			return;
+		}
+		final List<Sample> samples = new ArrayList<>();
+		for (final Map.Entry<CallNode<IPredicate>, Map<IProgramVar, Term>> state : states) {
+			final Map<Term, Rational> values = new HashMap<>();
+			for (final Map.Entry<IProgramVar, Term> value : state.getValue().entrySet()) {
+				final Rational literal = SmtUtils.tryToConvertToLiteral(value.getValue());
+				if (literal != null) {
+					values.put(value.getKey().getTermVariable(), literal);
+				}
+			}
+			if (!values.isEmpty()) {
+				samples.add(new Sample(InvariantSupplier.locationOf(state.getKey().getState()), values));
+			}
+		}
+		if (!samples.isEmpty()) {
+			sink.submit(new CounterexamplesToInduction(mTarget, samples, "k-induction at k=" + k));
+		}
 	}
 
 	@Override

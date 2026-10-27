@@ -679,6 +679,15 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "values satisfy. Needs the candidates from sampled loop-head states.";
 	private static final boolean DEF_INVARIANT_SAMPLE_RELATIONS = false;
 
+	public static final String LABEL_INVARIANT_COUNTEREXAMPLES =
+			"Invariant supplier: candidates that exclude counterexamples to induction first";
+	private static final String DESC_INVARIANT_COUNTEREXAMPLES =
+			"The invariant supplier keeps the states that refute its candidates in an inductiveness check, and the "
+					+ "states of the satisfiable step cases of k-induction. Among the candidates from sampled states, "
+					+ "it proposes the ones that exclude such a state first, beyond the usual limit. Needs the "
+					+ "candidates from sampled loop-head states.";
+	private static final boolean DEF_INVARIANT_COUNTEREXAMPLES = false;
+
 	public static final String LABEL_VALUE_ANALYSIS_SAMPLES =
 			"Value analysis sends loop-head states to the invariant supplier";
 	private static final String DESC_VALUE_ANALYSIS_SAMPLES =
@@ -1112,6 +1121,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(1, 1000)),
 				new UltimatePreferenceItem<>(LABEL_INVARIANT_SAMPLE_RELATIONS, DEF_INVARIANT_SAMPLE_RELATIONS,
 						DESC_INVARIANT_SAMPLE_RELATIONS, PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_INVARIANT_COUNTEREXAMPLES, DEF_INVARIANT_COUNTEREXAMPLES,
+						DESC_INVARIANT_COUNTEREXAMPLES, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_SAMPLES, DEF_VALUE_ANALYSIS_SAMPLES,
 						DESC_VALUE_ANALYSIS_SAMPLES, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_INVARIANT_K_INDUCTIVE_DEPTH, DEF_INVARIANT_K_INDUCTIVE_DEPTH,

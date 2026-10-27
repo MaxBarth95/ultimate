@@ -45,10 +45,12 @@ import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.PureSubstitution;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtSortUtils;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
+import de.uni_freiburg.informatik.ultimate.logic.Rational;
 import de.uni_freiburg.informatik.ultimate.logic.Script;
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.invariants.InvariantMessage.Sample;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.CallNode;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.IndexedConstantVars;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.PcTransitionSystem;
@@ -100,6 +102,8 @@ final class InductivenessChecker {
 	private final IndexedConstantVars mConstants;
 	// step(i), the relation between step i and i + 1, built on demand
 	private final List<Term> mSteps = new ArrayList<>();
+	private boolean mRecordCounterexamples;
+	private final List<Sample> mCounterexamples = new ArrayList<>();
 
 	InductivenessChecker(final ILogger logger, final ManagedScript mgdScript,
 			final PcTransitionSystem<CallNode<IPredicate>> system) {
@@ -241,6 +245,13 @@ final class InductivenessChecker {
 		while (mSteps.size() < flagged) {
 			mSteps.add(mSystem.step(mSteps.size(), mConstants, mMgdScript));
 		}
+		if (!fromInit && mRecordCounterexamples) {
+			// read by recordCounterexample after the check
+			mConstants.pc(flagged - 1);
+			for (final IProgramVar pv : mSystem.getVars()) {
+				mConstants.var(pv, flagged - 1);
+			}
+		}
 		final List<Term> pre = new ArrayList<>();
 		if (fromInit) {
 			pre.add(SmtUtils.binaryEquality(script, mConstants.pc(0),
@@ -298,12 +309,59 @@ final class InductivenessChecker {
 			mMgdScript.assertTerm(this, SmtUtils.or(script, flags.stream().map(Flag::flag).toList()));
 			final LBool result = mMgdScript.checkSat(this);
 			if (result == LBool.SAT) {
+				if (!fromInit && mRecordCounterexamples) {
+					recordCounterexample(flagged - 1);
+				}
 				dropRefuted(remaining, flags);
 			}
 			return result;
 		} finally {
 			mMgdScript.pop(this, 1);
 		}
+	}
+
+	/**
+	 * Reads the state at step {@code step} of the model of a satisfiable step case, the last one in which every
+	 * candidate held, if it is at a loop head or waypoint: a counterexample to the induction of the candidates.
+	 */
+	private void recordCounterexample(final int step) {
+		final List<Term> queried = new ArrayList<>();
+		queried.add(mConstants.pc(step));
+		for (final IProgramVar pv : mSystem.getVars()) {
+			queried.add(mConstants.var(pv, step));
+		}
+		final Map<Term, Term> model = SmtUtils.getValues(mMgdScript.getScript(), queried);
+		final IcfgLocation location = mLocationOfNode
+				.get(mSystem.getCounterSort().toInt(model.get(mConstants.pc(step)), "pc_" + step));
+		if (location == null) {
+			return;
+		}
+		final Map<Term, Rational> values = new HashMap<>();
+		for (final IProgramVar pv : mSystem.getVars()) {
+			final Rational literal = SmtUtils.tryToConvertToLiteral(model.get(mConstants.var(pv, step)));
+			if (literal != null) {
+				values.put(pv.getTermVariable(), literal);
+			}
+		}
+		mCounterexamples.add(new Sample(location, values));
+	}
+
+	/**
+	 * @param record
+	 *            whether to keep the counterexamples to induction of the queries, see {@link #takeCounterexamples}
+	 */
+	void recordCounterexamples(final boolean record) {
+		mRecordCounterexamples = record;
+	}
+
+	/**
+	 * @return the counterexamples to induction found since the last call: states at a loop head or waypoint in which
+	 *         every candidate held and from which one is violated after a step
+	 */
+	List<Sample> takeCounterexamples() {
+		final List<Sample> result = List.copyOf(mCounterexamples);
+		mCounterexamples.clear();
+		return result;
 	}
 
 	/**

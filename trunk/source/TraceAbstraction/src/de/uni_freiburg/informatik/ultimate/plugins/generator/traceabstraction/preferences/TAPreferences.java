@@ -120,6 +120,7 @@ public final class TAPreferences {
 	private final int mInvariantSamplingDepth;
 	private final int mInvariantSamplesPerDepth;
 	private final boolean mInvariantSampleRelations;
+	private final boolean mInvariantCounterexamples;
 	private final boolean mValueAnalysisSamples;
 	private final int mInvariantKInductiveDepth;
 	private final boolean mInvariantInterpolantShapes;
@@ -271,6 +272,8 @@ public final class TAPreferences {
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLES_PER_DEPTH);
 		mInvariantSampleRelations =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLE_RELATIONS);
+		mInvariantCounterexamples =
+				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_COUNTEREXAMPLES);
 		mValueAnalysisSamples = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SAMPLES);
 		mInvariantKInductiveDepth =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_K_INDUCTIVE_DEPTH);
@@ -827,6 +830,13 @@ public final class TAPreferences {
 	 */
 	public boolean invariantSampleRelations() {
 		return mInvariantSampleRelations;
+	}
+
+	/**
+	 * @return whether the supplier proposes the candidates that exclude a counterexample to induction first
+	 */
+	public boolean invariantCounterexamples() {
+		return mInvariantCounterexamples;
 	}
 
 	/**

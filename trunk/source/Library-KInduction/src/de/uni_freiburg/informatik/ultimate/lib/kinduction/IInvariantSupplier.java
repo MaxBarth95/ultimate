@@ -27,11 +27,14 @@
  */
 package de.uni_freiburg.informatik.ultimate.lib.kinduction;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
 
 import de.uni_freiburg.informatik.ultimate.logic.Script.LBool;
 
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 
@@ -115,6 +118,27 @@ public interface IInvariantSupplier<STATE> {
 	}
 
 	/**
+	 * @return whether k-induction reports the states of its satisfiable step cases, see
+	 *         {@link #counterexampleToInduction}
+	 */
+	default boolean wantsCounterexamplesToInduction() {
+		return false;
+	}
+
+	/**
+	 * Called by k-induction when the step case of {@code k} is satisfiable, if the supplier
+	 * {@link #wantsCounterexamplesToInduction()}: the model is an execution that ends in a violation. Its states need not
+	 * be reachable; an invariant that excludes them is what k-induction is missing.
+	 *
+	 * @param states
+	 *            for the last steps of the model that are at a loop head, the loop head and the values of the program
+	 *            variables, as literals of k-induction's script
+	 */
+	default void counterexampleToInduction(final int k, final List<Map.Entry<STATE, Map<IProgramVar, Term>>> states) {
+		// not interested
+	}
+
+	/**
 	 * @return a supplier that never provides an invariant, i.e. plain (unstrengthened) k-induction.
 	 */
 	static <STATE> IInvariantSupplier<STATE> none() {
@@ -128,7 +152,7 @@ public interface IInvariantSupplier<STATE> {
 	 *            the {@link ManagedScript} the invariants are native to
 	 * @return a supplier that returns the given invariants, and none for other loop heads or for another script.
 	 */
-	static <STATE> IInvariantSupplier<STATE> fromMap(final java.util.Map<STATE, Term> invariants,
+	static <STATE> IInvariantSupplier<STATE> fromMap(final Map<STATE, Term> invariants,
 			final ManagedScript script) {
 		return (loopHead, targetScript) -> targetScript == script ? Optional.ofNullable(invariants.get(loopHead))
 				: Optional.empty();

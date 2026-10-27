@@ -119,6 +119,8 @@ public class KInduction<LETTER extends IAction, STATE> {
 	 * matching {@code InterpolationBasedModelChecking}; not yet wired through a preference.
 	 */
 	private static final int MAX_K = 200000;
+	/** How many of the last steps of a satisfiable step case are reported to the invariant supplier. */
+	private static final int REPORTED_CTI_STEPS = 4;
 
 	/**
 	 * How long an interrupted query may take to end before its solver is killed and restarted, see
@@ -327,8 +329,55 @@ public class KInduction<LETTER extends IAction, STATE> {
 			mWitness = extractWitness(k);
 			mLogger.info("KInduction: violation found, model says %s", mWitness);
 		}
+		if (result == LBool.SAT && kind == Kind.STEP && mInvariantSupplier.wantsCounterexamplesToInduction()) {
+			reportCounterexampleToInduction(k);
+		}
 		mWorkerMgdScript.pop(mKILock, 1);
 		return result;
+	}
+
+	/**
+	 * Reads the states at the loop heads among the last {@link #REPORTED_CTI_STEPS} steps of the model of a satisfiable
+	 * step case and hands them to the invariant supplier. Must be called before the {@code pop} of that query.
+	 */
+	private void reportCounterexampleToInduction(final int k) {
+		final Map<Integer, CallNode<STATE>> headOfNode = new HashMap<>();
+		for (final Map.Entry<CallNode<STATE>, Integer> head : mSystem.getHeadNodes().entrySet()) {
+			headOfNode.put(head.getValue(), head.getKey());
+		}
+		final int first = Math.max(0, k - REPORTED_CTI_STEPS);
+		final List<Term> queried = new ArrayList<>();
+		for (int j = first; j < k; j++) {
+			queried.add(mConstants.pc(j));
+			for (final IProgramVar pv : mSystem.getVars()) {
+				queried.add(mConstants.var(pv, j));
+			}
+		}
+		final Map<Term, Term> model;
+		try {
+			model = SmtUtils.getValues(mWorkerMgdScript.getScript(), queried);
+		} catch (final UnsupportedOperationException | SMTLIBException e) {
+			mLogger.warn("KInduction: cannot read the model of the step case at k=%d: %s", k, e.getMessage());
+			return;
+		}
+		final List<Map.Entry<CallNode<STATE>, Map<IProgramVar, Term>>> states = new ArrayList<>();
+		for (int j = first; j < k; j++) {
+			final CallNode<STATE> head = headOfNode.get(counterValue(model, mConstants.pc(j), "pc_" + j));
+			if (head == null) {
+				continue;
+			}
+			final Map<IProgramVar, Term> values = new HashMap<>();
+			for (final IProgramVar pv : mSystem.getVars()) {
+				final Term value = model.get(mConstants.var(pv, j));
+				if (value != null) {
+					values.put(pv, value);
+				}
+			}
+			states.add(Map.entry(head, values));
+		}
+		if (!states.isEmpty()) {
+			mInvariantSupplier.counterexampleToInduction(k, states);
+		}
 	}
 
 	/**

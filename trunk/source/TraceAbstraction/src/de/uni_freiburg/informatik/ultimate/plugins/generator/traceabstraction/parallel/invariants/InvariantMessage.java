@@ -101,4 +101,16 @@ public sealed interface InvariantMessage {
 			samples = List.copyOf(samples);
 		}
 	}
+
+	/**
+	 * States from which a violation is reached, e.g. from a step case of k-induction that is satisfiable. They need not
+	 * be reachable; if they were, the program would be unsafe. A candidate invariant that excludes them is what
+	 * k-induction is missing, so the supplier tries such candidates first.
+	 */
+	record CounterexamplesToInduction(ManagedScript source, List<Sample> states, String origin)
+			implements InvariantMessage {
+		public CounterexamplesToInduction {
+			states = List.copyOf(states);
+		}
+	}
 }

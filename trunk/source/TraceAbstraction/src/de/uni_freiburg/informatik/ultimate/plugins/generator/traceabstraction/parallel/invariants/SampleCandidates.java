@@ -49,6 +49,10 @@ import de.uni_freiburg.informatik.ultimate.logic.Script;
 import de.uni_freiburg.informatik.ultimate.logic.Sort;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.valueanalysis.GroundTermEvaluator;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.valueanalysis.IConcreteValue;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.valueanalysis.IConcreteValue.NumberValue;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.valueanalysis.UnsupportedTermException;
 
 /**
  * Reachable states at the loop heads of the program, and the candidate invariants they suggest: the linear equalities
@@ -57,6 +61,10 @@ import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
  * With relations enabled, also: per pair of variables the facets of the convex hull of the projected states (e.g.
  * {@code x <= 3i} for states where x grows by 1 or 3 with i) and the octagon bounds {@code a + b} and {@code a - b};
  * per variable the congruence {@code v mod m = r} with m the greatest common divisor of the differences of its values.
+ * <p>
+ * Negative states, from which a violation is reached ({@link #addNegative}, e.g. counterexamples to induction), are no
+ * source of candidates, but the candidates that exclude one are proposed first, beyond the limit of the others: an
+ * inductive set needs one of them.
  * <p>
  * A state may give values to only some variables, e.g. one taken from an interpolant that fixes them. The candidates
  * are computed per set of variables, from every state that gives a value to all of them.
@@ -84,12 +92,17 @@ final class SampleCandidates {
 	private static final int MIN_CONGRUENCE_POINTS = 4;
 	/** The largest modulus of a congruence. */
 	private static final int MAX_MODULUS = 64;
+	/** How many candidates that exclude a counterexample to induction one call proposes at most, besides the others. */
+	private static final int MAX_SEPARATING = 24;
 
 	private final Script mScript;
 	private final boolean mRelations;
 	private final Map<IcfgLocation, Set<Map<TermVariable, Rational>>> mPoints = new HashMap<>();
 	private final Set<IcfgLocation> mChanged = new LinkedHashSet<>();
 	private final Map<IcfgLocation, Set<Term>> mProposed = new HashMap<>();
+	// states from which a violation is reached, see addNegative
+	private final Map<IcfgLocation, Set<Map<TermVariable, Rational>>> mNegatives = new HashMap<>();
+	private int mSeparating;
 
 	/**
 	 * @param relations
@@ -169,20 +182,87 @@ final class SampleCandidates {
 				addFacetsAndOctagons(variables, projected, facets, octagons);
 			}
 		}
-		// What was proposed before is known to the supplier already, so the limit only counts new candidates.
+		// What was proposed before is known to the supplier already, so the limits only count new candidates.
 		final Set<Term> proposed = mProposed.computeIfAbsent(location, x -> new HashSet<>());
-		final Set<Term> result = new LinkedHashSet<>();
+		final List<Term> all = new ArrayList<>();
 		for (final Set<Term> kind : List.of(equalities, congruences, lower, orderings, facets, upper, octagons)) {
 			for (final Term candidate : kind) {
-				if (result.size() >= MAX_CANDIDATES) {
-					return result;
-				}
-				if (proposed.add(candidate)) {
-					result.add(candidate);
+				if (!proposed.contains(candidate)) {
+					all.add(candidate);
 				}
 			}
 		}
+		final Set<Term> result = new LinkedHashSet<>();
+		// First the candidates that exclude a counterexample to induction, which is what an inductive set lacks; they
+		// do not count against the limit of the others.
+		final Set<Map<TermVariable, Rational>> negatives = mNegatives.getOrDefault(location, Set.of());
+		if (!negatives.isEmpty()) {
+			for (final Term candidate : all) {
+				if (result.size() >= MAX_SEPARATING) {
+					break;
+				}
+				if (negatives.stream().anyMatch(negative -> holds(candidate, negative) == Boolean.FALSE)) {
+					result.add(candidate);
+					mSeparating++;
+				}
+			}
+		}
+		final int separating = result.size();
+		for (final Term candidate : all) {
+			if (result.size() - separating >= MAX_CANDIDATES) {
+				break;
+			}
+			result.add(candidate);
+		}
+		proposed.addAll(result);
 		return result;
+	}
+
+	/**
+	 * Keeps a state from which a violation is reached: a candidate that excludes it is tried first.
+	 *
+	 * @return whether the state is new
+	 */
+	boolean addNegative(final IcfgLocation location, final Map<TermVariable, Rational> point) {
+		if (point.isEmpty()) {
+			return false;
+		}
+		final Set<Map<TermVariable, Rational>> negatives =
+				mNegatives.computeIfAbsent(location, x -> new LinkedHashSet<>());
+		if (negatives.size() >= MAX_POINTS || !negatives.add(Map.copyOf(point))) {
+			return false;
+		}
+		mChanged.add(location);
+		return true;
+	}
+
+	int countNegatives() {
+		return mNegatives.values().stream().mapToInt(Set::size).sum();
+	}
+
+	/** @return how many candidates were proposed first because they exclude a counterexample to induction */
+	int countSeparating() {
+		return mSeparating;
+	}
+
+	/**
+	 * @return whether {@code candidate} holds in {@code point}, or {@code null} if the point does not give a value to
+	 *         each of its variables or the candidate cannot be evaluated
+	 */
+	private static Boolean holds(final Term candidate, final Map<TermVariable, Rational> point) {
+		final Map<TermVariable, IConcreteValue> env = new HashMap<>();
+		for (final TermVariable variable : candidate.getFreeVars()) {
+			final Rational value = point.get(variable);
+			if (value == null) {
+				return null;
+			}
+			env.put(variable, new NumberValue(value));
+		}
+		try {
+			return GroundTermEvaluator.evaluateBoolean(candidate, env, Map.of());
+		} catch (final UnsupportedTermException e) {
+			return null;
+		}
 	}
 
 	/** Proposes {@code v mod m = r} for every variable whose values differ by multiples of some {@code m > 1}. */
