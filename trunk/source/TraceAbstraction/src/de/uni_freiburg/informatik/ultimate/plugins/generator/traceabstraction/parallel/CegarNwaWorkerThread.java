@@ -312,6 +312,10 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			if (!escalate || mMainThread.isShuttingDown()) {
 				throw e;
 			}
+			if (mCfgSmtToolkit.getManagedScript().isLocked()) {
+				// Whoever held the lock is gone, so nobody can use this worker's script any more.
+				throw new IllegalStateException("the escalated strategy failed and left the script locked", e);
+			}
 			mLogger.warn("TA worker: escalated strategy failed (%s)", e);
 			isCexResult = new Pair<>(LBool.UNKNOWN, null);
 		}

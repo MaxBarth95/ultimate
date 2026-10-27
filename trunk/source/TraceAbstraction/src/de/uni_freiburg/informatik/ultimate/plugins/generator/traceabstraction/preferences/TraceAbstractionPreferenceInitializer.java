@@ -677,6 +677,14 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "them as sampled loop-head states. Needs the candidates from sampled loop-head states.";
 	private static final boolean DEF_VALUE_ANALYSIS_SAMPLES = false;
 
+	public static final String LABEL_INVARIANT_K_INDUCTIVE_DEPTH =
+			"Invariant supplier: k of the k-induction for candidates that are not inductive";
+	private static final String DESC_INVARIANT_K_INDUCTIVE_DEPTH =
+			"The invariant supplier checks the candidates that are not inductive once more, with k-induction over the "
+					+ "steps from one loop head or waypoint to the next: they must hold within the first k - 1 steps "
+					+ "of every execution, and after any k steps along which they held. 1 only checks inductiveness.";
+	private static final int DEF_INVARIANT_K_INDUCTIVE_DEPTH = 1;
+
 	public static final String LABEL_TA_ESCALATION_THRESHOLD =
 			"TA workers: escalate the refinement strategy after this many counterexamples of one path program";
 	private static final String DESC_TA_ESCALATION_THRESHOLD =
@@ -1085,6 +1093,9 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						PreferenceType.Integer, new IUltimatePreferenceItemValidator.IntegerValidator(1, 1000)),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_SAMPLES, DEF_VALUE_ANALYSIS_SAMPLES,
 						DESC_VALUE_ANALYSIS_SAMPLES, PreferenceType.Boolean),
+				new UltimatePreferenceItem<>(LABEL_INVARIANT_K_INDUCTIVE_DEPTH, DEF_INVARIANT_K_INDUCTIVE_DEPTH,
+						DESC_INVARIANT_K_INDUCTIVE_DEPTH, PreferenceType.Integer,
+						new IUltimatePreferenceItemValidator.IntegerValidator(1, 100)),
 				new UltimatePreferenceItem<>(LABEL_TA_ESCALATION_THRESHOLD, DEF_TA_ESCALATION_THRESHOLD,
 						DESC_TA_ESCALATION_THRESHOLD, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(0, 100000)),

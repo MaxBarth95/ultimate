@@ -200,6 +200,9 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	private final Map<IcfgLocation, Set<Term>> mPendingCandidates = new LinkedHashMap<>();
 	private int mCandidatesFromSamples;
 	private int mCandidatesFromGuards;
+	// k of the k-induction for the candidates that are not inductive, 1 to only check inductiveness
+	private final int mKInductiveDepth;
+	private int mKInductivelyProven;
 
 	/**
 	 * Must be called on the main thread. The channels exist from here on, the abstraction follows with
@@ -215,10 +218,14 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	 *            the settings of the probation, or {@code null} to disable it
 	 * @param sampling
 	 *            the settings of the candidates from sampled loop-head states, or {@code null} to disable them
+	 * @param kInductiveDepth
+	 *            the k of the k-induction for the candidates that are not inductive, or 1 to only check inductiveness
 	 */
 	public InvariantSupplier(final ILogger logger, final IUltimateServiceProvider services,
 			final CfgSmtToolkit csToolkit, final BlockingQueue<WorkerThreadResult<L, A>> resultQueue,
-			final BooleanSupplier shuttingDown, final Probation probation, final Sampling sampling) {
+			final BooleanSupplier shuttingDown, final Probation probation, final Sampling sampling,
+			final int kInductiveDepth) {
+		mKInductiveDepth = kInductiveDepth;
 		mLogger = logger;
 		mServices = services;
 		mCsToolkit = csToolkit;
@@ -434,6 +441,10 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 		mLogger.info("InvariantSupplier statistics: %d conjunct(s) proven at %d loop head(s), %d at waypoints, %d "
 				+ "version(s) published, %d conjunct(s) rolled back", provenAtHeads, heads.size(), provenAtWaypoints,
 				mVersions.size() - 1, mRolledBack.values().stream().mapToInt(Set::size).sum());
+		if (mKInductiveDepth > 1) {
+			mLogger.info("InvariantSupplier statistics: %d conjunct(s) proven only %d-inductive", mKInductivelyProven,
+					mKInductiveDepth);
+		}
 		if (mSamples != null) {
 			mLogger.info("InvariantSupplier statistics: %d sampled state(s), %d candidate(s) from sampled states, %d "
 					+ "from the conditions of the loops", mSamples.count(), mCandidatesFromSamples,
@@ -648,6 +659,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 					+ "they wait for a retry", count(candidates));
 		}
 		int proven = 0;
+		final Map<IcfgLocation, Set<Term>> rejected = new LinkedHashMap<>();
 		for (final Map.Entry<IcfgLocation, Set<Term>> entry : candidates.entrySet()) {
 			final Set<Term> good = inductive == null ? Collections.emptySet()
 					: inductive.getOrDefault(entry.getKey(), Collections.emptySet());
@@ -658,12 +670,50 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 					proven++;
 					mLogger.info("InvariantSupplier: proven at %s: %s", entry.getKey(), candidate);
 				} else {
-					addToRetryPool(new Candidate(entry.getKey(), candidate));
+					rejected.computeIfAbsent(entry.getKey(), x -> new LinkedHashSet<>()).add(candidate);
 				}
+			}
+		}
+		if (mKInductiveDepth > 1 && inductive != null && !rejected.isEmpty()) {
+			proven += checkKInductive(rejected, changed);
+		}
+		for (final Map.Entry<IcfgLocation, Set<Term>> entry : rejected.entrySet()) {
+			for (final Term candidate : entry.getValue()) {
+				addToRetryPool(new Candidate(entry.getKey(), candidate));
 			}
 		}
 		if (proven > 0) {
 			mKnownGrew = true;
+		}
+		return proven;
+	}
+
+	/**
+	 * Checks the candidates that are not inductive once more with k-induction, relative to everything known including
+	 * what was just proven, and moves what is k-inductive from {@code rejected} to the proven invariants. Many
+	 * candidates are only k-inductive together with others of their kind, e.g. the bounds of a variable that flips
+	 * between two values.
+	 *
+	 * @return how many were proven
+	 */
+	private int checkKInductive(final Map<IcfgLocation, Set<Term>> rejected, final Set<IcfgLocation> changed) {
+		final Map<IcfgLocation, Set<Term>> inductive = mChecker.checkKInductive(known(), rejected, mKInductiveDepth);
+		if (inductive == null) {
+			mLogger.warn("InvariantSupplier: the solver could not decide whether %d candidate(s) are %d-inductive",
+					count(rejected), mKInductiveDepth);
+			return 0;
+		}
+		int proven = 0;
+		for (final Map.Entry<IcfgLocation, Set<Term>> entry : inductive.entrySet()) {
+			for (final Term candidate : entry.getValue()) {
+				rejected.get(entry.getKey()).remove(candidate);
+				mProven.computeIfAbsent(entry.getKey(), x -> new LinkedHashSet<>()).add(candidate);
+				changed.add(entry.getKey());
+				proven++;
+				mKInductivelyProven++;
+				mLogger.info("InvariantSupplier: proven %d-inductive at %s: %s", mKInductiveDepth, entry.getKey(),
+						candidate);
+			}
 		}
 		return proven;
 	}

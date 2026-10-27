@@ -120,6 +120,7 @@ public final class TAPreferences {
 	private final int mInvariantSamplingDepth;
 	private final int mInvariantSamplesPerDepth;
 	private final boolean mValueAnalysisSamples;
+	private final int mInvariantKInductiveDepth;
 	private final int mTaEscalationThreshold;
 	private final RefinementStrategy mTaEscalationStrategy;
 	private final boolean mValueAnalysisWorker;
@@ -267,6 +268,8 @@ public final class TAPreferences {
 		mInvariantSamplesPerDepth =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_SAMPLES_PER_DEPTH);
 		mValueAnalysisSamples = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SAMPLES);
+		mInvariantKInductiveDepth =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_K_INDUCTIVE_DEPTH);
 		mTaEscalationThreshold = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_TA_ESCALATION_THRESHOLD);
 		mTaEscalationStrategy = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_TA_ESCALATION_STRATEGY,
 				RefinementStrategy.class);
@@ -818,6 +821,14 @@ public final class TAPreferences {
 	 */
 	public boolean valueAnalysisSamples() {
 		return mValueAnalysisSamples;
+	}
+
+	/**
+	 * @return the k of the k-induction with which the invariant supplier checks the candidates that are not inductive,
+	 *         1 if it only checks inductiveness
+	 */
+	public int getInvariantKInductiveDepth() {
+		return mInvariantKInductiveDepth;
 	}
 
 	/**

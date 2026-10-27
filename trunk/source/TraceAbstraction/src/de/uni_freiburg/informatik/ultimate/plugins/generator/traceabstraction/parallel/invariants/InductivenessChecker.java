@@ -98,7 +98,8 @@ final class InductivenessChecker {
 	// Every constant declared for the queries, the step variables' and the flags'.
 	private final Map<String, Term> mConstantCache = new HashMap<>();
 	private final IndexedConstantVars mConstants;
-	private Term mStep;
+	// step(i), the relation between step i and i + 1, built on demand
+	private final List<Term> mSteps = new ArrayList<>();
 
 	InductivenessChecker(final ILogger logger, final ManagedScript mgdScript,
 			final PcTransitionSystem<CallNode<IPredicate>> system) {
@@ -159,6 +160,25 @@ final class InductivenessChecker {
 	 */
 	Map<IcfgLocation, Set<Term>> check(final Map<IcfgLocation, Set<Term>> known,
 			final Map<IcfgLocation, Set<Term>> candidates) {
+		return checkKInductive(known, candidates, 1);
+	}
+
+	/**
+	 * Like {@link #check}, but with k-induction: a candidate set C is kept if it holds at every node visited within
+	 * the first {@code k - 1} pc steps from {@link PcTransitionSystem#INIT} (base case), and if it holds at a node
+	 * whenever it held at every node of the {@code k} steps before (step case). By induction over the position of a
+	 * visit in an execution, C then holds at every visit; with {@code k = 1} the base case is empty and this is
+	 * {@link #check}.
+	 * <p>
+	 * A candidate refuted in the base case is violated in a reachable state, so it is no invariant. In the step case,
+	 * like in {@link #check}, the candidates the model refutes at the last step are dropped, which may drop invariants
+	 * that only some other dropped candidate made k-inductive; but whatever is kept is k-inductive.
+	 *
+	 * @return the candidates that are k-inductive relative to {@code known}, per location, or {@code null} if the
+	 *         solver could not decide a query
+	 */
+	Map<IcfgLocation, Set<Term>> checkKInductive(final Map<IcfgLocation, Set<Term>> known,
+			final Map<IcfgLocation, Set<Term>> candidates, final int k) {
 		final Map<IcfgLocation, Set<Term>> remaining = new LinkedHashMap<>();
 		for (final Map.Entry<IcfgLocation, Set<Term>> entry : candidates.entrySet()) {
 			if (!hasNode(entry.getKey())) {
@@ -169,11 +189,26 @@ final class InductivenessChecker {
 		mMgdScript.lock(this);
 		try {
 			int rounds = 0;
+			// base case: pc_0 = INIT, violated after j steps, for each j = 1 .. k-1 on its own. A query over more steps
+			// would miss the executions that end before: an execution that terminates has no further step.
+			for (int j = 1; j < k; j++) {
+				while (remaining.values().stream().anyMatch(set -> !set.isEmpty())) {
+					rounds++;
+					final LBool result = checkRound(known, remaining, true, 0, j);
+					if (result == LBool.UNSAT) {
+						break;
+					}
+					if (result == LBool.UNKNOWN) {
+						return null;
+					}
+				}
+			}
+			// step case: held at the steps 0 .. k-1, violated at step k
 			while (remaining.values().stream().anyMatch(set -> !set.isEmpty())) {
 				rounds++;
-				final LBool result = checkRound(known, remaining);
+				final LBool result = checkRound(known, remaining, false, k, k);
 				if (result == LBool.UNSAT) {
-					mLogger.debug("InvariantSupplier: inductive after %d round(s)", rounds);
+					mLogger.debug("InvariantSupplier: %d-inductive after %d round(s)", k, rounds);
 					return remaining;
 				}
 				if (result == LBool.UNKNOWN) {
@@ -187,38 +222,51 @@ final class InductivenessChecker {
 	}
 
 	/**
-	 * One query. If it is satisfiable, removes the candidates the model refutes from {@code remaining}.
+	 * One query over the steps {@code 0 .. flagged}. If it is satisfiable, removes the candidates the model refutes
+	 * from {@code remaining}. Only the last step is flagged: an execution that has a violation earlier need not have
+	 * any more steps.
+	 *
+	 * @param fromInit
+	 *            whether step 0 is {@link PcTransitionSystem#INIT}
+	 * @param assumedSteps
+	 *            the candidates are assumed at the nodes of the steps {@code 0 .. assumedSteps - 1}
+	 * @param flagged
+	 *            a candidate is refuted if it is violated at its node in step {@code flagged}; the known invariants
+	 *            are assumed at the nodes of the steps before
 	 */
-	private LBool checkRound(final Map<IcfgLocation, Set<Term>> known, final Map<IcfgLocation, Set<Term>> remaining) {
+	private LBool checkRound(final Map<IcfgLocation, Set<Term>> known, final Map<IcfgLocation, Set<Term>> remaining,
+			final boolean fromInit, final int assumedSteps, final int flagged) {
 		final Script script = mMgdScript.getScript();
 		// Everything that declares a constant has to happen before the push, see IndexedConstantVars.
-		if (mStep == null) {
-			mStep = mSystem.step(0, mConstants, mMgdScript);
+		while (mSteps.size() < flagged) {
+			mSteps.add(mSystem.step(mSteps.size(), mConstants, mMgdScript));
 		}
-		final Term pc0 = mConstants.pc(0);
-		final Term pc1 = mConstants.pc(1);
 		final List<Term> pre = new ArrayList<>();
-		// location -> pc_1 = node, for each of its nodes
-		final Map<IcfgLocation, List<Term>> reachedAt1 = new HashMap<>();
-		for (final Map.Entry<Integer, IcfgLocation> node : mLocationOfNode.entrySet()) {
-			final IcfgLocation location = node.getValue();
-			final Set<Term> candidates = remaining.getOrDefault(location, Collections.emptySet());
-			final List<Term> assumed = new ArrayList<>();
-			for (final Term invariant : known.getOrDefault(location, Collections.emptySet())) {
-				// Assuming less than is known is sound, and a variable outside the system is unconstrained anyway.
-				if (isExpressible(invariant)) {
-					assumed.add(instantiate(invariant, 0));
+		if (fromInit) {
+			pre.add(SmtUtils.binaryEquality(script, mConstants.pc(0),
+					mSystem.pcValue(script, PcTransitionSystem.INIT)));
+		}
+		for (int step = 0; step < flagged; step++) {
+			final Term pc = mConstants.pc(step);
+			for (final Map.Entry<Integer, IcfgLocation> node : mLocationOfNode.entrySet()) {
+				final IcfgLocation location = node.getValue();
+				final List<Term> assumed = new ArrayList<>();
+				for (final Term invariant : known.getOrDefault(location, Collections.emptySet())) {
+					// Assuming less than is known is sound, and a variable outside the system is unconstrained anyway.
+					if (isExpressible(invariant)) {
+						assumed.add(instantiate(invariant, step));
+					}
+				}
+				if (step < assumedSteps) {
+					for (final Term candidate : remaining.getOrDefault(location, Collections.emptySet())) {
+						assumed.add(instantiate(candidate, step));
+					}
+				}
+				if (!assumed.isEmpty()) {
+					final Term isNode = SmtUtils.binaryEquality(script, pc, mSystem.pcValue(script, node.getKey()));
+					pre.add(SmtUtils.implies(script, isNode, SmtUtils.and(script, assumed)));
 				}
 			}
-			for (final Term candidate : candidates) {
-				assumed.add(instantiate(candidate, 0));
-			}
-			final Term isNode0 = SmtUtils.binaryEquality(script, pc0, mSystem.pcValue(script, node.getKey()));
-			if (!assumed.isEmpty()) {
-				pre.add(SmtUtils.implies(script, isNode0, SmtUtils.and(script, assumed)));
-			}
-			reachedAt1.computeIfAbsent(location, x -> new ArrayList<>())
-					.add(SmtUtils.binaryEquality(script, pc1, mSystem.pcValue(script, node.getKey())));
 		}
 		final List<Flag> flags = new ArrayList<>();
 		final List<Term> flagDefinitions = new ArrayList<>();
@@ -226,19 +274,21 @@ final class InductivenessChecker {
 			if (entry.getValue().isEmpty()) {
 				continue;
 			}
-			final Term reached = SmtUtils.or(script, reachedAt1.get(entry.getKey()));
+			final Term reached = reachedAt(entry.getKey(), flagged);
 			for (final Term candidate : entry.getValue()) {
 				final Term flag = PredicateUtils.getIndexedConstant(FLAG_NAME, SmtSortUtils.getBoolSort(script),
 						flags.size(), mConstantCache, script);
 				flags.add(new Flag(entry.getKey(), candidate, flag));
 				flagDefinitions.add(SmtUtils.binaryEquality(script, flag,
-						SmtUtils.and(script, reached, SmtUtils.not(script, instantiate(candidate, 1)))));
+						SmtUtils.and(script, reached, SmtUtils.not(script, instantiate(candidate, flagged)))));
 			}
 		}
 
 		mMgdScript.push(this, 1);
 		try {
-			mMgdScript.assertTerm(this, mStep);
+			for (final Term step : mSteps.subList(0, flagged)) {
+				mMgdScript.assertTerm(this, step);
+			}
 			for (final Term term : pre) {
 				mMgdScript.assertTerm(this, term);
 			}
@@ -287,6 +337,19 @@ final class InductivenessChecker {
 			throw new AssertionError("the model satisfies the query, but gives the flag of every candidate the value "
 					+ "false");
 		}
+	}
+
+	/** @return {@code pc_step} is one of the nodes of {@code location} */
+	private Term reachedAt(final IcfgLocation location, final int step) {
+		final Script script = mMgdScript.getScript();
+		final List<Term> disjuncts = new ArrayList<>();
+		for (final Map.Entry<Integer, IcfgLocation> node : mLocationOfNode.entrySet()) {
+			if (node.getValue().equals(location)) {
+				disjuncts.add(SmtUtils.binaryEquality(script, mConstants.pc(step),
+						mSystem.pcValue(script, node.getKey())));
+			}
+		}
+		return SmtUtils.or(script, disjuncts);
 	}
 
 	/** {@code term} over the program variables' term variables, as a term over the constants of step {@code idx}. */

@@ -168,9 +168,19 @@ public class ModuloNeighborTransformation extends TransitionPreprocessor {
 		return script.term(MODULO_REPLACEMENT, dividend, divisor);
 	}
 
-	private Term constructTerm(final ManagedScript mgdScript, Term term) {
+	private Term constructTerm(final ManagedScript mgdScript, final Term term) {
 		mgdScript.lock(this);
 		mgdScript.push(this, 1);
+		try {
+			return replaceModuloTerms(mgdScript, term);
+		} finally {
+			// Also if the replacement throws, e.g. is canceled: a script left locked is unusable for its owner.
+			mgdScript.pop(this, 1);
+			mgdScript.unlock(this);
+		}
+	}
+
+	private Term replaceModuloTerms(final ManagedScript mgdScript, Term term) {
 		final Sort intSort = SmtSortUtils.getIntSort(mgdScript);
 		/*
 		 * Problem: nested mod terms the result contains also mod terms we cannot distinguish terms were already
@@ -255,8 +265,6 @@ public class ModuloNeighborTransformation extends TransitionPreprocessor {
 			final Map<Term, Term> substitutionMapping = Collections.singletonMap(auxModTerm, modTerm);
 			term = Substitution.apply(mgdScript, substitutionMapping, term);
 		}
-		mgdScript.pop(this, 1);
-		mgdScript.unlock(this);
 		return term;
 
 	}
