@@ -89,6 +89,9 @@ import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.PcTransitionS
  * analysis; {@link SampleCandidates} turns them into the equalities, bounds and orderings they satisfy. The comparisons
  * in the conditions of the loops are candidates too ({@link GuardTemplates}). All of them go through the same check.
  * <p>
+ * <b>Interpolant shapes</b>: if enabled, the supplier relates the constants of the interpolants at a loop head across
+ * traces, which is what trace abstraction misses when it diverges on a loop ({@link InterpolantShapes}).
+ * <p>
  * <b>Outgoing</b>: every {@link #subscribe subscriber} gets its own channel. Whenever the invariant of a location got
  * stronger, it receives the location's whole current invariant, the conjunction of all trusted and all proven
  * conjuncts. A candidate that was not inductive is kept (up to {@link #MAX_RETRY_POOL}) and tried again once more is
@@ -204,6 +207,9 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	private final int mKInductiveDepth;
 	private int mKInductivelyProven;
 
+	private final InterpolantShapes mShapes;
+	private int mCandidatesFromShapes;
+
 	/**
 	 * Must be called on the main thread. The channels exist from here on, the abstraction follows with
 	 * {@link #setAbstraction}: transferring it adds edges to the ICFG, which other workers must have read before.
@@ -220,11 +226,13 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	 *            the settings of the candidates from sampled loop-head states, or {@code null} to disable them
 	 * @param kInductiveDepth
 	 *            the k of the k-induction for the candidates that are not inductive, or 1 to only check inductiveness
+	 * @param interpolantShapes
+	 *            whether to propose the relations between the constants of interpolants across traces
 	 */
 	public InvariantSupplier(final ILogger logger, final IUltimateServiceProvider services,
 			final CfgSmtToolkit csToolkit, final BlockingQueue<WorkerThreadResult<L, A>> resultQueue,
 			final BooleanSupplier shuttingDown, final Probation probation, final Sampling sampling,
-			final int kInductiveDepth) {
+			final int kInductiveDepth, final boolean interpolantShapes) {
 		mKInductiveDepth = kInductiveDepth;
 		mLogger = logger;
 		mServices = services;
@@ -237,6 +245,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 						probation.solverTimeoutMillis());
 		mSampling = sampling;
 		mSamples = sampling == null ? null : new SampleCandidates(mScript.getScript());
+		mShapes = interpolantShapes ? new InterpolantShapes(mScript.getScript()) : null;
 	}
 
 	/**
@@ -432,10 +441,13 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 				provenAtWaypoints += proven;
 			}
 			mLogger.info("InvariantSupplier statistics: %s %s - %d candidate(s) seen, %d proven, %d trusted, %d in the "
-					+ "retry pool%s%s", head ? "loop head" : "waypoint", location,
+					+ "retry pool%s%s%s", head ? "loop head" : "waypoint", location,
 					mTried.getOrDefault(location, Collections.emptySet()).size(), proven,
 					mTrusted.getOrDefault(location, Collections.emptySet()).size(), pooled.getOrDefault(location, 0),
 					mSamples == null ? "" : ", " + mSamples.count(location) + " sampled state(s)",
+					mShapes == null || mShapes.count(location) == 0 ? ""
+							: ", " + mShapes.count(location) + " interpolant trend(s): "
+									+ mShapes.describe(location),
 					proven == 0 ? "" : ", proven: " + mProven.get(location));
 		}
 		mLogger.info("InvariantSupplier statistics: %d conjunct(s) proven at %d loop head(s), %d at waypoints, %d "
@@ -449,6 +461,9 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 			mLogger.info("InvariantSupplier statistics: %d sampled state(s), %d candidate(s) from sampled states, %d "
 					+ "from the conditions of the loops", mSamples.count(), mCandidatesFromSamples,
 					mCandidatesFromGuards);
+		}
+		if (mShapes != null) {
+			mLogger.info("InvariantSupplier statistics: %d candidate(s) from interpolant shapes", mCandidatesFromShapes);
 		}
 	}
 
@@ -489,6 +504,17 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 				for (final Term candidate : mSamples.candidates(location)) {
 					if (offerCandidate(location, candidate, candidates)) {
 						mCandidatesFromSamples++;
+					}
+				}
+			}
+		}
+		if (mShapes != null) {
+			for (final IcfgLocation location : mShapes.takeChanged()) {
+				mLogger.info("InvariantSupplier: %d interpolant trend(s) at %s: %s",
+						mShapes.count(location), location, mShapes.describe(location));
+				for (final Term candidate : mShapes.candidates(location)) {
+					if (offerCandidate(location, candidate, candidates)) {
+						mCandidatesFromShapes++;
 					}
 				}
 			}
@@ -540,13 +566,16 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 	private void takeCandidates(final InterpolantSequence message,
 			final Map<IcfgLocation, Set<Term>> candidates) {
 		final InductivenessChecker checker = getChecker();
+		final List<List<Term>> conjunctsPerLocation = new ArrayList<>();
 		for (int i = 0; i < message.locations().size(); i++) {
 			final IcfgLocation location = message.locations().get(i);
 			if (!checker.hasNode(location)) {
+				conjunctsPerLocation.add(List.of());
 				continue;
 			}
 			final List<Term> conjuncts =
 					List.of(SmtUtils.getConjuncts(transfer(message.source(), message.interpolants().get(i))));
+			conjunctsPerLocation.add(conjuncts);
 			for (final Term conjunct : conjuncts) {
 				offerCandidate(location, conjunct, candidates);
 			}
@@ -555,6 +584,9 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 				// state on this trace, or the trace is infeasible before; either way a state worth fitting.
 				addPoint(location, SampleCandidates.pointOf(conjuncts));
 			}
+		}
+		if (mShapes != null) {
+			mShapes.add(message.locations(), conjunctsPerLocation, mHeadLocations);
 		}
 	}
 

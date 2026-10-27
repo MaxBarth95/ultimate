@@ -685,6 +685,16 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "of every execution, and after any k steps along which they held. 1 only checks inductiveness.";
 	private static final int DEF_INVARIANT_K_INDUCTIVE_DEPTH = 1;
 
+	public static final String LABEL_INVARIANT_INTERPOLANT_SHAPES =
+			"Invariant supplier: generalize the constants of interpolants across traces";
+	private static final String DESC_INVARIANT_INTERPOLANT_SHAPES =
+			"The invariant supplier looks at the interpolants of the successive visits of a loop head on a trace. When "
+					+ "the constant of a linear conjunct changes along a line from one visit to the next, e.g. "
+					+ "x <= 0, x <= 2, x <= 4 on one trace and i <= 0, i <= 1, i <= 2 on another, it proposes the "
+					+ "relation between their left-hand sides as candidates, here x = 2i, x <= 2i and x >= 2i. Like "
+					+ "every candidate, they are published only if they are proven inductive.";
+	private static final boolean DEF_INVARIANT_INTERPOLANT_SHAPES = false;
+
 	public static final String LABEL_TA_ESCALATION_THRESHOLD =
 			"TA workers: escalate the refinement strategy after this many counterexamples of one path program";
 	private static final String DESC_TA_ESCALATION_THRESHOLD =
@@ -1096,6 +1106,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 				new UltimatePreferenceItem<>(LABEL_INVARIANT_K_INDUCTIVE_DEPTH, DEF_INVARIANT_K_INDUCTIVE_DEPTH,
 						DESC_INVARIANT_K_INDUCTIVE_DEPTH, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(1, 100)),
+				new UltimatePreferenceItem<>(LABEL_INVARIANT_INTERPOLANT_SHAPES, DEF_INVARIANT_INTERPOLANT_SHAPES,
+						DESC_INVARIANT_INTERPOLANT_SHAPES, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_TA_ESCALATION_THRESHOLD, DEF_TA_ESCALATION_THRESHOLD,
 						DESC_TA_ESCALATION_THRESHOLD, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(0, 100000)),

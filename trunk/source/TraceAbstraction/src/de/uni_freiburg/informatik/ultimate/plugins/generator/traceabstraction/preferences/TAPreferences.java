@@ -121,6 +121,7 @@ public final class TAPreferences {
 	private final int mInvariantSamplesPerDepth;
 	private final boolean mValueAnalysisSamples;
 	private final int mInvariantKInductiveDepth;
+	private final boolean mInvariantInterpolantShapes;
 	private final int mTaEscalationThreshold;
 	private final RefinementStrategy mTaEscalationStrategy;
 	private final boolean mValueAnalysisWorker;
@@ -270,6 +271,8 @@ public final class TAPreferences {
 		mValueAnalysisSamples = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SAMPLES);
 		mInvariantKInductiveDepth =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_K_INDUCTIVE_DEPTH);
+		mInvariantInterpolantShapes =
+				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_INTERPOLANT_SHAPES);
 		mTaEscalationThreshold = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_TA_ESCALATION_THRESHOLD);
 		mTaEscalationStrategy = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_TA_ESCALATION_STRATEGY,
 				RefinementStrategy.class);
@@ -829,6 +832,13 @@ public final class TAPreferences {
 	 */
 	public int getInvariantKInductiveDepth() {
 		return mInvariantKInductiveDepth;
+	}
+
+	/**
+	 * @return whether the invariant supplier proposes the relations between the constants of interpolants across traces
+	 */
+	public boolean invariantInterpolantShapes() {
+		return mInvariantInterpolantShapes;
 	}
 
 	/**
