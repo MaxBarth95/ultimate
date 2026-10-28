@@ -50,15 +50,14 @@ public interface IConcreteSearchStrategy<L extends IIcfgTransition<?>> {
 	/**
 	 * @param semantics
 	 *            the program's concrete semantics
-	 * @param stateBudget
-	 *            how many configurations the search may visit at most
 	 * @param keepGoing
-	 *            polled regularly; the search stops as soon as it answers false
+	 *            polled regularly; the search stops as soon as it answers false. It is the only bound of the search:
+	 *            it asks the worker's time limit and memory budget.
 	 * @param confirm
 	 *            asked for every error configuration found; true ends the search with it
 	 * @return the confirmed error configuration, or null if the search ended without one
 	 */
-	ConcreteConfiguration<L> search(ConcreteNwaSemantics<L> semantics, int stateBudget, BooleanSupplier keepGoing,
+	ConcreteConfiguration<L> search(ConcreteNwaSemantics<L> semantics, BooleanSupplier keepGoing,
 			Predicate<ConcreteConfiguration<L>> confirm);
 
 	/**

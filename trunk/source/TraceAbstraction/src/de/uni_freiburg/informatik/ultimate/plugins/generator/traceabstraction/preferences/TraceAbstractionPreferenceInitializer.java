@@ -640,11 +640,6 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	public static final String LABEL_VALUE_ANALYSIS_SEARCH = "Search strategy of the value analysis worker";
 	private static final ValueAnalysisSearch DEF_VALUE_ANALYSIS_SEARCH = ValueAnalysisSearch.BFS;
 
-	public static final String LABEL_VALUE_ANALYSIS_STATE_BUDGET = "State budget of the value analysis worker";
-	private static final String DESC_VALUE_ANALYSIS_STATE_BUDGET =
-			"How many concrete program states the value analysis worker explores before it gives up.";
-	private static final int DEF_VALUE_ANALYSIS_STATE_BUDGET = 100_000;
-
 	public static final String LABEL_VALUE_ANALYSIS_MAX_CHOICES =
 			"Nondeterministic successors per step of the value analysis worker";
 	private static final String DESC_VALUE_ANALYSIS_MAX_CHOICES =
@@ -665,8 +660,9 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	private static final String DESC_VALUE_ANALYSIS_TIME_LIMIT =
 			"How long the value analysis worker may run, counted from its start and including the trace check that "
 					+ "confirms a violation. When the time is up it stops with the result UNKNOWN; the other workers "
-					+ "go on.";
-	private static final int DEF_VALUE_ANALYSIS_TIME_LIMIT = 180;
+					+ "go on. Apart from its memory budget and the successors per step, this is the only bound of the "
+					+ "worker: it explores as many configurations as it reaches in this time.";
+	private static final int DEF_VALUE_ANALYSIS_TIME_LIMIT = 20;
 
 	public static final String LABEL_MINIMIZE_ABSTRACTION_PER_WORKER =
 			"Minimize Abstraction every time a worker is done";
@@ -1014,9 +1010,6 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						DESC_VALUE_ANALYSIS_WORKER, PreferenceType.Boolean),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_SEARCH, DEF_VALUE_ANALYSIS_SEARCH,
 						PreferenceType.Combo, ValueAnalysisSearch.values()),
-				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_STATE_BUDGET, DEF_VALUE_ANALYSIS_STATE_BUDGET,
-						DESC_VALUE_ANALYSIS_STATE_BUDGET, PreferenceType.Integer,
-						new IUltimatePreferenceItemValidator.IntegerValidator(1, Integer.MAX_VALUE)),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_MAX_CHOICES, DEF_VALUE_ANALYSIS_MAX_CHOICES,
 						DESC_VALUE_ANALYSIS_MAX_CHOICES, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(1, 1_000_000)),

@@ -115,10 +115,6 @@ public final class ConcreteTransFormulaExecutor {
 	 * on choices that the formula rejects.
 	 */
 	private static final int NODES_PER_SUCCESSOR = 64;
-	/**
-	 * How many literals of the formula a variable tries at most before the pool.
-	 */
-	private static final int MAX_HARVESTED_VALUES = 12;
 
 	private final NondeterminismPool mPool;
 	private final int mMaxSuccessors;
@@ -560,9 +556,6 @@ public final class ConcreteTransFormulaExecutor {
 				}
 				final List<IConcreteValue> harvested = mHarvested.computeIfAbsent(tv, x -> new ArrayList<>());
 				for (final IConcreteValue value : values) {
-					if (harvested.size() >= MAX_HARVESTED_VALUES) {
-						break;
-					}
 					if (!harvested.contains(value)) {
 						harvested.add(value);
 					}

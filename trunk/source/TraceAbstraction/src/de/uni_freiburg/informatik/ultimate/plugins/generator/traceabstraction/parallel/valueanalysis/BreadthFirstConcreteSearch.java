@@ -55,8 +55,8 @@ public final class BreadthFirstConcreteSearch<L extends IIcfgTransition<?>> impl
 	private String mOutcome = "not run";
 
 	@Override
-	public ConcreteConfiguration<L> search(final ConcreteNwaSemantics<L> semantics, final int stateBudget,
-			final BooleanSupplier keepGoing, final Predicate<ConcreteConfiguration<L>> confirm) {
+	public ConcreteConfiguration<L> search(final ConcreteNwaSemantics<L> semantics, final BooleanSupplier keepGoing,
+			final Predicate<ConcreteConfiguration<L>> confirm) {
 		// Stays if something is thrown out of the search, e.g. by a cancelled confirmation.
 		mOutcome = "aborted";
 		final Set<ConcreteConfiguration<L>> visited = new HashSet<>();
@@ -88,10 +88,6 @@ public final class BreadthFirstConcreteSearch<L extends IIcfgTransition<?>> impl
 					}
 					// An error location has no successors worth exploring.
 					continue;
-				}
-				if (mVisited >= stateBudget) {
-					mOutcome = "state budget used up";
-					return null;
 				}
 				queue.add(successor);
 			}

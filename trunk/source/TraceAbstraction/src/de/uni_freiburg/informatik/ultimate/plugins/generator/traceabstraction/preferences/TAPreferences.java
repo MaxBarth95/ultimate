@@ -116,7 +116,6 @@ public final class TAPreferences {
 	private final boolean mInterpolantInvariants;
 	private final boolean mValueAnalysisWorker;
 	private final ValueAnalysisSearch mValueAnalysisSearch;
-	private final int mValueAnalysisStateBudget;
 	private final int mValueAnalysisMaxChoices;
 	private final int mValueAnalysisMemoryBudget;
 	private final int mValueAnalysisTimeLimit;
@@ -254,8 +253,6 @@ public final class TAPreferences {
 		mValueAnalysisWorker = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_WORKER);
 		mValueAnalysisSearch = mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_SEARCH,
 				ValueAnalysisSearch.class);
-		mValueAnalysisStateBudget =
-				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_STATE_BUDGET);
 		mValueAnalysisMaxChoices =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_MAX_CHOICES);
 		mValueAnalysisMemoryBudget =
@@ -769,13 +766,6 @@ public final class TAPreferences {
 	 */
 	public ValueAnalysisSearch getValueAnalysisSearch() {
 		return mValueAnalysisSearch;
-	}
-
-	/**
-	 * @return how many concrete states the value analysis worker explores at most
-	 */
-	public int getValueAnalysisStateBudget() {
-		return mValueAnalysisStateBudget;
 	}
 
 	/**

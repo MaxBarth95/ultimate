@@ -169,8 +169,8 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 					mHeapTimer.getBudgetBytes() >> 20, mHeapTimer.getBaselineBytes() >> 20);
 			final ConcreteNwaSemantics<L> semantics =
 					new ConcreteNwaSemantics<>(mAbstraction, mCfgSmtToolkit.getModifiableGlobalsTable(), mExecutor);
-			final ConcreteConfiguration<L> violation = mSearch.search(semantics, mPref.getValueAnalysisStateBudget(),
-					this::keepGoing, configuration -> confirm(semantics.toNestedRun(configuration)));
+			final ConcreteConfiguration<L> violation = mSearch.search(semantics, this::keepGoing,
+					configuration -> confirm(semantics.toNestedRun(configuration)));
 			if (violation != null) {
 				mLogger.info("Value analysis: confirmed a violation of %d letter(s)", violation.getLength());
 				mBlockingQueueForResults.put(WorkerThreadResult.violation(WorkerType.VALUE_ANALYSIS, mViolation));
