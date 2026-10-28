@@ -29,6 +29,7 @@ package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.p
 
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryException;
@@ -121,6 +122,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	private IcfgLocation mCurrentErrorLoc;
 	private final SimplificationTechnique mSimplificationTechnique;
 	protected static final boolean REMOVE_DEAD_ENDS = true;
+	// How often a worker waiting for a task looks whether it was retired
+	private static final long RETIREMENT_POLL_MILLIS = 200;
 	private final ParallelNwaCegarLoop<L, A> mMainThread;
 	private INestedWordAutomaton<L, IPredicate> mAbstraction;
 	private StrategyFactory<L> mStrategyFactory;
@@ -135,6 +138,10 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	private TaskScopedServices mTaskServices;
 	// where the interpolants of every infeasible counterexample go, to be checked for invariants
 	private final IInvariantSink mInvariantSink;
+	// Expires when the HeapWatchdog retires this worker; mServices asks it, so it stops the running check.
+	private final RetirementTimer mRetirementTimer;
+	// The task whose counterexample is being checked, null while the worker waits for one
+	private WorkerThreadTask<L> mTask;
 
 	/**
 	 * CegarNwaWorkerThread is a runnable that will be executed by an executor service. It takes counterexamples from
@@ -160,15 +167,16 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 			final ParallelNwaCegarLoop<L, A> mainThread,
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
 			final BlockingQueue<WorkerThreadTask<L>> workerTaskQueue,
-			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils, final IInvariantSink invariantSink)
-			throws InterruptedException {
+			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils, final IInvariantSink invariantSink,
+			final RetirementTimer retirementTimer) throws InterruptedException {
 
 		mLogger = logger;
 		mPref = pref;
 		mIteration = id;
 		mResultBuilder = resultBuilder;
-		mErrorGeneralizationEngine = new ErrorGeneralizationEngine<>(services);
-		mServices = services;
+		mRetirementTimer = retirementTimer;
+		mServices = services.getProgressMonitorService().registerChildTimer(services, retirementTimer);
+		mErrorGeneralizationEngine = new ErrorGeneralizationEngine<>(mServices);
 		mCfgSmtToolkit = cfgSmtToolkit;
 		mTaCheckAndRefinementPrefs = taCheckAndRefinementPrefs;
 		mPredicateFactory = predicateFactory;
@@ -207,40 +215,96 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 	 *
 	 * Terminates if the Thread is interrupted (not used atm) or the Executioner service triggers a shutdown. If the
 	 * check of a counterexample throws, the worker tells the main thread with a crashed result and takes no more tasks.
+	 * If the {@link HeapWatchdog} retires the worker, the check it runs is stopped and the worker tells the main thread
+	 * with a retired result, which hands back the counterexample.
 	 */
 	@Override
 	public void run() {
-		while (!Thread.currentThread().isInterrupted()) {
-			// What the task constructs, above all the solvers of its trace checks, is destroyed when it is done.
-			mTaskServices = new TaskScopedServices(mServices);
-			try {
-				mLogger.info("WorkerThread: " + Thread.currentThread() + " is Waiting for a Task");
-				mIteration += 1;
-				final WorkerThreadTask<L> task = mWorkerTaskQueue.take();
-				checkCounterexample(task);
-			} catch (final InterruptedException e) {
-				Thread.currentThread().interrupt();
-			} catch (final Throwable t) {
-				if (mMainThread.isShuttingDown()) {
-					// Another worker decided and the main thread destroyed our solver under a running query.
-					mLogger.info("WorkerThread: stopping, shut down during a trace check (" + t + ")");
+		try {
+			while (!Thread.currentThread().isInterrupted()) {
+				if (!checkNextCounterexample()) {
 					return;
 				}
-				mLogger.error("WorkerThread failed: " + t);
-				for (final StackTraceElement element : t.getStackTrace()) {
-					mLogger.error("\tat " + element);
-				}
-				try {
-					mBlockingQueueForResults.put(WorkerThreadResult.crashed(WorkerType.TA, t));
-				} catch (final InterruptedException e) {
-					Thread.currentThread().interrupt();
-				}
-				return;
-			} finally {
-				mTaskServices.destroyAll(mLogger);
-				mTaskServices = null;
+			}
+		} finally {
+			mRetirementTimer.stopped();
+		}
+	}
+
+	/**
+	 * @return whether the worker takes another task
+	 */
+	private boolean checkNextCounterexample() {
+		// What the task constructs, above all the solvers of its trace checks, is destroyed when it is done.
+		mTaskServices = new TaskScopedServices(mServices);
+		try {
+			mLogger.info("WorkerThread: " + Thread.currentThread() + " is Waiting for a Task");
+			mIteration += 1;
+			mTask = takeTask();
+			if (mTask == null) {
+				return retire();
+			}
+			checkCounterexample(mTask);
+			mTask = null;
+			return true;
+		} catch (final InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return false;
+		} catch (final Throwable t) {
+			if (mMainThread.isShuttingDown()) {
+				// Another worker decided and the main thread destroyed our solver under a running query.
+				mLogger.info("WorkerThread: stopping, shut down during a trace check (" + t + ")");
+				return false;
+			}
+			if (mRetirementTimer.isRetired()) {
+				// Whatever was thrown, a cancellation or an exception that wraps one, the retirement stopped it.
+				return retire();
+			}
+			mLogger.error("WorkerThread failed: " + t);
+			for (final StackTraceElement element : t.getStackTrace()) {
+				mLogger.error("\tat " + element);
+			}
+			try {
+				mBlockingQueueForResults.put(WorkerThreadResult.crashed(WorkerType.TA, t));
+			} catch (final InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			return false;
+		} finally {
+			mTaskServices.destroyAll(mLogger);
+			mTaskServices = null;
+		}
+	}
+
+	/**
+	 * Waits for the next task, but no longer than until the worker is retired.
+	 *
+	 * @return the task, or null if the worker was retired
+	 */
+	private WorkerThreadTask<L> takeTask() throws InterruptedException {
+		while (!mRetirementTimer.isRetired()) {
+			final WorkerThreadTask<L> task = mWorkerTaskQueue.poll(RETIREMENT_POLL_MILLIS, TimeUnit.MILLISECONDS);
+			if (task != null) {
+				return task;
 			}
 		}
+		return null;
+	}
+
+	/**
+	 * Tells the main thread that this worker retired, with the counterexample it was checking, if any.
+	 *
+	 * @return false, the worker takes no more tasks
+	 */
+	private boolean retire() {
+		mLogger.info("WorkerThread: retired, %s", mRetirementTimer.getReason());
+		try {
+			mBlockingQueueForResults.put(
+					WorkerThreadResult.retired(WorkerType.TA, mTask == null ? null : mTask.getCounterexample()));
+		} catch (final InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+		return false;
 	}
 
 	/**
@@ -265,6 +329,10 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		final Counterexample<L> counterexample = new Counterexample<>(mCounterexample.getWord(), locations);
 		final ITARefinementStrategy<L> strategy = setUpStrategy(counterexample);
 		final Pair<LBool, IProgramExecution<L, Term>> isCexResult = isCounterexampleFeasible(strategy);
+		if (isCexResult.getFirst() != LBool.SAT && mRetirementTimer.isRetired()) {
+			// An unknown answer may just be the retirement; it must not register a timeout for the error location.
+			throw new ToolchainCanceledException(getClass(), "trace check of a retired worker");
+		}
 		if (isCexResult.getFirst() == LBool.UNSAT) {
 			submitInterpolants();
 		}

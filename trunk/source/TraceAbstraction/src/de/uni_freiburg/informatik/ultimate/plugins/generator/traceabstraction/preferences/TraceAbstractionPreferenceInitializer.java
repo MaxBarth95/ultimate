@@ -583,14 +583,13 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "external solver command says instead. Supported for z3, cvc4, cvc5 and bitwuzla.";
 	private static final Integer DEF_KINDUCTION_SOLVER_TIMEOUT = 60 * 60 * 1000;
 
-	public static final String LABEL_KINDUCTION_MEMORY_BUDGET =
-			"Memory budget of the k-induction worker (% of max heap)";
-	private static final String DESC_KINDUCTION_MEMORY_BUDGET =
-			"By how much of the JVM's maximum heap the live heap may grow while the k-induction worker runs, "
-					+ "measured from the live heap when it started and only counting what is still in use after a "
-					+ "garbage collection. What the other workers add meanwhile counts as well. A k-induction worker "
-					+ "that exceeds it stops and retires without a verdict, so that the other workers keep the memory.";
-	private static final int DEF_KINDUCTION_MEMORY_BUDGET = 60;
+	public static final String LABEL_TA_RETIREMENT_HEAP = "Live heap at which a TA worker retires (% of max heap)";
+	private static final String DESC_TA_RETIREMENT_HEAP =
+			"When what is still in use after a garbage collection reaches this share of the JVM's maximum heap, a TA "
+					+ "worker of Parallel Trace Abstraction stops and retires, and so on until none is left. Then the "
+					+ "loop releases its abstraction and the invariant supplier, and only k-induction runs on, which "
+					+ "never retires. No worker has a memory limit of its own.";
+	private static final int DEF_TA_RETIREMENT_HEAP = 80;
 
 	public static final String LABEL_INVARIANT_PROBATION = "Probation of invariants for k-induction";
 	private static final String DESC_INVARIANT_PROBATION =
@@ -647,21 +646,19 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "variables are not all determined, e.g. by a nondeterministic input or an uninitialized read.";
 	private static final int DEF_VALUE_ANALYSIS_MAX_CHOICES = 64;
 
-	public static final String LABEL_VALUE_ANALYSIS_MEMORY_BUDGET =
-			"Memory budget of the value analysis worker (% of max heap)";
-	private static final String DESC_VALUE_ANALYSIS_MEMORY_BUDGET =
-			"By how much of the JVM's maximum heap the live heap may grow while the value analysis worker runs, "
-					+ "measured from the live heap when it started and only counting what is still in use after a "
-					+ "garbage collection. What the other workers add meanwhile counts as well. A worker that exceeds "
-					+ "it stops silently, so that the other workers keep the memory.";
-	private static final int DEF_VALUE_ANALYSIS_MEMORY_BUDGET = 20;
+	public static final String LABEL_VALUE_ANALYSIS_RETIREMENT_HEAP =
+			"Live heap at which the value analysis worker retires (% of max heap)";
+	private static final String DESC_VALUE_ANALYSIS_RETIREMENT_HEAP =
+			"When what is still in use after a garbage collection reaches this share of the JVM's maximum heap, the "
+					+ "value analysis worker stops with the result UNKNOWN, so that the other workers get the memory.";
+	private static final int DEF_VALUE_ANALYSIS_RETIREMENT_HEAP = 60;
 
 	public static final String LABEL_VALUE_ANALYSIS_TIME_LIMIT = "Time limit of the value analysis worker (s)";
 	private static final String DESC_VALUE_ANALYSIS_TIME_LIMIT =
 			"How long the value analysis worker may run, counted from its start and including the trace check that "
 					+ "confirms a violation. When the time is up it stops with the result UNKNOWN; the other workers "
-					+ "go on. Apart from its memory budget and the successors per step, this is the only bound of the "
-					+ "worker: it explores as many configurations as it reaches in this time.";
+					+ "go on. Apart from its retirement when the heap fills up and the successors per step, this is the "
+					+ "only bound of the worker: it explores as many configurations as it reaches in this time.";
 	private static final int DEF_VALUE_ANALYSIS_TIME_LIMIT = 20;
 
 	public static final String LABEL_MINIMIZE_ABSTRACTION_PER_WORKER =
@@ -993,8 +990,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 				new UltimatePreferenceItem<>(LABEL_KINDUCTION_SOLVER_TIMEOUT, DEF_KINDUCTION_SOLVER_TIMEOUT,
 						DESC_KINDUCTION_SOLVER_TIMEOUT, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(-1, 1_0000_000)),
-				new UltimatePreferenceItem<>(LABEL_KINDUCTION_MEMORY_BUDGET, DEF_KINDUCTION_MEMORY_BUDGET,
-						DESC_KINDUCTION_MEMORY_BUDGET, PreferenceType.Integer,
+				new UltimatePreferenceItem<>(LABEL_TA_RETIREMENT_HEAP, DEF_TA_RETIREMENT_HEAP,
+						DESC_TA_RETIREMENT_HEAP, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(1, 100)),
 				new UltimatePreferenceItem<>(LABEL_INVARIANT_PROBATION, DEF_INVARIANT_PROBATION,
 						DESC_INVARIANT_PROBATION, PreferenceType.Boolean),
@@ -1013,8 +1010,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_MAX_CHOICES, DEF_VALUE_ANALYSIS_MAX_CHOICES,
 						DESC_VALUE_ANALYSIS_MAX_CHOICES, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(1, 1_000_000)),
-				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_MEMORY_BUDGET, DEF_VALUE_ANALYSIS_MEMORY_BUDGET,
-						DESC_VALUE_ANALYSIS_MEMORY_BUDGET, PreferenceType.Integer,
+				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_RETIREMENT_HEAP, DEF_VALUE_ANALYSIS_RETIREMENT_HEAP,
+						DESC_VALUE_ANALYSIS_RETIREMENT_HEAP, PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(1, 100)),
 				new UltimatePreferenceItem<>(LABEL_VALUE_ANALYSIS_TIME_LIMIT, DEF_VALUE_ANALYSIS_TIME_LIMIT,
 						DESC_VALUE_ANALYSIS_TIME_LIMIT, PreferenceType.Integer,

@@ -108,7 +108,7 @@ public final class TAPreferences {
 	private final int mThreadLimit;
 	private final int mNumKInductionWorkers;
 	private final int mKInductionSolverTimeout;
-	private final int mKInductionMemoryBudget;
+	private final int mTaRetirementHeap;
 	private final boolean mInvariantProbation;
 	private final int mProbationFactor;
 	private final int mProbationMinimum;
@@ -117,7 +117,7 @@ public final class TAPreferences {
 	private final boolean mValueAnalysisWorker;
 	private final ValueAnalysisSearch mValueAnalysisSearch;
 	private final int mValueAnalysisMaxChoices;
-	private final int mValueAnalysisMemoryBudget;
+	private final int mValueAnalysisRetirementHeap;
 	private final int mValueAnalysisTimeLimit;
 	private final boolean mConsiderOnlyActiveCounterexamplesInIsEmptyParallel;
 	private final boolean mMinimizeAbstractionPerWorker;
@@ -241,8 +241,7 @@ public final class TAPreferences {
 		mNumKInductionWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_KINDUCTION_WORKERS);
 		mKInductionSolverTimeout =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_SOLVER_TIMEOUT);
-		mKInductionMemoryBudget =
-				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_MEMORY_BUDGET);
+		mTaRetirementHeap = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_TA_RETIREMENT_HEAP);
 		mInvariantProbation = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_PROBATION);
 		mProbationFactor = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_PROBATION_FACTOR);
 		mProbationMinimum = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_PROBATION_MINIMUM);
@@ -255,8 +254,8 @@ public final class TAPreferences {
 				ValueAnalysisSearch.class);
 		mValueAnalysisMaxChoices =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_MAX_CHOICES);
-		mValueAnalysisMemoryBudget =
-				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_MEMORY_BUDGET);
+		mValueAnalysisRetirementHeap =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_RETIREMENT_HEAP);
 		mValueAnalysisTimeLimit = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_VALUE_ANALYSIS_TIME_LIMIT);
 		mConsiderOnlyActiveCounterexamplesInIsEmptyParallel =
 				mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_PARALLELSEARCH_ACTIVE_CEX_ONLY);
@@ -712,10 +711,10 @@ public final class TAPreferences {
 	}
 
 	/**
-	 * @return how many percent of the JVM's maximum heap may be live while the k-induction worker runs
+	 * @return at how many percent of the JVM's maximum heap in use after a garbage collection a TA worker retires
 	 */
-	public int getKInductionMemoryBudget() {
-		return mKInductionMemoryBudget;
+	public int getTaRetirementHeap() {
+		return mTaRetirementHeap;
 	}
 
 	/**
@@ -776,10 +775,11 @@ public final class TAPreferences {
 	}
 
 	/**
-	 * @return how many percent of the JVM's maximum heap may be live while the value analysis worker runs
+	 * @return at how many percent of the JVM's maximum heap in use after a garbage collection the value analysis
+	 *         worker retires
 	 */
-	public int getValueAnalysisMemoryBudget() {
-		return mValueAnalysisMemoryBudget;
+	public int getValueAnalysisRetirementHeap() {
+		return mValueAnalysisRetirementHeap;
 	}
 
 	/**

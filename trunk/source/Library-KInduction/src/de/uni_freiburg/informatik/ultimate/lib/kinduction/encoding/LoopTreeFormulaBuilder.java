@@ -829,10 +829,11 @@ public class LoopTreeFormulaBuilder<LETTER extends IAction, STATE> {
 	}
 
 	/**
-	 * Throws if the toolchain's deadline has passed, or k-induction's memory budget is exceeded. Polled before every
-	 * composition of formulas: a scope with several heads builds an edge for every (head, checkpoint) pair, so the
-	 * work is quadratic in the number of heads, and evaluating a path expression is still exponential in the worst
-	 * case (see {@link RegexToTransFormula}). A pathological abstraction must not run past either limit uninterrupted.
+	 * Throws if the progress monitor of k-induction says stop, e.g. because the toolchain's deadline has passed. Polled
+	 * before every composition of formulas: a scope with several heads builds an edge for every (head, checkpoint)
+	 * pair, so the work is quadratic in the number of heads, and evaluating a path expression is still exponential in
+	 * the worst case (see {@link RegexToTransFormula}). A pathological abstraction must not run past the deadline
+	 * uninterrupted.
 	 */
 	private void checkCanceled(final String task) {
 		if (!mServices.getProgressMonitorService().continueProcessing()) {

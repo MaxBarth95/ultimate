@@ -49,6 +49,8 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	PredicateFactory mPredicateFactory;
 	private final boolean mWorkerCrashed;
 	private final boolean mNoVerdict;
+	// Only set by retired(..), see there.
+	private boolean mRetired;
 	// Only set by crashed(..), see there.
 	private Throwable mCrashCause;
 	// Only set by violation(..), see there.
@@ -111,6 +113,20 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	}
 
 	/**
+	 * A worker that the {@link HeapWatchdog} retired. It stopped the check it was running and takes no more tasks.
+	 *
+	 * @param counterexample
+	 *            the counterexample of the main thread that the worker was checking, or null if it waited for one
+	 */
+	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
+			retired(final WorkerType workerType, final IRun<L, ?> counterexample) {
+		final WorkerThreadResult<L, A> result =
+				new WorkerThreadResult<>(workerType, null, null, null, counterexample, null, false, false);
+		result.mRetired = true;
+		return result;
+	}
+
+	/**
 	 * A worker that found a feasible violation and leaves registering it to the main thread. It carries the program
 	 * execution to register, nothing to refine with.
 	 */
@@ -149,6 +165,13 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	 */
 	public boolean noVerdict() {
 		return mNoVerdict;
+	}
+
+	/**
+	 * @return true if the worker was retired, see {@link #retired(WorkerType, IRun)}
+	 */
+	public boolean workerRetired() {
+		return mRetired;
 	}
 
 	public PredicateFactory getPredicateFactory() {

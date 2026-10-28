@@ -52,7 +52,7 @@ public interface IConcreteSearchStrategy<L extends IIcfgTransition<?>> {
 	 *            the program's concrete semantics
 	 * @param keepGoing
 	 *            polled regularly; the search stops as soon as it answers false. It is the only bound of the search:
-	 *            it asks the worker's time limit and memory budget.
+	 *            it asks the worker's time limit and whether it was retired.
 	 * @param confirm
 	 *            asked for every error configuration found; true ends the search with it
 	 * @return the confirmed error configuration, or null if the search ended without one

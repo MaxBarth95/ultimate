@@ -274,7 +274,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 				}
 				mInbox.drainTo(batch);
 				if (!mServices.getProgressMonitorService().continueProcessing()) {
-					mLogger.info("InvariantSupplier: stopping, the time is up");
+					mLogger.info("InvariantSupplier: stopping, the time is up or no TA worker is left");
 					return;
 				}
 				if (!batch.isEmpty()) {

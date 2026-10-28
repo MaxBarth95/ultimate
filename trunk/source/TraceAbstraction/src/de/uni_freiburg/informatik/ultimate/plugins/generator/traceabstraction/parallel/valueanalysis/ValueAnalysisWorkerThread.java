@@ -57,9 +57,9 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.IP
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.IPreconditionProvider;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.PathProgramCache;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.PredicateFactoryForInterpolantAutomata;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.HeapBudgetTimer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.ICegarNwaWorkerThread;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.ParallelNwaCegarLoop;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.RetirementTimer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TaskScopedServices;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TransferBetweenMainAndWorker;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TransferBetweenMainAndWorker.TransferMode;
@@ -82,7 +82,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tr
  * confirms the run and yields a program execution with values. The worker then hands the main thread a
  * {@link WorkerThreadResult#violation} result, and the main thread registers it.
  * <p>
- * Whenever the worker finds nothing, because the search ended, its time limit or another budget ran out, or anything
+ * Whenever the worker finds nothing, because the search ended, its time limit ran out, it was retired, or anything
  * went wrong, it ends with the result UNKNOWN: a {@link WorkerThreadResult#noVerdict} result, which the main thread
  * only logs. It never posts a crash and it does not count among the workers whose retirement makes the whole loop
  * UNKNOWN, so the other workers go on deciding the program. It runs outside the loop's worker pool and does not count
@@ -105,10 +105,10 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 	// Only used to build a refinement strategy for a counterexample; this worker has no path-program history.
 	private final PathProgramCache<L> mProgramCache;
 	private final IUltimateServiceProvider mParentServices;
-	// Both set when the worker starts, so that its time limit counts from then. The heap timer stops the search and
-	// the trace check when the live heap exceeds the memory budget or the time limit is up, via the progress monitor
-	// of mServices.
-	private HeapBudgetTimer mHeapTimer;
+	// Stops the search and the trace check when the HeapWatchdog retires the worker, via the progress monitor of
+	// mServices, which also asks the time limit.
+	private final RetirementTimer mRetirementTimer;
+	// Both set when the worker starts, so that its time limit counts from then
 	private IUltimateServiceProvider mServices;
 	private long mTimeLimitDeadline;
 	private final ConcreteTransFormulaExecutor mExecutor;
@@ -124,7 +124,7 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 			final ParallelNwaCegarLoop<L, A> mainThread,
 			final BlockingQueue<WorkerThreadResult<L, A>> blockingQueueForResults,
 			final TransferBetweenMainAndWorker<L, IPredicate> transferWorkerUtils,
-			final TaskIdentifier taskIdentifier) {
+			final TaskIdentifier taskIdentifier, final RetirementTimer retirementTimer) {
 		mLogger = logger;
 		mPref = pref;
 		mCfgSmtToolkit = cfgSmtToolkit;
@@ -139,6 +139,7 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 		mAbstraction = (INestedWordAutomaton<L, IPredicate>) transferWorkerUtils.transferAutomaton(
 				mainThread.getAbstraction(), mPredicateFactoryInterpolantAutomata, TransferMode.MAIN2WORKER);
 		mParentServices = services;
+		mRetirementTimer = retirementTimer;
 		mExecutor = new ConcreteTransFormulaExecutor(new NondeterminismPool(), pref.getValueAnalysisMaxChoices());
 		mSearch = createSearch(pref.getValueAnalysisSearch());
 	}
@@ -159,14 +160,10 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 		final long timeLimit = mPref.getValueAnalysisTimeLimit() * 1000L;
 		final IProgressMonitorService progressMonitor = mParentServices.getProgressMonitorService();
 		mTimeLimitDeadline = System.currentTimeMillis() + timeLimit;
-		mHeapTimer = new HeapBudgetTimer(progressMonitor.getChildTimer(timeLimit),
-				Runtime.getRuntime().maxMemory() / 100 * mPref.getValueAnalysisMemoryBudget(), true);
-		mServices = progressMonitor.registerChildTimer(mParentServices, mHeapTimer);
-		mHeapTimer.startMeasuring();
+		mServices = progressMonitor.registerChildTimer(mParentServices, mRetirementTimer.getChildTimer(timeLimit));
 		try {
-			mLogger.info("Value analysis: starts, search %s, time limit %d s, memory budget %d MB above a live heap "
-					+ "of %d MB", mPref.getValueAnalysisSearch(), mPref.getValueAnalysisTimeLimit(),
-					mHeapTimer.getBudgetBytes() >> 20, mHeapTimer.getBaselineBytes() >> 20);
+			mLogger.info("Value analysis: starts, search %s, time limit %d s", mPref.getValueAnalysisSearch(),
+					mPref.getValueAnalysisTimeLimit());
 			final ConcreteNwaSemantics<L> semantics =
 					new ConcreteNwaSemantics<>(mAbstraction, mCfgSmtToolkit.getModifiableGlobalsTable(), mExecutor);
 			final ConcreteConfiguration<L> violation = mSearch.search(semantics, this::keepGoing,
@@ -182,8 +179,8 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 		} catch (final Throwable t) {
 			if (stoppedFromOutside()) {
 				mLogger.info("Value analysis: stopping, shut down during a trace check (" + t + ")");
-			} else if (timeLimitReached() || mHeapTimer.isHeapBudgetExceeded()) {
-				// Whatever was thrown, a cancellation or an exception that wraps one, it is the budget.
+			} else if (timeLimitReached() || mRetirementTimer.isRetired()) {
+				// A cancellation, or an exception that wraps one: the time limit or the retirement stopped it.
 				finishUnknown(budgetMessage(null));
 			} else {
 				// Never a crash of the loop: the other workers decide the program without us.
@@ -197,6 +194,7 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 			mLogger.info("Value analysis: %s; %d step(s) executed, %d lost successors to unsupported terms, %d to "
 					+ "the choice limit; %d trace check(s)", mSearch.getStatistics(), mExecutor.getSteps(),
 					mExecutor.getUnsupportedSteps(), mExecutor.getTruncatedSteps(), mTraceChecks);
+			mRetirementTimer.stopped();
 		}
 	}
 
@@ -227,16 +225,14 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 	}
 
 	/**
-	 * @return which budget stopped the worker, or {@code otherwise} if none did
+	 * @return whether the worker was retired or reached its time limit, or {@code otherwise} if neither
 	 */
 	private String budgetMessage(final String otherwise) {
+		if (mRetirementTimer.isRetired()) {
+			return "retired, " + mRetirementTimer.getReason();
+		}
 		if (timeLimitReached()) {
 			return String.format("reached its time limit of %d s", mPref.getValueAnalysisTimeLimit());
-		}
-		if (mHeapTimer.isHeapBudgetExceeded()) {
-			return String.format("exceeded its memory budget: the live heap grew by %d MB since it started "
-					+ "(baseline %d MB), budget %d MB", mHeapTimer.getHeapGrowthWhenExceeded() >> 20,
-					mHeapTimer.getBaselineBytes() >> 20, mHeapTimer.getBudgetBytes() >> 20);
 		}
 		return otherwise;
 	}
