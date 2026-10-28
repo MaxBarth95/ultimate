@@ -162,9 +162,11 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 		mHeapTimer = new HeapBudgetTimer(progressMonitor.getChildTimer(timeLimit),
 				Runtime.getRuntime().maxMemory() / 100 * mPref.getValueAnalysisMemoryBudget(), true);
 		mServices = progressMonitor.registerChildTimer(mParentServices, mHeapTimer);
+		mHeapTimer.startMeasuring();
 		try {
-			mLogger.info("Value analysis: starts, search %s, time limit %d s", mPref.getValueAnalysisSearch(),
-					mPref.getValueAnalysisTimeLimit());
+			mLogger.info("Value analysis: starts, search %s, time limit %d s, memory budget %d MB above a live heap "
+					+ "of %d MB", mPref.getValueAnalysisSearch(), mPref.getValueAnalysisTimeLimit(),
+					mHeapTimer.getBudgetBytes() >> 20, mHeapTimer.getBaselineBytes() >> 20);
 			final ConcreteNwaSemantics<L> semantics =
 					new ConcreteNwaSemantics<>(mAbstraction, mCfgSmtToolkit.getModifiableGlobalsTable(), mExecutor);
 			final ConcreteConfiguration<L> violation = mSearch.search(semantics, mPref.getValueAnalysisStateBudget(),
@@ -232,7 +234,9 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 			return String.format("reached its time limit of %d s", mPref.getValueAnalysisTimeLimit());
 		}
 		if (mHeapTimer.isHeapBudgetExceeded()) {
-			return String.format("exceeded its memory budget of %d MB", mHeapTimer.getBudgetBytes() >> 20);
+			return String.format("exceeded its memory budget: the live heap grew by %d MB since it started "
+					+ "(baseline %d MB), budget %d MB", mHeapTimer.getHeapGrowthWhenExceeded() >> 20,
+					mHeapTimer.getBaselineBytes() >> 20, mHeapTimer.getBudgetBytes() >> 20);
 		}
 		return otherwise;
 	}

@@ -30,24 +30,32 @@ package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.p
 import de.uni_freiburg.informatik.ultimate.core.model.services.IProgressAwareTimer;
 
 /**
- * A timer that also expires when the JVM uses more heap than a budget allows. It bounds a worker in memory the way
- * the wrapped timer bounds it in time: everything that polls {@link #continueProcessing()} stops once either budget is
- * exceeded.
+ * A timer that also expires when a worker grows the heap by more than a budget allows. It bounds a worker in memory
+ * the way the wrapped timer bounds it in time: everything that polls {@link #continueProcessing()} stops once either
+ * budget is exceeded.
  * <p>
- * By default the used heap of the whole JVM counts, garbage included, so the heap of other workers counts as well.
- * That is intended for a worker that allocates faster than the collector frees: it makes the JVM grow its heap, which
- * it does not return, and that is what exceeds the memory limit of the process.
+ * The budget is what the worker may use on its own, so it is measured against a baseline: {@link #startMeasuring()},
+ * called when the worker starts, collects garbage once and records the live heap of the JVM at that point, and from
+ * then on only the growth of the heap above that baseline counts. Without it, a worker that starts while the main loop
+ * already holds a large abstraction would be over its budget before it did anything. The JVM cannot tell which thread
+ * a live object belongs to, though, so whatever the other threads add to the live heap while the worker runs counts
+ * as well.
  * <p>
- * With {@code confirmWithGc}, as the k-induction worker uses it, only the live heap counts for stopping: a used or
- * committed heap above the budget triggers a full garbage collection, and the budget is exceeded only if the used heap
- * is still above it afterwards. Other workers churn through gigabytes of garbage while k-induction runs, and that must
- * not stop it. The committed heap counts as a trigger because it is what the process pays for: G1 answers a high
- * allocation rate by growing its heap, also when little of it is live, and returns memory only after a full
- * collection. So the collection also trims a heap that churn made grow, which keeps the process below its memory limit
- * without stopping anything. If the heap stays committed above the budget after a collection (G1 keeps a part of it
- * free), the committed heap triggers the next collection only once it has grown by another tenth of the maximum heap;
- * otherwise every poll would collect again. To bound the cost of the collections, there is at most one every
- * {@link #MIN_GC_INTERVAL_NANOS}; in between, the budget is not checked. Once exceeded, such a timer stays expired.
+ * By default the used heap counts, garbage included. That is intended for a worker that allocates faster than the
+ * collector frees: it makes the JVM grow its heap, which it does not return, and that is what exceeds the memory limit
+ * of the process.
+ * <p>
+ * With {@code confirmWithGc}, as the k-induction and the value analysis workers use it, only the live heap counts for
+ * stopping: a used heap above baseline plus budget, or a committed heap above it, triggers a full garbage collection,
+ * and the budget is exceeded only if the used heap is still above it afterwards. Other workers churn through gigabytes
+ * of garbage while the worker runs, and that must not stop it. The committed heap counts as a trigger because it is
+ * what the process pays for: G1 answers a high allocation rate by growing its heap, also when little of it is live,
+ * and returns memory only after a full collection. So the collection also trims a heap that churn made grow, which
+ * keeps the process below its memory limit without stopping anything. If the heap stays committed above the trigger
+ * after a collection (G1 keeps a part of it free), the committed heap triggers the next collection only once it has
+ * grown by another tenth of the maximum heap; otherwise every poll would collect again. To bound the cost of the
+ * collections, there is at most one every {@link #MIN_GC_INTERVAL_NANOS}; in between, the budget is not checked. Once
+ * exceeded, such a timer stays expired.
  *
  * @author Max Barth (Max.Barth@lmu.de)
  */
@@ -60,7 +68,9 @@ public final class HeapBudgetTimer implements IProgressAwareTimer {
 	private final boolean mConfirmWithGc;
 	// Timers created from this one report to the same root, so the caller only has to ask the timer it created.
 	private final HeapBudgetTimer mRoot;
-	private volatile long mHeapUsedWhenExceeded = -1;
+	private volatile long mHeapGrowthWhenExceeded = -1;
+	// The live heap when the worker started, see startMeasuring(); the budget bounds the growth above it
+	private volatile long mBaselineBytes;
 	// When the root last collected garbage to confirm an exceeded budget; only used with mConfirmWithGc
 	private volatile long mLastGcNanos;
 	private volatile boolean mCollectedBefore;
@@ -92,6 +102,21 @@ public final class HeapBudgetTimer implements IProgressAwareTimer {
 		mCommittedTrigger = budgetBytes;
 	}
 
+	/**
+	 * Collects garbage and takes the live heap as the baseline above which the budget counts. Call it when the worker
+	 * starts; until then, the baseline is zero and the whole heap counts.
+	 */
+	public void startMeasuring() {
+		mRoot.recordBaseline();
+	}
+
+	private synchronized void recordBaseline() {
+		System.gc();
+		mCollections++;
+		mBaselineBytes = usedHeap();
+		mCommittedTrigger = mBaselineBytes + mBudgetBytes;
+	}
+
 	@Override
 	public boolean continueProcessing() {
 		if (!mTimer.continueProcessing()) {
@@ -100,15 +125,15 @@ public final class HeapBudgetTimer implements IProgressAwareTimer {
 		if (mConfirmWithGc && isHeapBudgetExceeded()) {
 			return false;
 		}
-		final long used = usedHeap();
+		final long growth = usedHeap() - mRoot.mBaselineBytes;
 		if (!mConfirmWithGc) {
-			if (used <= mBudgetBytes) {
+			if (growth <= mBudgetBytes) {
 				return true;
 			}
-			mRoot.mHeapUsedWhenExceeded = used;
+			mRoot.mHeapGrowthWhenExceeded = growth;
 			return false;
 		}
-		if (used <= mBudgetBytes && Runtime.getRuntime().totalMemory() <= mRoot.mCommittedTrigger) {
+		if (growth <= mBudgetBytes && Runtime.getRuntime().totalMemory() <= mRoot.mCommittedTrigger) {
 			return true;
 		}
 		return mRoot.confirmExceeded();
@@ -116,12 +141,12 @@ public final class HeapBudgetTimer implements IProgressAwareTimer {
 
 	/**
 	 * Collects garbage unless that was done recently, which also lets the JVM shrink its heap, and records the budget as
-	 * exceeded if the live heap is still above it.
+	 * exceeded if the live heap is still more than the budget above the baseline.
 	 *
 	 * @return whether processing may continue
 	 */
 	private synchronized boolean confirmExceeded() {
-		if (mHeapUsedWhenExceeded >= 0) {
+		if (mHeapGrowthWhenExceeded >= 0) {
 			return false;
 		}
 		final long now = System.nanoTime();
@@ -132,11 +157,12 @@ public final class HeapBudgetTimer implements IProgressAwareTimer {
 		mCollections++;
 		mCollectedBefore = true;
 		mLastGcNanos = System.nanoTime();
-		final long live = usedHeap();
+		final long growth = usedHeap() - mBaselineBytes;
 		final Runtime runtime = Runtime.getRuntime();
-		mCommittedTrigger = Math.max(mBudgetBytes, runtime.totalMemory() + runtime.maxMemory() / 10);
-		if (live > mBudgetBytes) {
-			mHeapUsedWhenExceeded = live;
+		mCommittedTrigger =
+				Math.max(mBaselineBytes + mBudgetBytes, runtime.totalMemory() + runtime.maxMemory() / 10);
+		if (growth > mBudgetBytes) {
+			mHeapGrowthWhenExceeded = growth;
 			return false;
 		}
 		return true;
@@ -151,15 +177,22 @@ public final class HeapBudgetTimer implements IProgressAwareTimer {
 	 * @return whether this timer, or one created from it, expired because of the heap budget
 	 */
 	public boolean isHeapBudgetExceeded() {
-		return mRoot.mHeapUsedWhenExceeded >= 0;
+		return mRoot.mHeapGrowthWhenExceeded >= 0;
 	}
 
 	/**
-	 * @return the used heap in bytes that exceeded the budget (after the garbage collection if the budget is confirmed
-	 *         with one), or -1 if the budget was not exceeded
+	 * @return how far the used heap was above the baseline in bytes when it exceeded the budget (after the garbage
+	 *         collection if the budget is confirmed with one), or -1 if the budget was not exceeded
 	 */
-	public long getHeapUsedWhenExceeded() {
-		return mRoot.mHeapUsedWhenExceeded;
+	public long getHeapGrowthWhenExceeded() {
+		return mRoot.mHeapGrowthWhenExceeded;
+	}
+
+	/**
+	 * @return the live heap in bytes when the worker started, see {@link #startMeasuring()}
+	 */
+	public long getBaselineBytes() {
+		return mRoot.mBaselineBytes;
 	}
 
 	/**

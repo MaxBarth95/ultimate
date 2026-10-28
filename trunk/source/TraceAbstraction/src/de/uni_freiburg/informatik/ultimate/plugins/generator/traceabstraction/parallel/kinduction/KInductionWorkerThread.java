@@ -120,7 +120,8 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	private final IInvariantSupplier<CallNode<IPredicate>> mInvariantSupplier;
 	// Only used to build a refinement strategy for a counterexample; k-induction has no path-program history.
 	private final PathProgramCache<L> mProgramCache;
-	// Stops k-induction when the live heap exceeds its memory budget. Everything k-induction runs gets
+	// Stops k-induction when the live heap grows by more than its memory budget after run() started (see
+	// HeapBudgetTimer#startMeasuring). Everything k-induction runs gets
 	// mKInductionServices, whose progress monitor asks this timer, so every poll of continueProcessing() checks it.
 	private final HeapBudgetTimer mHeapTimer;
 	private final IUltimateServiceProvider mKInductionServices;
@@ -162,6 +163,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	@Override
 	public void run() {
 		Thread.currentThread().setName("KInduction Thread");
+		mHeapTimer.startMeasuring();
 		try {
 			mLogger.info("WorkerThread for KInduction Starts");
 			mIteration = 1;
@@ -261,11 +263,11 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	private void retireForMemory(final Throwable stop) {
 		final long maxHeap = Runtime.getRuntime().maxMemory();
 		mLogger.warn(
-				"KInduction: stopped, it exceeded its memory budget: %d MB of heap still live after a garbage "
-						+ "collection, budget %d MB (%d%% of the %d MB max heap), while %s. The k-induction worker "
-						+ "retires without a verdict.",
-				mHeapTimer.getHeapUsedWhenExceeded() >> 20, mHeapTimer.getBudgetBytes() >> 20,
-				mPref.getKInductionMemoryBudget(), maxHeap >> 20, describe(stop));
+				"KInduction: stopped, it exceeded its memory budget: the live heap grew by %d MB since it started "
+						+ "(baseline %d MB, both after a garbage collection), budget %d MB (%d%% of the %d MB max heap), "
+						+ "while %s. The k-induction worker retires without a verdict.",
+				mHeapTimer.getHeapGrowthWhenExceeded() >> 20, mHeapTimer.getBaselineBytes() >> 20,
+				mHeapTimer.getBudgetBytes() >> 20, mPref.getKInductionMemoryBudget(), maxHeap >> 20, describe(stop));
 		try {
 			mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.KINDUCTION));
 		} catch (final InterruptedException e) {

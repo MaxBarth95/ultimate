@@ -586,10 +586,10 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	public static final String LABEL_KINDUCTION_MEMORY_BUDGET =
 			"Memory budget of the k-induction worker (% of max heap)";
 	private static final String DESC_KINDUCTION_MEMORY_BUDGET =
-			"How much of the JVM's maximum heap may be live while the k-induction worker runs. The heap of the whole "
-					+ "JVM counts, including that of the other workers, but only what is still in use after a garbage "
-					+ "collection. A k-induction worker that exceeds it stops and retires without a verdict, so that "
-					+ "the other workers keep the memory.";
+			"By how much of the JVM's maximum heap the live heap may grow while the k-induction worker runs, "
+					+ "measured from the live heap when it started and only counting what is still in use after a "
+					+ "garbage collection. What the other workers add meanwhile counts as well. A k-induction worker "
+					+ "that exceeds it stops and retires without a verdict, so that the other workers keep the memory.";
 	private static final int DEF_KINDUCTION_MEMORY_BUDGET = 60;
 
 	public static final String LABEL_INVARIANT_PROBATION = "Probation of invariants for k-induction";
@@ -655,8 +655,10 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	public static final String LABEL_VALUE_ANALYSIS_MEMORY_BUDGET =
 			"Memory budget of the value analysis worker (% of max heap)";
 	private static final String DESC_VALUE_ANALYSIS_MEMORY_BUDGET =
-			"How much of the JVM's maximum heap may be live while the value analysis worker runs. A worker that "
-					+ "exceeds it stops silently, so that the other workers keep the memory.";
+			"By how much of the JVM's maximum heap the live heap may grow while the value analysis worker runs, "
+					+ "measured from the live heap when it started and only counting what is still in use after a "
+					+ "garbage collection. What the other workers add meanwhile counts as well. A worker that exceeds "
+					+ "it stops silently, so that the other workers keep the memory.";
 	private static final int DEF_VALUE_ANALYSIS_MEMORY_BUDGET = 20;
 
 	public static final String LABEL_VALUE_ANALYSIS_TIME_LIMIT = "Time limit of the value analysis worker (s)";
