@@ -27,6 +27,7 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel;
 
+import java.util.Map;
 import java.util.Objects;
 
 import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
@@ -55,6 +56,8 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	private Throwable mCrashCause;
 	// Only set by violation(..), see there.
 	private IProgramExecution<L, Term> mProgramExecution;
+	// Only set by kInductionSafe(..), see there.
+	private Map<IPredicate, Term> mProofInvariants;
 	WorkerType mWorkerType;
 
 	public enum WorkerType
@@ -113,6 +116,22 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	}
 
 	/**
+	 * k-induction proved the whole program safe. Like every SAFE sentinel it has neither a subtrahend nor an automaton
+	 * type.
+	 *
+	 * @param proofInvariants
+	 *            for every loop head, a state of the initial abstraction, its invariant for a correctness witness,
+	 *            terms of {@code mgdScript}; null if there are none
+	 */
+	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
+			kInductionSafe(final Map<IPredicate, Term> proofInvariants, final ManagedScript mgdScript) {
+		final WorkerThreadResult<L, A> result =
+				new WorkerThreadResult<>(WorkerType.KINDUCTION, null, null, mgdScript, null, null, false, false);
+		result.mProofInvariants = proofInvariants;
+		return result;
+	}
+
+	/**
 	 * A worker that the {@link HeapWatchdog} retired. It stopped the check it was running and takes no more tasks.
 	 *
 	 * @param counterexample
@@ -143,6 +162,14 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	 */
 	public IProgramExecution<L, Term> getProgramExecution() {
 		return mProgramExecution;
+	}
+
+	/**
+	 * @return for a k-induction proof the invariants for a correctness witness, see {@link #kInductionSafe}; null if
+	 *         there are none
+	 */
+	public Map<IPredicate, Term> getProofInvariants() {
+		return mProofInvariants;
 	}
 
 	public WorkerType getWorkerType() {
