@@ -203,18 +203,16 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			final PredicateFactoryRefinement stateFactoryForRefinement) {
 		super(name, initialAbstraction, rootNode, csToolkit, predicateFactory, taPrefs, errorLocs, proofProducer,
 				services, transitionClazz, stateFactoryForRefinement);
-		// Start thread pool
-		if (mPref.getThreadLimit() == 0) { // maximum of available cores
-			mNumTaWorkers = Runtime.getRuntime().availableProcessors() - 1; // one for main thread
-		} else {
-			mNumTaWorkers = mPref.getThreadLimit();
-		}
+		// Start thread pool: one thread per TA and k-induction worker (the value analysis has its own executor)
+		mNumTaWorkers = mPref.getNumTaWorkers();
 		mNumKInductionWorkers = mPref.getNumKInductionWorkers();
 		mUseAbsIntWorker = mPref.useAbsIntWorker();
 		mUseSifaWorker = mPref.useSifaWorker();
 		mThreadLimit = mNumTaWorkers + mNumKInductionWorkers + (mUseAbsIntWorker ? 1 : 0) + (mUseSifaWorker ? 1 : 0);
 		if (mThreadLimit == 0) {
-			throw new AssertionError("At least one parallel CEGAR worker thread must be configured");
+			// The value analysis alone can never prove a program.
+			throw new IllegalArgumentException(
+					"The parallel CEGAR loop needs at least one TA worker or one k-induction worker");
 		}
 
 		mExec = Executors.newFixedThreadPool(mThreadLimit, workerThreadFactory("Cegar Worker"));
