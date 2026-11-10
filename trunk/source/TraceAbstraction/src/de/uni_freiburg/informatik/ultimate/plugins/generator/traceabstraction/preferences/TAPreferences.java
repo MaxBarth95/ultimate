@@ -108,6 +108,7 @@ public final class TAPreferences {
 	private final int mNumTaWorkers;
 	private final int mNumKInductionWorkers;
 	private final int mKInductionSolverTimeout;
+	private final int mKInductionWitnessTimeout;
 	private final int mTaRetirementHeap;
 	private final boolean mInvariantProbation;
 	private final int mProbationFactor;
@@ -241,6 +242,8 @@ public final class TAPreferences {
 		mNumKInductionWorkers = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_NUM_KINDUCTION_WORKERS);
 		mKInductionSolverTimeout =
 				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_SOLVER_TIMEOUT);
+		mKInductionWitnessTimeout =
+				mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_KINDUCTION_WITNESS_TIMEOUT);
 		mTaRetirementHeap = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_TA_RETIREMENT_HEAP);
 		mInvariantProbation = mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_INVARIANT_PROBATION);
 		mProbationFactor = mPrefs.getInt(TraceAbstractionPreferenceInitializer.LABEL_PROBATION_FACTOR);
@@ -708,6 +711,13 @@ public final class TAPreferences {
 	 */
 	public int getKInductionSolverTimeout() {
 		return mKInductionSolverTimeout;
+	}
+
+	/**
+	 * @return how long in ms the k-induction worker may compute the invariants of its proof for a correctness witness
+	 */
+	public int getKInductionWitnessTimeout() {
+		return mKInductionWitnessTimeout;
 	}
 
 	/**
