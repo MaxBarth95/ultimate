@@ -27,7 +27,6 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.kinduction;
 
-import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
@@ -67,6 +66,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pa
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerThreadTask;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.KInduction;
+import de.uni_freiburg.informatik.ultimate.lib.kinduction.KInduction.WitnessInvariants;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.KInductionCounterexampleException;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.encoding.CallNode;
 import de.uni_freiburg.informatik.ultimate.lib.kinduction.IInvariantSupplier;
@@ -103,7 +103,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	// k-induction has no memory limit: when the heap fills up, the other workers retire (see HeapWatchdog).
 	private final IUltimateServiceProvider mKInductionServices;
 	// The invariants of a proof for the main thread's correctness witness, see computeWitnessInvariants
-	private Map<IPredicate, Term> mWitnessInvariants;
+	private WitnessInvariants<IPredicate> mWitnessInvariants;
 	// How much longer than its timer (TAPreferences.getKInductionWitnessTimeout) the verdict waits for a computation
 	// that has not noticed the timer yet
 	private static final long WITNESS_GRACE_MILLIS = 500;
@@ -144,8 +144,9 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 			mIteration = 1;
 			switch (runKInduction()) {
 			case SAFE:
-				mBlockingQueueForResults.put(WorkerThreadResult.kInductionSafe(mWitnessInvariants,
-						mCfgSmtToolkit.getManagedScript()));
+				mBlockingQueueForResults.put(WorkerThreadResult.kInductionSafe(
+						mWitnessInvariants == null ? null : mWitnessInvariants.invariants(),
+						mWitnessInvariants != null && mWitnessInvariants.proving(), mCfgSmtToolkit.getManagedScript()));
 				break;
 			case UNSAFE:
 				// The violation is already registered on the shared result builder. AutomatonType.ERROR is what
@@ -245,7 +246,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	 * @return the invariants, worker-script terms, or null if there are none; throws only when interrupted, since the
 	 *         proof stands without a witness
 	 */
-	private Map<IPredicate, Term> computeWitnessInvariants(final KInduction<L, IPredicate> kInduction)
+	private WitnessInvariants<IPredicate> computeWitnessInvariants(final KInduction<L, IPredicate> kInduction)
 			throws InterruptedException {
 		final long timeout = mPref.getKInductionWitnessTimeout();
 		// The timer of computeWitnessInvariantsWithin only ends the computation where it looks at it, and the ite
@@ -253,12 +254,12 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 		// waits for the computation only until the timer has run out, and an unfinished one is left behind with the
 		// best invariants it has proven so far. It only uses this worker's own script, which nobody needs once there
 		// is a verdict.
-		final FutureTask<Map<IPredicate, Term>> task =
+		final FutureTask<WitnessInvariants<IPredicate>> task =
 				new FutureTask<>(() -> computeWitnessInvariantsWithin(kInduction, timeout));
 		final Thread thread = new Thread(task, "KInduction witness");
 		thread.setDaemon(true);
 		thread.start();
-		Map<IPredicate, Term> invariants;
+		WitnessInvariants<IPredicate> invariants;
 		try {
 			invariants = task.get(timeout + WITNESS_GRACE_MILLIS, TimeUnit.MILLISECONDS);
 		} catch (final TimeoutException e) {
@@ -284,7 +285,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 	 * @return the invariants of {@link KInduction#computeWitnessInvariants}, or the best ones it found before it failed,
 	 *         or null if there are none
 	 */
-	private Map<IPredicate, Term> computeWitnessInvariantsWithin(final KInduction<L, IPredicate> kInduction,
+	private WitnessInvariants<IPredicate> computeWitnessInvariantsWithin(final KInduction<L, IPredicate> kInduction,
 			final long timeout) {
 		final IProgressMonitorService progressMonitor = mKInductionServices.getProgressMonitorService();
 		final IUltimateServiceProvider witnessServices = progressMonitor.registerChildTimer(mKInductionServices,
