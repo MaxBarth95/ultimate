@@ -321,6 +321,12 @@ public class ProgramVarUtils {
 		public String toString() {
 			return mProgConst.toString();
 		}
+
+		@Override
+		public int hashCode() {
+			// See TransferredProgramVar#hashCode.
+			return getGloballyUniqueId().hashCode();
+		}
 	}
 
 	/**
@@ -389,6 +395,16 @@ public class ProgramVarUtils {
 		public String toString() {
 			return mOriginalProgramVar.toString();
 		}
+
+		/**
+		 * Equality stays identity, but the hash must not be the identity hash: hash maps and sets of program variables
+		 * (e.g. the in- and outVars of every TransFormula) iterate in hash order, so an identity hash makes everything
+		 * built from such an iteration differ from run to run, e.g. the order of the SMT script sent to a solver.
+		 */
+		@Override
+		public int hashCode() {
+			return getGloballyUniqueId().hashCode();
+		}
 	}
 
 	private static class TransferredLocalProgramVar extends TransferredProgramVar<ILocalProgramVar>
@@ -453,6 +469,12 @@ public class ProgramVarUtils {
 		public String toString() {
 			return mNonOld.toString();
 		}
+
+		@Override
+		public int hashCode() {
+			// See TransferredProgramVar#hashCode.
+			return getGloballyUniqueId().hashCode();
+		}
 	}
 
 	private static class TransferredProgramOldVar implements IProgramOldVar {
@@ -511,6 +533,12 @@ public class ProgramVarUtils {
 		@Override
 		public String toString() {
 			return mOld.toString();
+		}
+
+		@Override
+		public int hashCode() {
+			// See TransferredProgramVar#hashCode.
+			return getGloballyUniqueId().hashCode();
 		}
 	}
 
