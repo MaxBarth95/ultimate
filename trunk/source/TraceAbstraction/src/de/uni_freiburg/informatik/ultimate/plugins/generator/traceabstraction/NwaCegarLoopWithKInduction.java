@@ -318,7 +318,7 @@ public class NwaCegarLoopWithKInduction<L extends IIcfgTransition<?>> extends Nw
 	// k-induction, with the invariant synthesis before it
 	// ------------------------------------------------------------------------------------------------------------
 
-	private void runKInduction() {
+	private void runKInduction() throws AutomataLibraryException {
 		// The solvers of k-induction and of the invariant synthesis are destroyed with these services.
 		final TaskScopedServices kiServices = new TaskScopedServices(mServices);
 		final TaskScopedServices invServices = new TaskScopedServices(mServices);
@@ -438,13 +438,14 @@ public class NwaCegarLoopWithKInduction<L extends IIcfgTransition<?>> extends Nw
 	private void runKInduction(final IUltimateServiceProvider services, final CfgSmtToolkit kiToolkit,
 			final INestedWordAutomaton<L, IPredicate> kiAbstraction,
 			final PcTransitionSystemFactory.Result<IPredicate> system,
-			final IInvariantSupplier<CallNode<IPredicate>> invariants) {
+			final IInvariantSupplier<CallNode<IPredicate>> invariants) throws AutomataLibraryException {
 		final HashRelation<String, ILocation> overapproximations =
 				KInductionWorkerThread.overapproximations(kiAbstraction);
 		final KInduction<L, IPredicate> kInduction;
 		try {
+			// The waypoints of the model, never a rebuilt run: an overapproximated violation is no verdict here anyway.
 			kInduction = new KInduction<>(services, mLogger, kiToolkit, kiAbstraction, system, invariants,
-					mPref.restartKInductionSolverAfterInterrupt());
+					mPref.restartKInductionSolverAfterInterrupt(), true);
 		} catch (final ToolchainCanceledException e) {
 			if (!mServices.getProgressMonitorService().continueProcessing()) {
 				throw e;

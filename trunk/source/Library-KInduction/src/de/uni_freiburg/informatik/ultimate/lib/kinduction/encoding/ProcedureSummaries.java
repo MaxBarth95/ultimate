@@ -111,7 +111,8 @@ import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
  * with {@link TransFormulaUtils#sequentialCompositionWithPendingCall}. The error state becomes a state (and a final
  * state) of the caller's graph, sealed so that its own transitions are not edges there. Error states are carried up
  * this way through any number of levels. In an <b>unfolded</b> callee the error state is simply a node of the copy, and
- * needs no edge of its own. Either way the call stays pending, so a violation ends with an unmatched call.
+ * needs no edge of its own. Either way the call stays pending, so the counterexample
+ * {@link KInductionCounterexampleBuilder} builds ends with an unmatched call.
  * <p>
  * Every summary formula is built for <b>one</b> call transition and <b>one</b> exit resp. error state, never for the
  * union of all of them: the union would let a path that reaches one exit leave through another exit's return
@@ -374,8 +375,9 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 
 	/**
 	 * The variable that counts the activations {@link CallStack} keeps, or {@code null} if this program needed no
-	 * activation record at all. How many calls are open at a node is exactly its chain of call sites plus how far this
-	 * has moved since the start.
+	 * activation record at all. How many calls are open at a node is exactly its chain of call sites plus how far
+	 * this has moved since the start, which is what lets {@link KInductionCounterexampleBuilder} cut a run into pc
+	 * steps again.
 	 */
 	public IProgramVar getStackPointer() {
 		return mCallStack == null ? null : mCallStack.getStackPointer();
@@ -541,8 +543,8 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	 * contracted if its edge nests at most {@link #MAX_UNION_DEPTH} unions. A deeper cascade stays a graph, which
 	 * {@link PcTransitionSystem} encodes with its subformulas shared. The heads of a loop stay: a head
 	 * is entered from outside the loop and from inside it, so it has two predecessors, unless it is an initial or an
-	 * entry state. A removed state can still lie on a counterexample; {@link #getComposedEdges()} tells the waypoints
-	 * of a violation which edges were composed through removed states.
+	 * entry state. A removed state can still lie on a counterexample, since {@link KInductionCounterexampleBuilder}
+	 * searches the letters between two pc values in the automaton, not in this graph.
 	 */
 	private ReducedProcedure reduce(final String procedure) {
 		final Set<STATE> own = ownStates(procedure);
@@ -1539,11 +1541,12 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	 * matching second half is the return's own assignment, which is the formula of the virtual edge leaving the
 	 * unfolded copy.
 	 * <p>
-	 * The callee's locals are havoced first. In an unfolded graph they are ordinary state variables that outlive the
-	 * activation, so without this they would still hold the values of the previous call to the same procedure - an
-	 * under-approximation, which could prove an unsafe program safe. A summarized call needs no such step because
-	 * {@code sequentialCompositionWithCallAndReturn} projects the callee's locals out of the summary, which has the
-	 * same effect.
+	 * The callee's locals are havoced first. In an unfolded graph they are ordinary state variables that outlive
+	 * the activation, so without this they would still hold the values of the previous call to the same procedure
+	 * - an under-approximation, which could prove an unsafe program safe. A summarized call needs no such step
+	 * because {@code sequentialCompositionWithCallAndReturn} projects the callee's locals out of the summary,
+	 * which has the same effect. {@link KInductionCounterexampleBuilder} leaves them without a value for the same
+	 * reason.
 	 * <p>
 	 * Whether the havoc comes before or after the parameter assignment only matters when the caller and the callee are
 	 * the same procedure, which is to say for a directly recursive call: then the actual parameters the call reads
@@ -1584,9 +1587,9 @@ public final class ProcedureSummaries<LETTER extends IAction, STATE> {
 	 * {@link TransFormulaUtils#sequentialComposition}, however, an inVar without an outVar is havoced
 	 * ({@link TransFormulaUtils#computeAssignedVars}), and in the flat graph the caller's variables live on after the
 	 * call - so every argument would lose its value at the call, an over-approximation under which the base case
-	 * reports violations that no run has. It also keeps a read-only local of the callee (the argument of a recursive
-	 * call) out of {@link UnmodifiableTransFormula#getAssignedVars()}, so the activation havocs it as it havocs every
-	 * other local.
+	 * reports violations that no run has. It also keeps a read-only local of the callee (the argument of a
+	 * recursive call) out of {@link UnmodifiableTransFormula#getAssignedVars()}, so the activation havocs it as it
+	 * havocs every other local; {@link KInductionCounterexampleBuilder} does the same.
 	 */
 	private UnmodifiableTransFormula keepReadVariables(final UnmodifiableTransFormula callTf) {
 		final Map<IProgramVar, TermVariable> kept = new LinkedHashMap<>();
