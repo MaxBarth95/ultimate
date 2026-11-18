@@ -1,7 +1,7 @@
 package de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.base.chandler;
 
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
@@ -63,12 +63,12 @@ public final class RequiredMemoryModelFeatures {
 	private final List<MemoryModelDeclarations> mMetaDataDeclarations;
 
 	public RequiredMemoryModelFeatures(final List<MemoryModelDeclarations> metaDataDeclarations) {
-		mDataOnHeapRequired = new HashSet<>();
-		mRequiredMemoryStructureDeclarations = new HashSet<>();
-		mDataUncheckedWriteRequired = new HashSet<>();
-		mDataInitWriteRequired = new HashSet<>();
-		mDataOnHeapInitFunctionRequired = new HashSet<>();
-		mDataOnHeapStoreFunctionRequired = new HashSet<>();
+		mDataOnHeapRequired = EnumSet.noneOf(CPrimitives.class);
+		mRequiredMemoryStructureDeclarations = EnumSet.noneOf(MemoryModelDeclarations.class);
+		mDataUncheckedWriteRequired = EnumSet.noneOf(CPrimitives.class);
+		mDataInitWriteRequired = EnumSet.noneOf(CPrimitives.class);
+		mDataOnHeapInitFunctionRequired = EnumSet.noneOf(CPrimitives.class);
+		mDataOnHeapStoreFunctionRequired = EnumSet.noneOf(CPrimitives.class);
 
 		mMetaDataDeclarations = metaDataDeclarations;
 	}
@@ -278,7 +278,7 @@ public final class RequiredMemoryModelFeatures {
 		boolean changedSomething = true;
 		while (changedSomething) {
 			changedSomething = false;
-			for (final MemoryModelDeclarations mmdecl : new HashSet<>(mRequiredMemoryStructureDeclarations)) {
+			for (final MemoryModelDeclarations mmdecl : EnumSet.copyOf(mRequiredMemoryStructureDeclarations)) {
 				changedSomething |= mmdecl.resolveDependencies(this, settings);
 			}
 		}

@@ -110,7 +110,8 @@ public class HeapDataArray {
 
 	@Override
 	public int hashCode() {
-		return Objects.hash(mContentASTType, mName, mSize);
+		// ASTType has no hashCode of its own; leaving it out keeps the iteration order of hash sets stable across runs
+		return Objects.hash(mName, mSize);
 	}
 
 	@Override
