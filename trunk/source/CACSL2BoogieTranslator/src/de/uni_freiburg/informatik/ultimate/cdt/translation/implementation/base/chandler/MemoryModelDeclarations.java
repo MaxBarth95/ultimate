@@ -26,7 +26,7 @@
  */
 package de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.base.chandler;
 
-import java.util.HashSet;
+import java.util.EnumSet;
 
 import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.base.TranslationSettings;
 import de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.container.c.CPrimitive.CPrimitives;
@@ -181,7 +181,7 @@ public enum MemoryModelDeclarations {
 	private static boolean strcpyRequirements(final RequiredMemoryModelFeatures rmmf) {
 		boolean changedSomething = false;
 		rmmf.reportDataOnHeapRequired(CPrimitives.CHAR);
-		for (final CPrimitives prim : new HashSet<>(rmmf.getDataOnHeapRequiredUnchecked())) {
+		for (final CPrimitives prim : EnumSet.copyOf(rmmf.getDataOnHeapRequiredUnchecked())) {
 			changedSomething |= rmmf.reportUncheckedWriteRequired(prim);
 		}
 		if (rmmf.isPointerOnHeapRequiredUnchecked()) {
@@ -195,7 +195,7 @@ public enum MemoryModelDeclarations {
 		boolean changedSomething = false;
 		if (settings.useConstantArrays()) {
 			// TODO: using members instead of getters here to avoid "checkIsFrozen" calls -- not nice..
-			for (final CPrimitives prim : new HashSet<>(rmmf.getDataOnHeapRequiredUnchecked())) {
+			for (final CPrimitives prim : EnumSet.copyOf(rmmf.getDataOnHeapRequiredUnchecked())) {
 				changedSomething |= rmmf.reportDataOnHeapInitFunctionRequired(prim);
 			}
 			if (rmmf.isPointerOnHeapRequiredUnchecked()) {
@@ -212,7 +212,7 @@ public enum MemoryModelDeclarations {
 	private static boolean memcpyOrMemmoveRequirements(final RequiredMemoryModelFeatures mmf) {
 		boolean changedSomething = false;
 		// TODO: using members instead of getters here to avoid "checkIsFrozen" calls -- not nice..
-		for (final CPrimitives prim : new HashSet<>(mmf.getDataOnHeapRequiredUnchecked())) {
+		for (final CPrimitives prim : EnumSet.copyOf(mmf.getDataOnHeapRequiredUnchecked())) {
 			changedSomething |= mmf.reportUncheckedWriteRequired(prim);
 		}
 		if (mmf.isPointerOnHeapRequiredUnchecked()) {

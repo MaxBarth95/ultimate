@@ -31,7 +31,7 @@ package de.uni_freiburg.informatik.ultimate.cdt.translation.implementation.base.
 
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -132,7 +132,7 @@ public abstract class MemoryStructureBase implements IMemoryStructure {
 	@Override
 	public final Collection<HeapDataArray>
 			getDataHeapArrays(final RequiredMemoryModelFeatures requiredMemoryStructureFeatures) {
-		final Set<HeapDataArray> result = new HashSet<>();
+		final Set<HeapDataArray> result = new LinkedHashSet<>();
 		if (requiredMemoryStructureFeatures.isPointerOnHeapRequired()) {
 			result.add(getPointerHeapArray());
 		}
