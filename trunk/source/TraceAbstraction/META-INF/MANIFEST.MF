@@ -33,7 +33,8 @@ Require-Bundle: de.uni_freiburg.informatik.ultimate.lib.core,
  de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils,
  de.uni_freiburg.informatik.ultimate.lib.acceleratedinterpolation,
  de.uni_freiburg.informatik.ultimate.lib.kinduction,
- de.uni_freiburg.informatik.ultimate.lib.valueanalysis
+ de.uni_freiburg.informatik.ultimate.lib.valueanalysis,
+ com.google.gson
 Bundle-ActivationPolicy: lazy
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 Export-Package: de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction,
