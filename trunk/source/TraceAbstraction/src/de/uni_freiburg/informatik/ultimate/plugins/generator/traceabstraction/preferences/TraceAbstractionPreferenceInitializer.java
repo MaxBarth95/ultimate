@@ -665,6 +665,22 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 					+ "limit of the whole toolchain.";
 	private static final int DEF_SEQUENTIAL_KINDUCTION_TIME_LIMIT = 0;
 
+	// Multi Process Trace Abstraction (UltimateCloud)
+	// ========================================================================
+	public static final String LABEL_MULTI_PROCESS_COMPONENT = "multi process component";
+	private static final String DESC_MULTI_PROCESS_COMPONENT =
+			"The session kind this Ultimate process runs as. DISABLED runs trace abstraction in this process alone. "
+					+ "The other kinds exchange messages with a scheduler through the session directory.";
+	private static final MultiProcessComponent DEF_MULTI_PROCESS_COMPONENT = MultiProcessComponent.DISABLED;
+	public static final String LABEL_MULTI_PROCESS_EXCHANGE_ROOT = "multi process exchange root";
+	private static final String DESC_MULTI_PROCESS_EXCHANGE_ROOT =
+			"The session directory (with in/, out/, blobs/ and log/). Required for every kind but DISABLED.";
+	private static final String DEF_MULTI_PROCESS_EXCHANGE_ROOT = "";
+	public static final String LABEL_MULTI_PROCESS_SESSION_ID = "multi process session id";
+	private static final String DESC_MULTI_PROCESS_SESSION_ID =
+			"The id of this session, given by the scheduler. It is part of every log line.";
+	private static final String DEF_MULTI_PROCESS_SESSION_ID = "";
+
 	public static final String LABEL_KINDUCTION_COUNTEREXAMPLE = "K-Induction counterexample";
 	private static final String DESC_KINDUCTION_COUNTEREXAMPLE =
 			"What k-induction reports for a violation. RECONSTRUCT_RUN rebuilds a run of the program, which is found "
@@ -932,7 +948,8 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 				new UltimatePreferenceItem<>(LABEL_DUMP_PATH_PROGRAM_IF_ANALYZED_TOO_OFTEN, 0, PreferenceType.Integer),
 				new UltimatePreferenceItem<>(LABEL_DUMP_PATH_PROGRAM_STOP_MODE, PathProgramDumpStop.AFTER_FIRST_DUMP,
 						PreferenceType.Combo, PathProgramDumpStop.values()),
-				getConcurrencySettings(), getParallelCegarSettings(), getSequentialKInductionSettings() };
+				getConcurrencySettings(), getParallelCegarSettings(), getSequentialKInductionSettings(),
+				getMultiProcessSettings() };
 	}
 
 	private static UltimatePreferenceItemContainer getConcurrencySettings() {
@@ -1103,6 +1120,19 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 						DEF_SEQUENTIAL_KINDUCTION_TIME_LIMIT, DESC_SEQUENTIAL_KINDUCTION_TIME_LIMIT,
 						PreferenceType.Integer,
 						new IUltimatePreferenceItemValidator.IntegerValidator(0, Integer.MAX_VALUE)));
+	}
+
+	/**
+	 * The settings of the multi-process trace abstraction, where one Ultimate process runs one session of UltimateCloud.
+	 */
+	private static UltimatePreferenceItemContainer getMultiProcessSettings() {
+		return new UltimatePreferenceItemContainer("Multi Process Trace Abstraction",
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_COMPONENT, DEF_MULTI_PROCESS_COMPONENT,
+						DESC_MULTI_PROCESS_COMPONENT, PreferenceType.Combo, MultiProcessComponent.values()),
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_EXCHANGE_ROOT, DEF_MULTI_PROCESS_EXCHANGE_ROOT,
+						DESC_MULTI_PROCESS_EXCHANGE_ROOT, PreferenceType.String),
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_SESSION_ID, DEF_MULTI_PROCESS_SESSION_ID,
+						DESC_MULTI_PROCESS_SESSION_ID, PreferenceType.String));
 	}
 
 	public static String getSuffixedLabel(final String label, final int index) {
@@ -1389,5 +1419,27 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 		 * Breadth-first, which finds a shortest violation first.
 		 */
 		BFS
+	}
+
+	/**
+	 * The session kind of a multi-process run. The names are those of UltimateCloud's {@code SessionKind}.
+	 */
+	public enum MultiProcessComponent {
+		/**
+		 * Today's single-process trace abstraction.
+		 */
+		DISABLED,
+		/**
+		 * Runs the CEGAR loop and refines with the interpolant automata of the TA workers.
+		 */
+		COORDINATOR,
+		/**
+		 * Checks the counterexamples it is sent and returns interpolant automata.
+		 */
+		TA_WORKER,
+		/**
+		 * Collects the evidence and writes the witness of the verdict.
+		 */
+		WITNESS
 	}
 }

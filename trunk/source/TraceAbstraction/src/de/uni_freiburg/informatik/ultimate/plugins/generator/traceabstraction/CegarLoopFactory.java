@@ -70,6 +70,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.co
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.concurrency.IndependenceProviderFactory;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.concurrency.PartialOrderCegarLoop;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.ParallelNwaCegarLoop;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.Concurrency;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer;
@@ -230,6 +231,10 @@ public class CegarLoopFactory<L extends IIcfgTransition<?>> {
 				errorLocs, proofProducer, services, Collections.emptyList(), rawFloydHoareAutomataFromFile,
 				mTransitionClazz, stateFactoryForRefinement);
 		case NONE -> {
+			if (MultiProcessSupport.isMultiProcess(mPrefs)) {
+				// TraceAbstractionStarter only gets here for the coordinator
+				throw new UnsupportedOperationException("Session kind COORDINATOR is not implemented yet");
+			}
 			if (mPrefs.isSequentialKInductionCegarLoop() && !IcfgUtils.isConcurrent(root)) {
 				yield new NwaCegarLoopWithKInduction<>(name, abstraction, root, csToolkit, predicateFactory, mPrefs,
 						errorLocs, proofProducer, services, mTransitionClazz, stateFactoryForRefinement);

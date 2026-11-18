@@ -57,6 +57,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.InterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.McrInterpolantMethod;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.Minimization;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.MultiProcessComponent;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.OrderOfErrorLocations;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.RefinementStrategy;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.ValueAnalysisSearch;
@@ -788,6 +789,28 @@ public final class TAPreferences {
 	 */
 	public boolean isSequentialKInductionCegarLoop() {
 		return mSequentialKInductionCegarLoop;
+	}
+
+	/**
+	 * @return the session kind this process runs as; {@link MultiProcessComponent#DISABLED} for a single-process run
+	 */
+	public MultiProcessComponent getMultiProcessComponent() {
+		return mPrefs.getEnum(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_COMPONENT,
+				MultiProcessComponent.class);
+	}
+
+	/**
+	 * @return the session directory of a multi-process run
+	 */
+	public String getMultiProcessExchangeRoot() {
+		return mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_EXCHANGE_ROOT);
+	}
+
+	/**
+	 * @return the session id of a multi-process run
+	 */
+	public String getMultiProcessSessionId() {
+		return mPrefs.getString(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_SESSION_ID);
 	}
 
 	/**

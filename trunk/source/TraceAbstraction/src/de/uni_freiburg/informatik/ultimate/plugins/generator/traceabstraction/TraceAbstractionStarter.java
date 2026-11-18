@@ -76,6 +76,7 @@ import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.partialorder.in
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.partialorder.petrinetlbe.PetriNetLargeBlockEncoding.IPLBECompositionFactory;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop.Result;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.AbstractInterpolantAutomaton;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.FloydHoareAutomataReuse;
@@ -150,11 +151,31 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 				icfg.getIdentifier(), icfg.getProcedureEntryNodes().size(), IcfgUtils.getNumberOfLocations(icfg),
 				IcfgUtils.getNumberOfEdges(icfg), icfg.getInitialNodes().size(), icfg.getLoopLocations().size(),
 				numberOfErrorLocs));
+		final boolean isMultiProcess = MultiProcessSupport.isMultiProcess(mPrefs);
+		if (isMultiProcess) {
+			MultiProcessSupport.checkSupported(mPrefs, mServices.getPreferenceProvider(Activator.PLUGIN_ID), icfg,
+					mWitnessTransformer);
+		}
 		if (numberOfErrorLocs <= 0) {
+			if (isMultiProcess) {
+				throw new UnsupportedOperationException(
+						"Multi-process sessions are not implemented for programs without error locations");
+			}
 			final AllSpecificationsHoldResult result = AllSpecificationsHoldResult
 					.createAllSpecificationsHoldResult(Activator.PLUGIN_NAME, numberOfErrorLocs);
 			mResultReporter.reportResult(result);
 			return;
+		}
+		switch (mPrefs.getMultiProcessComponent()) {
+		case DISABLED, COORDINATOR:
+			// the coordinator is a CEGAR loop, see CegarLoopFactory
+			break;
+		case TA_WORKER:
+			throw new UnsupportedOperationException("Session kind TA_WORKER is not implemented yet");
+		case WITNESS:
+			throw new UnsupportedOperationException("Session kind WITNESS is not implemented yet");
+		default:
+			throw new UnsupportedOperationException("Unknown session kind " + mPrefs.getMultiProcessComponent());
 		}
 
 		mArtifact = null;
