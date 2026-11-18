@@ -76,10 +76,13 @@ import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.partialorder.in
 import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.partialorder.petrinetlbe.PetriNetLargeBlockEncoding.IPLBECompositionFactory;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop.Result;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.AbstractInterpolantAutomaton;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.FileExchange;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.FloydHoareAutomataReuse;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.MultiProcessComponent;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.OrderOfErrorLocations;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.DataStructureUtils;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
@@ -170,10 +173,9 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 		case DISABLED, COORDINATOR:
 			// the coordinator is a CEGAR loop, see CegarLoopFactory
 			break;
-		case TA_WORKER:
-			throw new UnsupportedOperationException("Session kind TA_WORKER is not implemented yet");
-		case WITNESS:
-			throw new UnsupportedOperationException("Session kind WITNESS is not implemented yet");
+		case TA_WORKER, WITNESS:
+			runSession(icfg);
+			return;
 		default:
 			throw new UnsupportedOperationException("Unknown session kind " + mPrefs.getMultiProcessComponent());
 		}
@@ -224,6 +226,24 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 			}
 		}
 		mRootOfNewModel = mArtifact;
+	}
+
+	/**
+	 * Runs a multi-process session kind that is not a CEGAR loop (TA_WORKER, WITNESS).
+	 */
+	private void runSession(final IIcfg<IcfgLocation> icfg) {
+		final MultiProcessComponent kind = mPrefs.getMultiProcessComponent();
+		try (FileExchange exchange = MultiProcessSession.openExchange(mPrefs)) {
+			try {
+				final Set<IcfgLocation> errorLocs = partitionErrorLocations(icfg).get(0).getValue();
+				final var session = mCegarFactory.constructSessionAbstraction(mServices, icfg, errorLocs);
+				MultiProcessSession.announceReady(exchange, kind, mServices, mLogger, icfg, session.abstraction());
+				throw new UnsupportedOperationException("Session kind " + kind + " is not implemented yet");
+			} catch (final RuntimeException | Error e) {
+				MultiProcessSession.reportException(exchange, kind, e);
+				throw e;
+			}
+		}
 	}
 
 	private void logSettings() {

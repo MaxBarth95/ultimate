@@ -70,6 +70,8 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.co
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.concurrency.IndependenceProviderFactory;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.concurrency.PartialOrderCegarLoop;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.ParallelNwaCegarLoop;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.FileExchange;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.Concurrency;
@@ -77,6 +79,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pr
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.FloydHoareAutomataReuse;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.InterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.LanguageOperation;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.MultiProcessComponent;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Pair;
 import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.Triple;
 
@@ -203,6 +206,44 @@ public class CegarLoopFactory<L extends IIcfgTransition<?>> {
 		return new Pair<>(cegar, proofProducer);
 	}
 
+	/**
+	 * The initial abstraction of a sequential program and the factories it was built with.
+	 *
+	 * @param predicateFactory
+	 *            the predicate factory of the abstraction
+	 * @param stateFactory
+	 *            the state factory of the abstraction
+	 * @param abstraction
+	 *            the initial abstraction
+	 */
+	public record SessionAbstraction<L>(PredicateFactory predicateFactory, PredicateFactoryRefinement stateFactory,
+			INestedWordAutomaton<L, IPredicate> abstraction) {
+	}
+
+	/**
+	 * Builds the initial abstraction of a sequential program for a multi-process session kind that runs no CEGAR loop
+	 * (TA_WORKER, WITNESS). It is built exactly as for the CEGAR loops, so that every session of a run gets the same
+	 * fingerprint.
+	 */
+	public SessionAbstraction<L> constructSessionAbstraction(final IUltimateServiceProvider services,
+			final IIcfg<IcfgLocation> root, final Set<IcfgLocation> errorLocs) {
+		if (IcfgUtils.isConcurrent(root)) {
+			throw new UnsupportedOperationException("Multi-process sessions support only sequential programs");
+		}
+		mCegarLoopBenchmark = new CegarLoopStatisticsGenerator();
+		final CfgSmtToolkit csToolkit = root.getCfgSmtToolkit();
+		final PredicateFactory predicateFactory =
+				new PredicateFactory(services, csToolkit.getManagedScript(), csToolkit.getSymbolTable());
+		final Set<IcfgLocation> hoareAnnotationLocs = mPrefs.getHoareAnnotationPositions().getLocations(root);
+		final PredicateFactoryRefinement stateFactory =
+				new PredicateFactoryRefinement(services, csToolkit.getManagedScript(), predicateFactory,
+						mPrefs.getHoareSettings().computeHoareAnnotation(), hoareAnnotationLocs);
+		final var triple = createAutomataAbstractionProvider(services, false, predicateFactory, stateFactory, null);
+		final INestedWordAutomaton<L, IPredicate> abstraction =
+				constructInitialAbstraction(triple.getFirst(), root, errorLocs);
+		return new SessionAbstraction<>(predicateFactory, stateFactory, abstraction);
+	}
+
 	private NwaCegarLoop<L> createFiniteAutomataCegarLoop(final IUltimateServiceProvider services,
 			final DebugIdentifier name, final IIcfg<IcfgLocation> root, final PredicateFactory predicateFactory,
 			final Set<IcfgLocation> errorLocs,
@@ -233,7 +274,16 @@ public class CegarLoopFactory<L extends IIcfgTransition<?>> {
 		case NONE -> {
 			if (MultiProcessSupport.isMultiProcess(mPrefs)) {
 				// TraceAbstractionStarter only gets here for the coordinator
-				throw new UnsupportedOperationException("Session kind COORDINATOR is not implemented yet");
+				try (FileExchange exchange = MultiProcessSession.openExchange(mPrefs)) {
+					final MultiProcessComponent kind = mPrefs.getMultiProcessComponent();
+					try {
+						MultiProcessSession.announceReady(exchange, kind, services, mLogger, root, abstraction);
+						throw new UnsupportedOperationException("Session kind COORDINATOR is not implemented yet");
+					} catch (final RuntimeException | Error e) {
+						MultiProcessSession.reportException(exchange, kind, e);
+						throw e;
+					}
+				}
 			}
 			if (mPrefs.isSequentialKInductionCegarLoop() && !IcfgUtils.isConcurrent(root)) {
 				yield new NwaCegarLoopWithKInduction<>(name, abstraction, root, csToolkit, predicateFactory, mPrefs,
