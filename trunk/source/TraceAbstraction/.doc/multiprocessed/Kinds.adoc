@@ -1,0 +1,68 @@
+= Multi-process trace abstraction: session kinds
+:toc:
+
+The setting `multi process component` selects the kind (`TraceAbstractionPreferenceInitializer.MultiProcessComponent`).
+`DISABLED` is the normal single-process Automizer. `TraceAbstractionStarter` dispatches: the coordinator is a CEGAR
+loop built by `CegarLoopFactory`; TA_WORKER and WITNESS run no CEGAR loop and branch off before it. All three build
+the initial abstraction exactly as the CEGAR loops do and write `ready.json` before any work.
+
+== COORDINATOR (`MultiProcessedCegarCoordinator`)
+
+The CEGAR loop of a run, a `NwaCegarLoop` without a trace check of its own and without a barrier; the process
+counterpart of the threaded `ParallelNwaCegarLoop`, with which it shares the counterexample search
+(`ParallelCounterexampleSearch`: BFS on a fresh abstraction, then `IsEmptyParallel` avoiding the words in flight) and
+the difference with a worker's automaton (`WorkerAutomatonDifference`).
+
+* Keeps at most `Number of TA workers in Parallel Trace Abstraction` jobs in flight, one `COUNTEREXAMPLE` each.
+* Handles the messages that are already waiting as one batch. Per `INTERPOLANT_AUTOMATON` it refines; after the batch
+  it minimizes (unless it minimizes per worker), cancels the jobs whose word the abstraction no longer accepts, and
+  publishes the abstraction as a new generation if it is smaller than the last one published.
+* `RESULT` SAT registers UNSAFE; with "stop after first violation" the loop ends, otherwise it refines with the error
+  automaton. A real `RESULT` UNKNOWN ends the loop with UNKNOWN at once (so that a bit-precise run can start).
+* `SESSION_LOST` and `SESSION_CRASHED`: the run goes on with one TA session less; with `multi process fail on TA
+  crash` (testing mode) a crash makes the coordinator throw. No TA session left: UNKNOWN.
+* Empty abstraction: SAFE; time limit: TIMEOUT; shutdown: UNKNOWN.
+* After the loop, once the proof is computed: `PROOF_ANNOTATION` (location to formula), then `VERDICT TRUE`; `VERDICT
+  FALSE` with the first feasible word; otherwise `VERDICT UNKNOWN`. If the proof computation fails, `VERDICT TRUE`
+  goes out without an annotation.
+
+Deviation from the threaded loop: a real UNKNOWN and a gone TA session no longer follow `handleCrashedWorker`, and the
+FOX/non-FOX distinction is gone.
+
+== TA_WORKER (`TaWorkerSession`)
+
+Checks counterexamples; the process counterpart of `CegarNwaWorkerThread`, sharing its work, `TaJobProcessor`.
+
+* `ABSTRACTION`: installed if its generation is newer; generation 0 is the session's own initial abstraction.
+* `COUNTEREXAMPLE`: the run of the word through the installed abstraction (`RunReplay`; throws if the word is not
+  accepted), then `TaJobProcessor.checkFeasibility` and `RESULT`, then `TaJobProcessor.constructAutomaton` and
+  `INTERPOLANT_AUTOMATON` (the explored part of the enhanced automaton, `ExploredAutomaton`). The result goes out first,
+  so that a failure while building the automaton cannot lose a feasible counterexample.
+* `CANCEL`: a job not started yet is skipped; a running job is stopped by a watcher thread (`FileExchange.waitForStop`)
+  through a retirement timer. A stopped job sends nothing more.
+
+== WITNESS (`WitnessSession`)
+
+The only kind that writes witnesses. It collects the SAT words of the TA results and the newest proof annotation; on
+the `VERDICT` it reports results, from which the WitnessPrinter (the next plug-in of its toolchain) writes
+`out/witness.yml`.
+
+* FALSE: a counterexample, degrading from a run with values (a new trace check) to the run without values to the
+  target only. If none backtranslates: no witness, exit 1.
+* TRUE: the invariants of the annotation (unparsable ones dropped). Without an annotation, or if none parses: no
+  witness, exit 1; never a trivial stand-in for a missing proof.
+* UNKNOWN: no witness, exit 0.
+
+The router reads the outcome as: FALSE level 3 PRESENT, levels 2 and 1 DEGRADED, exit 1 MISSING (run DEGRADED); TRUE
+exit 0 PRESENT, exit 1 MISSING; UNKNOWN not applicable.
+
+== Settings
+
+[cols="2,3"]
+|===
+| `multi process component` | `DISABLED`, `COORDINATOR`, `TA_WORKER`, `WITNESS`
+| `multi process exchange root` | the session directory
+| `multi process session id` | the session id, also in every log line
+| `multi process fail on TA crash` | testing mode of the coordinator
+| `Number of TA workers in Parallel Trace Abstraction` | the coordinator's capacity
+|===

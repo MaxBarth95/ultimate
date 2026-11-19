@@ -1,0 +1,52 @@
+= Multi-process trace abstraction: running it on one machine
+:toc:
+
+`multiprocess/local_router.py` (standard library only) starts a COORDINATOR, N TA_WORKERs and a WITNESS and routes
+their messages as described in link:Protocol.adoc[Protocol]. It is the reference for the scheduler of UltimateCloud
+(`CooperativeStrategy`, Phase 4).
+
+== Build
+
+Build Automizer (`releaseScripts/default/makePackage.sh -o linux -p Automizer`), which gives
+`releaseScripts/default/UAutomizer-linux`. The toolchains `AutomizerCInline.xml` and
+`AutomizerCInline_WitnessPrinter.xml` come from `trunk/examples/toolchains` (they are not part of the release zip
+yet).
+
+== Run
+
+[source,sh]
+----
+python3 multiprocess/local_router.py --tool releaseScripts/default/UAutomizer-linux \
+    --file program.c --root /tmp/run --ta 2 --timeout 900
+----
+
+Options: `--architecture 32bit|64bit`, `--settings <epf>` (default: the SV-COMP Reach Automizer default of the
+architecture), `--witness-timeout <s>` (default 60), `--no-witness`, `--fail-on-ta-crash` (testing mode), `--heap`,
+`--report <file>`. For tests of the protocol: `--kill-ta-after <s>` (kill -9 the first TA once it has a job) and
+`--crash-ta-after <s>` (send the first TA an unknown message type, so that it throws).
+
+The root holds one session directory per session (`coordinator/`, `ta1/` ..., `witness/`), each with `log/stdout.log`
+and `log/stderr.log`. The router prints one line and writes `report.json`:
+
+[source,json]
+----
+{"verdict": "FALSE", "health": "OK",
+ "witness": {"status": "WITNESS_PRESENT", "level": 3, "file": ".../witness/out/witness.yml"},
+ "verdictSeconds": 19.1, "totalSeconds": 22.3, "messages": {...}, "exitCodes": {...}, "events": [...]}
+----
+
+`health` is `OK`, `DEGRADED` (a TA session ended, or a FALSE without a witness) or `ERROR` (fingerprint mismatch, a
+failure of the coordinator, an unexpected message, an idle TA crash in testing mode). The exit code is 1 for `ERROR`.
+
+Validate a witness with `Ultimate.py --spec <prp> --file <program> --validate <witness.yml>`.
+
+== Tests
+
+[source,sh]
+----
+python3 -m unittest multiprocess/test_local_router.py
+----
+
+The unit tests drive the routing with fake sessions: the idle rule, cancellation, sequence numbers, lost and crashed
+TA sessions (with and without a job, testing mode), the synthetic results when no TA is left, atomic and idempotent
+blob delivery, fingerprint mismatch and the witness status.

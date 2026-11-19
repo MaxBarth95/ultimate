@@ -1,0 +1,89 @@
+= Multi-process trace abstraction: content formats
+:toc:
+
+== Names of letters and locations
+
+* *Letter* (`LetterNaming`): `e<serial>:<text>`. `<serial>` is the serial number of a `CodeBlock` or the id of an
+  `AbstractIcfgTransition` (other letter types throw); `<text>` is the letter's `toString` without line breaks. The
+  reader looks the serial up among its own letters and throws if it is unknown or the text differs. The serial makes
+  the name unique (`toString` alone is not: every goto prints `goto;`), the text catches a different program.
+* *Location* (`LocationNaming`): `<procedure>::<debugId>`.
+
+Both rely on a deterministic frontend: equal programs give equal serials and debug ids in every process. The
+fingerprint in `ready.json` checks this.
+
+== ATS_V1: automata
+
+Printed with `AutomatonDefinitionPrinter.toString` (no header, no timestamp) and parsed with
+`AutomataScriptParserRun` + `AutomataDefinitionInterpreter` (`AtsCodec`).
+
+* `ABSTRACTION`: states `q<n>@<location>`, only the program point. The receiver gives each state a don't-care
+  predicate at its own location; states stay distinct even at the same location.
+* `INTERPOLANT_AUTOMATON`: states `q<n>#<formula>`, the predicate's formula in SMT-LIB (`toStringDirect`) over the
+  program variables. The receiver parses it with `PredicateParsingWrapperScript` and `TermParseUtils.parseTerm` and
+  unifies it with a `PredicateUnifier`.
+* `n` comes from a breadth-first search from the initial states that visits the outgoing transitions of a state
+  ordered by letter name (return transitions then by the number of the hierarchical predecessor); unreached states
+  come last, ordered by name. For a deterministic automaton such as the initial abstraction the numbering is
+  canonical, so the print is a fingerprint.
+* The printer quotes names but escapes nothing; `AtsCodec` escapes `"` and `\` itself, and the lexer turns them back.
+* An automaton without call and return letters prints as `FiniteAutomaton`.
+* The alphabet of every parsed automaton must be the receiver's alphabet; any unknown letter, location or formula
+  throws. Under `-ea` each print is parsed back and compared.
+
+== JSON_V1: everything else
+
+Gson (`com.google.gson`), strict: every message object has `"format": "JSON_V1"`; a wrong format, an unknown field, a
+missing required field, a `null` in a list or map, or an unknown enum value throws (`JsonCodec`).
+
+*Words* are two lists of the same length: `word` (letter names) and `nesting`. `nesting[i]` is the position of the
+matching return of a call at `i`, or of the matching call of a return at `i`; `-1` is internal, `-2` a pending call,
+`-3` a pending return. The reader checks that the nesting is well formed and fits the letter kinds (`WordCodec`).
+
+[cols="1,3"]
+|===
+| Type | Fields
+
+| `COUNTEREXAMPLE`
+| `{job, generation, word, nesting, pathProgramCount}`; `pathProgramCount` counts how often the coordinator handed
+  out a word of this path program, this one included
+
+| `RESULT`
+| `{job, generation, status: UNSAT\|SAT\|UNKNOWN, automatonType?: FLOYD_HOARE\|ERROR, word?, nesting?, reason?}`.
+  A TA worker always sets `automatonType`; SAT carries the word. The synthetic result for a gone TA session is
+  exactly `{job, generation, status: "UNKNOWN", reason: "SESSION_LOST"\|"SESSION_CRASHED"}`.
+
+| `CANCEL`
+| `{job}`
+
+| `PROOF_ANNOTATION`
+| `{generation, invariants: {location: formula}}`
+
+| `VERDICT`
+| `{verdict: TRUE\|FALSE\|UNKNOWN, decidedBy: kind, evidence: {word?, nesting?, invariants?}}`
+
+| `EXCEPTION`
+| `{kind, exceptionClass, message?, stackTrace}`
+
+| `RETIRED`
+| `{reason}`
+|===
+
+Files without `format`: `ready.json`, the `.ref.json` of a blob (`{sha256, size}`).
+
+=== statistics.json
+
+`{format: "JSON_V1", kind, sessionId, end: SHUTDOWN|TIME_LIMIT|DONE|EXCEPTION, wallTimeMs, counters, ultimate}`.
+`ultimate` is Ultimate's flattened benchmark data (non-numbers as strings). Counters:
+
+* TA_WORKER: `jobs`, `jobsUnsat`, `jobsSat`, `jobsUnknown`, `jobsSkipped`, `jobsStopped`, `abstractionsInstalled`,
+  `traceCheckTimeMs`, `automatonTimeMs`, `maxJobTimeMs`;
+* COORDINATOR: `jobs`, `refinements`, `cancels`, `abstractionsPublished`, `lostTaSessions`, `crashedTaSessions`,
+  `refinementTimeMs`, `searchTimeMs`, `idleTimeMs`, `abstractionSize`;
+* WITNESS: `results`, `resultsSat`, `proofAnnotations`, `invariantsReported`, `invariantsDropped`, `witnessLevel`
+  (3 with values, 2 without values, 1 target only, 0 none).
+
+== YAML_V1: the witness
+
+A YAML witness, format 2.x, as the WitnessPrinter writes it: a `violation_sequence` for FALSE, an `invariant_set` for
+TRUE.

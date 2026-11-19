@@ -1,0 +1,112 @@
+= Multi-process trace abstraction: the exchange protocol (EXCHANGE_V1)
+:toc:
+
+The multi-process trace abstraction runs one Ultimate process per *session*: a COORDINATOR, N TA_WORKERs and a
+WITNESS (see link:Kinds.adoc[Kinds]). The processes never talk to each other. Each one reads and writes its own
+*session directory*; a router copies the messages between them. In UltimateCloud the router is the scheduler with the
+worker service; on one machine it is `multiprocess/local_router.py` (see link:LocalRun.adoc[LocalRun]).
+
+The requirements of UltimateCloud (`plans/ultimate-requirements.md` in the UltimateCloud repository) are the source
+of truth; this page describes what the Ultimate side implements. The code is in the package
+`de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed`.
+
+== Starting a session
+
+A session is the Ultimate CLI with an explicit toolchain and settings file (never `Ultimate.py`, which may run several
+modes in sequence):
+
+* toolchain: `AutomizerCInline.xml` for COORDINATOR and TA_WORKER, `AutomizerCInline_WitnessPrinter.xml` for
+  WITNESS (both in `trunk/examples/toolchains`), with the witness directory set to `out/`;
+* settings: the `.epf` of the mode (integer or bit-vector); every session of a run uses the same one;
+* `--traceabstraction.multi.process.component <KIND>`, `--traceabstraction.multi.process.exchange.root <dir>`,
+  `--traceabstraction.multi.process.session.id <id>`;
+* `--core.toolchain.timeout.in.seconds <s>`: mandatory, the session time limit;
+* JVM options:
+** `-Dultimate.logger.pattern=%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %p [<id>] %c: %m%n`: every log line starts with time,
+   level, session id and logger. As a JVM option it applies from the first line; a session checks it at startup.
+** `-Dultimate.cli.exitOnException=true`: the CLI exits with 1 if the toolchain reported an exception.
+* its own Eclipse data directory inside the session directory (`-data @noDefault -ultimatedata <dir>/data`,
+  `-Dosgi.configuration.area=<dir>/data/config`).
+
+A session kind other than `DISABLED` takes precedence over the parallel and the sequential k-induction CEGAR loop of
+the settings. Unsupported configurations throw at startup (`MultiProcessSupport`): concurrent programs, witness
+validation, a CEGAR restart behaviour other than one loop for all error locations, Floyd-Hoare automata reuse, a
+language operation other than difference, total interpolation, programs without error locations, a missing session
+directory, session id or time limit, a wrong logger pattern, a log file.
+
+== The session directory
+
+[cols="1,4"]
+|===
+| `in/` | written by the router, read by Ultimate in sequence order; Ultimate never changes or deletes a file there
+| `out/` | written by Ultimate, read by the router
+| `blobs/<sha256>` | bodies larger than 1 MiB, content-addressed
+| `log/` | the router's capture of stdout and stderr; Ultimate writes nothing there
+| `data/` | the Eclipse data directory of the process
+|===
+
+=== Message files
+
+`<seq>-<TYPE>[-j<job>][-g<generation>].<ext>`
+
+* `seq`: zero-padded to 10 digits, strictly increasing per direction (in `in/` the router's numbering, need not be
+  contiguous);
+* `TYPE`: `ABSTRACTION`, `COUNTEREXAMPLE`, `CANCEL`, `RESULT`, `INTERPOLANT_AUTOMATON`, `PROOF_ANNOTATION`, `VERDICT`,
+  `EXCEPTION`, `RETIRED`;
+* `ext`: `ats` (ATS_V1), `json` (JSON_V1), `yml` (YAML_V1), `pb` (NWA_PB_V1, later), or `ref.json` for a body in
+  `blobs/` (`{sha256, size}`; the reader checks both).
+
+Every file is written as `<name>.tmp` and renamed atomically; readers ignore `*.tmp`. A router must deliver blobs the
+same way and must never rewrite an existing blob: two messages may carry the same content.
+
+`FileExchange` throws on: a file name that does not match, an unknown type or extension, a type the kind does not
+accept, an extension that does not fit the type, a `seq` not above the last one read, two files with the same `seq`, a
+missing or corrupt blob. Shutdown (`in/shutdown`) takes precedence over messages still waiting.
+
+=== Other files of `out/`
+
+* `ready.json`: `{protocol: "EXCHANGE_V1", kind, fingerprint, ultimateVersion, settingsHash, accepts, emits}`,
+  written after the initial abstraction is built and before any other message (only an `EXCEPTION` may come first).
+  The fingerprint is the SHA-256 of the initial abstraction printed by `AtsCodec`; all sessions of a run must have the
+  same. `settingsHash` covers the settings of core, CACSL2Boogie, procedure inliner, Boogie preprocessor, IcfgBuilder,
+  BlockEncoding and TraceAbstraction, without those that differ per session (kind, directory, session id, number of TA
+  workers, fail on TA crash, the two logger patterns).
+* `statistics.json`: the last file of a session, see link:Formats.adoc[Formats]. WITNESS writes it just before the
+  WitnessPrinter writes the witness.
+* `witness.yml` (WITNESS only): written by the WitnessPrinter, not atomically; it is valid once the process exited
+  with 0.
+
+== Lifecycle
+
+[cols="1,4"]
+|===
+| Start | `ready.json`, then the kind's work
+| Normal end | after the kind's final output (the coordinator's `VERDICT`, the witness), exit 0
+| Shutdown | `in/shutdown`; the session stops at once (a running TA job is stopped and sends nothing more), exit 0
+| Time limit | the toolchain timeout; a normal end: the coordinator sends `VERDICT UNKNOWN`, exit 0
+| Crash | an exception writes `<seq>-EXCEPTION.json` (if it still can) and `statistics.json`, exit 1
+|===
+
+Every blocking wait has a deadline. The one exception that ends normally is the main wait for the next message in
+`in/`, whose deadline is the session time limit.
+
+== Routing
+
+[cols="2,3"]
+|===
+| Message | Route
+| `ABSTRACTION` (coordinator) | to every live TA_WORKER
+| `COUNTEREXAMPLE` (coordinator) | work queue: to an idle TA_WORKER
+| `CANCEL` (coordinator) | to the TA_WORKER of the job; a queued job is dropped
+| `RESULT` (TA_WORKER) | to the coordinator, copy to WITNESS
+| `INTERPOLANT_AUTOMATON` (TA_WORKER) | to the coordinator
+| `PROOF_ANNOTATION`, `VERDICT` (coordinator) | to WITNESS
+| `EXCEPTION` | to the router; from the coordinator it ends the run with ERROR
+|===
+
+A TA_WORKER is busy from its `COUNTEREXAMPLE` until the job's `INTERPOLANT_AUTOMATON` or until a `CANCEL` for the job
+is routed. A `RESULT` without an automaton is legal (the job was stopped). For a TA_WORKER that ends while it has a
+job, the router sends the coordinator (and WITNESS) the synthetic `RESULT {job, generation, status: "UNKNOWN",
+reason}`: `SESSION_LOST` if the process was killed by a signal, `SESSION_CRASHED` otherwise. A TA_WORKER that ends
+idle only leaves the work queue (the run is DEGRADED); once none is left, every queued and later `COUNTEREXAMPLE` is
+answered with the synthetic `SESSION_LOST` result.
