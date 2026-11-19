@@ -25,7 +25,10 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed;
 
+import de.uni_freiburg.informatik.ultimate.core.coreplugin.Activator;
+import de.uni_freiburg.informatik.ultimate.core.coreplugin.preferences.CorePreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.core.model.preferences.IPreferenceProvider;
+import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.IcfgUtils;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfg;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.IWitnessTransformer;
@@ -46,6 +49,12 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pr
  */
 public final class MultiProcessSupport {
 
+	/**
+	 * The log4j pattern of every log line of a session (R8): an ISO-8601 time, the level, the session id in brackets
+	 * and the logger, so that the worker service can parse and forward the lines. {@code %s} is the session id.
+	 */
+	private static final String LOG_PATTERN = "%%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %%p [%s] %%c: %%m%%n";
+
 	private MultiProcessSupport() {
 		// static helpers only
 	}
@@ -59,19 +68,28 @@ public final class MultiProcessSupport {
 	}
 
 	/**
+	 * @return the log4j pattern a session with this id must use for both core logger patterns
+	 */
+	public static String logPattern(final String sessionId) {
+		return String.format(LOG_PATTERN, sessionId);
+	}
+
+	/**
 	 * Throws if the program or the settings are not supported by the multi-process session kinds.
 	 *
 	 * @param prefs
 	 *            the trace abstraction settings
-	 * @param rawPrefs
-	 *            the preference provider of the trace abstraction plug-in
+	 * @param services
+	 *            the services, for the settings of the trace abstraction and the core plug-in
 	 * @param icfg
 	 *            the program
 	 * @param witnessTransformer
 	 *            the witness transformer of a witness validation run, or null
 	 */
-	public static void checkSupported(final TAPreferences prefs, final IPreferenceProvider rawPrefs,
+	public static void checkSupported(final TAPreferences prefs, final IUltimateServiceProvider services,
 			final IIcfg<?> icfg, final IWitnessTransformer<?> witnessTransformer) {
+		final IPreferenceProvider rawPrefs = services.getPreferenceProvider(
+				de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.Activator.PLUGIN_ID);
 		final MultiProcessComponent kind = prefs.getMultiProcessComponent();
 		if (kind == MultiProcessComponent.DISABLED) {
 			throw new IllegalStateException("Not a multi-process session");
@@ -84,6 +102,7 @@ public final class MultiProcessSupport {
 			throw new IllegalArgumentException("Session kind " + kind + " needs the setting "
 					+ label(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_SESSION_ID));
 		}
+		checkLogging(services.getPreferenceProvider(Activator.PLUGIN_ID), prefs.getMultiProcessSessionId());
 		if (IcfgUtils.isConcurrent(icfg)) {
 			throw new UnsupportedOperationException("Multi-process sessions support only sequential programs");
 		}
@@ -107,6 +126,25 @@ public final class MultiProcessSupport {
 		}
 		if (prefs.interpolantAutomaton() == InterpolantAutomaton.TOTALINTERPOLATION) {
 			throw new UnsupportedOperationException("Multi-process sessions do not support total interpolation");
+		}
+	}
+
+	/**
+	 * A session logs to stdout and stderr only, and every line starts with the prefix of {@link #logPattern(String)}.
+	 */
+	private static void checkLogging(final IPreferenceProvider corePrefs, final String sessionId) {
+		if (corePrefs.getBoolean(CorePreferenceInitializer.LABEL_LOGFILE)) {
+			throw new IllegalArgumentException("A multi-process session logs to stdout and stderr only; turn off "
+					+ label(CorePreferenceInitializer.LABEL_LOGFILE));
+		}
+		final String expected = logPattern(sessionId);
+		for (final String patternLabel : new String[] { CorePreferenceInitializer.LABEL_LOG4J_PATTERN,
+				CorePreferenceInitializer.LABEL_LOG4J_CONTROLLER_PATTERN }) {
+			final String actual = corePrefs.getString(patternLabel);
+			if (!expected.equals(actual)) {
+				throw new IllegalArgumentException("A multi-process session needs the core setting "
+						+ label(patternLabel) + " to be " + label(expected) + ", not " + label(actual));
+			}
 		}
 	}
 

@@ -156,8 +156,7 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 				numberOfErrorLocs));
 		final boolean isMultiProcess = MultiProcessSupport.isMultiProcess(mPrefs);
 		if (isMultiProcess) {
-			MultiProcessSupport.checkSupported(mPrefs, mServices.getPreferenceProvider(Activator.PLUGIN_ID), icfg,
-					mWitnessTransformer);
+			MultiProcessSupport.checkSupported(mPrefs, mServices, icfg, mWitnessTransformer);
 		}
 		if (numberOfErrorLocs <= 0) {
 			if (isMultiProcess) {

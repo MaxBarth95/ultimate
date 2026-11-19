@@ -37,6 +37,7 @@ import java.util.TreeMap;
 
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.core.coreplugin.UltimateCore;
+import de.uni_freiburg.informatik.ultimate.core.coreplugin.preferences.CorePreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfg;
@@ -60,14 +61,16 @@ public final class MultiProcessSession {
 	 */
 	private static final List<String> HASHED_PLUGINS = List.of("de.uni_freiburg.informatik.ultimate.core",
 			"de.uni_freiburg.informatik.ultimate.plugins.generator.cacsl2boogietranslator",
+			"de.uni_freiburg.informatik.ultimate.boogie.procedureinliner",
 			"de.uni_freiburg.informatik.ultimate.boogie.preprocessor",
 			"de.uni_freiburg.informatik.ultimate.plugins.generator.icfgbuilder",
 			"de.uni_freiburg.informatik.ultimate.plugins.blockencoding", Activator.PLUGIN_ID);
 
 	/**
-	 * Settings that differ between the sessions of one run by design.
+	 * Settings that differ between the sessions of one run by design. The logger patterns carry the session id.
 	 */
-	private static final Set<String> SESSION_SETTINGS = Set.of(
+	private static final Set<String> SESSION_SETTINGS = Set.of(CorePreferenceInitializer.LABEL_LOG4J_PATTERN,
+			CorePreferenceInitializer.LABEL_LOG4J_CONTROLLER_PATTERN,
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_COMPONENT,
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_EXCHANGE_ROOT,
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_SESSION_ID,

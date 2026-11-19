@@ -96,15 +96,21 @@ public class CorePreferenceInitializer extends RcpPreferenceInitializer {
 	public static final boolean VALUE_LONG_RESULT_DEFAULT = true;
 
 	// Log4j pattern
+	/**
+	 * If this JVM property is set, it is the default of both logger patterns. Unlike a setting on the command line, it
+	 * applies from the first log line on. UltimateCloud sessions use it to give every line a parseable prefix.
+	 */
+	public static final String PROPERTY_LOGGER_PATTERN = "ultimate.logger.pattern";
 	public static final String LABEL_LOG4J_PATTERN = "Logger pattern";
 	/**
 	 * Note that this log pattern consumes quite some cycles. Replacing it with "%-5p: %m%n" is advised for more
 	 * performance.
 	 */
-	public static final String VALUE_LOG4J_PATTERN = "[%d{ISO8601} %-5p L%-5.5L %20.20C{1}]: %m%n";
+	public static final String VALUE_LOG4J_PATTERN =
+			System.getProperty(PROPERTY_LOGGER_PATTERN, "[%d{ISO8601} %-5p L%-5.5L %20.20C{1}]: %m%n");
 
 	public static final String LABEL_LOG4J_CONTROLLER_PATTERN = "UI logger pattern";
-	public static final String VALUE_LOG4J_CONTROLLER_PATTERN = "%m%n";
+	public static final String VALUE_LOG4J_CONTROLLER_PATTERN = System.getProperty(PROPERTY_LOGGER_PATTERN, "%m%n");
 
 	// Log level
 	public static final String DESC_LOGFILE =
