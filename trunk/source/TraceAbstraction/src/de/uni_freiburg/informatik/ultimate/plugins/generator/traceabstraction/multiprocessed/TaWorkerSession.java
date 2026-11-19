@@ -224,6 +224,8 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 		}
 		final NestedWord<L> word = WordCodec.decode(new WordCodec.EncodedWord(cex.word(), cex.nesting()), mLetters);
 		final NestedRun<L, IPredicate> run = RunReplay.replay(mAbstraction, word);
+		// as the threaded worker: the count of this check is added again by the strategy
+		mProcessor.getPathProgramCache().setPathProgramCount(word, cex.pathProgramCount() - 1);
 		final long generation = mGeneration;
 		mLogger.info("Job %s: checking a counterexample of length %s against generation %s", job, word.length(),
 				generation);

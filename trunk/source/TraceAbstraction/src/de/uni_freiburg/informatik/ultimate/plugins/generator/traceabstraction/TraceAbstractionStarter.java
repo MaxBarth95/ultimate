@@ -68,6 +68,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.d
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transformations.BlockEncodingBacktranslator;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicateUnifier;
 import de.uni_freiburg.informatik.ultimate.lib.proofs.IProof;
+import de.uni_freiburg.informatik.ultimate.lib.proofs.IProofProducer;
 import de.uni_freiburg.informatik.ultimate.lib.proofs.ProofAnnotation;
 import de.uni_freiburg.informatik.ultimate.lib.proofs.floydhoare.FloydHoareUtils;
 import de.uni_freiburg.informatik.ultimate.lib.proofs.floydhoare.FloydHoareValidityCheck.MissingAnnotationBehaviour;
@@ -79,6 +80,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.Ab
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.AbstractInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.FileExchange;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSession;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessedCegarCoordinator;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.TaWorkerSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
@@ -471,6 +473,9 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 		// run the CEGAR loop
 		final var cegarAndProofProducer = mCegarFactory.constructCegarLoop(services, name, icfg, errorLocs,
 				mWitnessTransformer, mRawFloydHoareAutomataFromFile);
+		if (cegarAndProofProducer.getFirst() instanceof MultiProcessedCegarCoordinator<?>) {
+			return executeCoordinator(cegarAndProofProducer, taBenchmark);
+		}
 		final CegarLoopResult<L> clres = cegarAndProofProducer.getFirst().runCegar();
 
 		// extract a proof from the CEGAR loop (if one exists)
@@ -498,6 +503,42 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 		taBenchmark.aggregateBenchmarkData(cegarStatistics);
 
 		return new ProvenCegarLoopResult<>(clres, proof);
+	}
+
+	/**
+	 * Runs the multi-process coordinator: the CEGAR loop, the proof, and then the verdict on the exchange (the proof
+	 * annotation first). A failure sends an {@code EXCEPTION} before it propagates.
+	 */
+	private ProvenCegarLoopResult<L> executeCoordinator(
+			final Pair<? extends BasicCegarLoop<L, ?>, IProofProducer<IIcfg<IcfgLocation>, ?>> cegarAndProofProducer,
+			final TraceAbstractionBenchmarks taBenchmark) {
+		@SuppressWarnings("unchecked")
+		final MultiProcessedCegarCoordinator<L> coordinator =
+				(MultiProcessedCegarCoordinator<L>) cegarAndProofProducer.getFirst();
+		try {
+			final CegarLoopResult<L> clres = coordinator.runCegar();
+			final var proofProducer = cegarAndProofProducer.getSecond();
+			IProof proof = null;
+			if (proofProducer != null && clres.hasProvenAnything()) {
+				try {
+					proof = proofProducer.getOrComputeProof();
+				} catch (final RuntimeException e) {
+					// a proved verdict survives a failed proof: TRUE goes out without an annotation
+					mLogger.warn("Coordinator: computing the proof failed, the verdict goes out without it: " + e);
+				}
+			}
+			coordinator.publishVerdict(clres, proof);
+			final StatisticsData cegarStatistics = new StatisticsData();
+			cegarStatistics.aggregateBenchmarkData(clres.getCegarLoopStatisticsGenerator());
+			cegarStatistics.aggregateBenchmarkData(mCegarFactory.getStatistics());
+			taBenchmark.aggregateBenchmarkData(cegarStatistics);
+			return new ProvenCegarLoopResult<>(clres, proof);
+		} catch (final RuntimeException | Error e) {
+			coordinator.reportException(e);
+			throw e;
+		} finally {
+			coordinator.closeExchange();
+		}
 	}
 
 	private static Map<IIcfgForkTransitionThreadCurrent<IcfgLocation>, IcfgLocation>

@@ -30,7 +30,6 @@ package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.p
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
@@ -54,16 +53,12 @@ import de.uni_freiburg.informatik.ultimate.automata.IAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.IRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INwaOutgoingLetterAndTransitionProvider;
-import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWord;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.VpAlphabet;
-import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Accepts;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.Difference;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.IsEmpty;
-import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.PowersetDeterminizer;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.operations.oldapi.IOpWithDelayedDeadEndRemoval;
-import de.uni_freiburg.informatik.ultimate.automata.nestedword.senwa.DifferenceSenwa;
 import de.uni_freiburg.informatik.ultimate.core.lib.exceptions.ToolchainCanceledException;
 import de.uni_freiburg.informatik.ultimate.core.lib.models.annotation.WitnessInvariant;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
@@ -164,8 +159,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private final PathProgramCache<L> mProgramCache = new PathProgramCache<>(mLogger);
 
 	// Strategies
-	public final HashMap<Integer, NestedRun<L, ?>> mActiveCounterexamples = new HashMap<>();
-	private final Set<Integer> mCounterexamplesToBeRemovedFromActiveCexMap = new HashSet<>();
+	// the counterexamples in flight, shared with the multi-process coordinator
+	private final ParallelCounterexampleSearch<L> mSearch;
 	protected InterpolationTechnique mInterpolationTechnique;
 
 	public Class<L> mTransitionClazz;
@@ -175,12 +170,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private Integer mRefinementsDone = 0;
 	private final Integer mCountTimeoutsInSearch = 0;
 	private final Integer mCountFailedRunConstructions = 0;
-	private Integer mCountFailedToFindCex = 0;
-	private Integer mCountBfsFoundCex = 1;
 	private final Integer mCountIsEmptyParallel = 0;
 	private Integer maxActiveThreads = 0;
 	private final Integer mActiveExecutors = 0;
-	private long mSearchTime = 0;
 	private long mWorkerSetUpTime = 0;
 	private int mIterationsWithMaxThreads = 0;
 	private int mIterationsWithOneThread = 0;
@@ -218,6 +210,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		super(name, initialAbstraction, rootNode, csToolkit, predicateFactory, taPrefs, errorLocs, proofProducer,
 				services, transitionClazz, stateFactoryForRefinement);
 		// Start thread pool: one thread per TA and k-induction worker (the value analysis has its own executor)
+		mSearch = new ParallelCounterexampleSearch<>(mLogger, mPref);
 		mNumTaWorkers = mPref.getNumTaWorkers();
 		mNumKInductionWorkers = mPref.getNumKInductionWorkers();
 		mThreadLimit = mNumTaWorkers + mNumKInductionWorkers;
@@ -349,7 +342,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			boolean firstIteration = true;
 			while (!noTaWorkerLeft() && mRunningThreads < dispatchLimit() && !didntFindCexLastIteration) {
 				assert mRunningThreads >= 0;
-				mCounterexample = searchForErrorTrace(!firstIteration);
+				mCounterexample = mSearch.search(mServices, mAbstraction, mStateFactoryForRefinement, !firstIteration);
+				assert mCounterexample != null || mRunningThreads > 0;
 				if (mCounterexample == null) {
 					didntFindCexLastIteration = true;
 					break;
@@ -637,7 +631,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		final IRun<L, ?> counterexample = workerResult.getCounterexample();
 		if (counterexample != null) {
 			mRunningThreads -= 1;
-			mActiveCounterexamples.remove(counterexample.getWord().asList().hashCode());
+			mSearch.forget(counterexample);
 		}
 		mGoneTaWorkers += 1;
 		mRetiredWorkers += 1;
@@ -669,7 +663,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		}
 		final int abstractionSize = mAbstraction.size();
 		mAbstractionReleased = true;
-		mActiveCounterexamples.clear();
+		mSearch.clear();
 		mCounterexample = null;
 		mAbstraction = new NestedWordAutomaton<>(new AutomataLibraryServices(getServices()),
 				mAbstraction.getVpAlphabet(), mPredicateFactoryInterpolantAutomata);
@@ -970,14 +964,14 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			mLogger.info("Counterexamples: " + mCounterexamplesChecked);
 			mLogger.info("SearchTimeout: " + mCountTimeoutsInSearch);
 			mLogger.info("RunConstructionFailed: " + mCountFailedRunConstructions);
-			mLogger.info("SearchFailed: " + mCountFailedToFindCex);
-			mLogger.info("BFS: " + mCountBfsFoundCex);
+			mLogger.info("SearchFailed: " + mSearch.getFailedToFindCex());
+			mLogger.info("BFS: " + mSearch.getBfsFoundCex());
 			mLogger.info("IsEmptyParallel: " + mCountIsEmptyParallel);
 			mLogger.info("ActiveThreads: " + maxActiveThreads);
 			mLogger.info("ActiveExecutorsForPathPrograms: " + mActiveExecutors);
 			mLogger.info("IterationsWithMaxThreads: " + mIterationsWithMaxThreads);
 			mLogger.info("IterationsWithONEThread: " + mIterationsWithOneThread);
-			mLogger.info("SearchTime: " + mSearchTime + " s");
+			mLogger.info("SearchTime: " + mSearch.getSearchTimeSeconds() + " s");
 			mLogger.info("WorkerSetUpTime: " + mWorkerSetUpTime + " s");
 			mLogger.info("ExceptionInWorker: " + mExceptionInWorker);
 			mLogger.info("mRefinementTime: " + mRefinementTime);
@@ -1016,7 +1010,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		mRunningThreads += 1;
 		mCounterexamplesChecked += 1;
 		// add mCounterexample to list such that we dont get it twice in our search
-		addCounterexampleToSet((NestedRun<L, ?>) mCounterexample);
+		mSearch.add(mCounterexample);
 		mWorkerSetUpTime += ((System.nanoTime() / 1000000000) - time);
 	}
 
@@ -1066,7 +1060,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		// mInterations equals the amount of refinements
 		mCegarLoopBenchmark.announceNextIteration();
 
-		removeCounterexampleFromSet(threadResult.getCounterexample());
+		mSearch.refinedWith(threadResult.getCounterexample());
 
 		// The states of the main abstraction have to come from the main loop's own factory. Each worker has a fresh
 		// predicate factory whose serial numbers start at 1 again, so states of different workers would share serial
@@ -1081,8 +1075,13 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 					threadResult.getWorkerMgdScript(), mPredicateFactoryInterpolantAutomata);
 		}
 		mLogger.info("Difference in Main");
-		final IOpWithDelayedDeadEndRemoval<L, IPredicate> diff =
-				computeAutomataDifference(mAbstraction, subtrahend, threadResult, stateFactoryForRefinement);
+		// Future work:
+		assert !mPref.dumpOnlyReuseAutomata();
+		assert mFaultLocalizationMode == RelevanceAnalysisMode.NONE;
+		final IOpWithDelayedDeadEndRemoval<L, IPredicate> diff = WorkerAutomatonDifference.compute(getServices(),
+				mLogger, mPref, mAbstraction, subtrahend, threadResult.getAutomatonType(),
+				(NestedWord<L>) threadResult.getCounterexample().getWord(), stateFactoryForRefinement,
+				mPredicateFactoryInterpolantAutomata, mProofUpdater, mCegarLoopBenchmark);
 
 		mAbstraction = diff.getResult();
 
@@ -1094,109 +1093,11 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	/*
-	 * Only add a counterexample if it is being checked by a thread otherwise we are unsound
-	 */
-	private void addCounterexampleToSet(final NestedRun<L, ?> counterexample) {
-		final List<L> trace = counterexample.getWord().asList();
-		final int traceHash = trace.hashCode();
-		if (mActiveCounterexamples.containsKey(traceHash)) {
-			throw new AssertionError("IsEmpty(Parallel) Found the same counterexample twice!");
-		}
-		mActiveCounterexamples.put(traceHash, counterexample);
-	}
-
-	/*
-	 * OnlyActive means only countereamples actively being checked by workers. The alternative is all previously found
-	 * counterexamples.
-	 */
-	private void removeCounterexampleFromSet(final IRun<L, ?> cex) {
-		final List<L> trace = cex.getWord().asList();
-		final int traceHash = trace.hashCode();
-		mLogger.info("Subtrahend traceHash: " + traceHash);
-		// Only remove after the counterexample is no longer in the abstraction
-		if (mPref.considerOnlyActiveCounterexamplesInIsEmptyParallel()) {
-			mActiveCounterexamples.remove(traceHash);
-		} else {
-			if (mCounterexamplesToBeRemovedFromActiveCexMap == null) {
-				return;
-			}
-			mCounterexamplesToBeRemovedFromActiveCexMap.add(traceHash);
-		}
-	}
-
-	/*
 	 * The worker using this method to get the Abstraction need to ensure, they use the @TransferBetweenMainAndWorker To
 	 * transfer the abstraction to their cfgscript. Worker may only use this to read-only access the abstraction!
 	 */
 	public INestedWordAutomaton<L, IPredicate> getAbstraction() {
 		return mAbstraction;
-	}
-
-	private IsEmpty<L, IPredicate> getSearch(final IsEmpty.SearchStrategy strategy,
-			final Set<IPredicate> possibleEndPoints) throws AutomataOperationCanceledException {
-		switch (strategy) {
-		case PARALLEL:
-			return new IsEmptyParallel<>(new AutomataLibraryServices(mServices), mAbstraction,
-					mAbstraction.getInitialStates(), Collections.emptySet(), possibleEndPoints,
-					possibleEndPoints == null, IsEmpty.SearchStrategy.BFS, mActiveCounterexamples,
-					mPref.getSearchLoopBound());
-		default:
-			return new IsEmpty<>(new AutomataLibraryServices(getServices()), mAbstraction, strategy);
-		}
-	}
-
-	// If search was BFS, the counterexample might not be fresh.
-	private boolean isSearchCorrectAndTraceFresh(final IsEmpty<L, IPredicate> search) {
-		boolean correct = false;
-		boolean fresh = true;
-		try {
-			correct = search.checkResult(mStateFactoryForRefinement);
-		} catch (final AutomataLibraryException e) {
-			e.printStackTrace();
-			assert false;
-		}
-
-		final NestedRun<L, IPredicate> run = search.getNestedRun();
-		if (run != null) {
-			final List<L> trace = run.getWord().asList();
-			final int traceHash = trace.hashCode();
-			if (mActiveCounterexamples.containsKey(traceHash)) {
-				fresh = false;
-			}
-			return correct && fresh;
-		}
-		return false;
-	}
-
-	/*
-	 * Search for an error trace in the current mAbstraction. First time with a new abstraction we try BFS, then
-	 * IsEmptyParallel
-	 */
-	private NestedRun<L, IPredicate> searchForErrorTrace(final boolean onlyDoIsEmptyParallel)
-			throws AutomataOperationCanceledException {
-		final long time = System.nanoTime() / 1000000000;
-		final Set<IPredicate> possibleEndPoints = null;
-
-		IsEmpty<L, IPredicate> search;
-		if (!onlyDoIsEmptyParallel) {
-			search = getSearch(IsEmpty.SearchStrategy.BFS, possibleEndPoints);
-			if (isSearchCorrectAndTraceFresh(search)) {
-				mCountBfsFoundCex += 1;
-				mLogger.info("Found new Counterexample via BFS!");
-				return search.getNestedRun();
-			}
-		}
-		search = getSearch(IsEmpty.SearchStrategy.PARALLEL, possibleEndPoints);
-		if (isSearchCorrectAndTraceFresh(search)) {
-			mLogger.info("Found new Counterexample via IsEmptyParallel!");
-			return search.getNestedRun();
-		}
-		mLogger.info("Did not Find a Counterexample!");
-		mCountFailedToFindCex += 1;
-		assert mRunningThreads > 0;
-
-		mSearchTime += ((System.nanoTime() / 1000000000) - time);
-		return null;
 	}
 
 	@Override
@@ -1207,66 +1108,6 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		// Worker does the enhancement or nobody!
 		subtrahend = interpolantAutomaton;
 		return subtrahend;
-	}
-
-	/*
-	 * Difference is calculated twice first in worker and then in master. All automata obtained from the worker need to
-	 * be transferred to the master cfg script!
-	 */
-	private IOpWithDelayedDeadEndRemoval<L, IPredicate> computeAutomataDifference(
-			final INestedWordAutomaton<L, IPredicate> minuend,
-			final INwaOutgoingLetterAndTransitionProvider<L, IPredicate> subtrahend,
-			final WorkerThreadResult<L, A> workerResult, final PredicateFactoryRefinement stateFactoryForRefinement)
-			throws AutomataLibraryException, AssertionError {
-		try {
-			mLogger.debug("Start constructing difference");
-
-			if (mLogger.isDebugEnabled() && !new Accepts<>(new AutomataLibraryServices(getServices()), minuend,
-					(NestedWord<L>) workerResult.getCounterexample().getWord()).getResult()) {
-				mLogger.debug("Counterexample of worker result is no longer accepted by the abstraction");
-			}
-
-			final PowersetDeterminizer<L, IPredicate> psd =
-					new PowersetDeterminizer<>(subtrahend, true, mPredicateFactoryInterpolantAutomata);
-			// As in NwaCegarLoop: a proof needs the states that the sigma-star exploitation would skip.
-			final boolean exploitSigmaStarConcatOfIa =
-					workerResult.getAutomatonType().equals(AbstractCegarLoop.AutomatonType.INTERPOLANT)
-							&& (mProofUpdater == null || mProofUpdater.exploitSigmaStarConcatOfIa());
-			IOpWithDelayedDeadEndRemoval<L, IPredicate> diff;
-			try {
-				if (mPref.differenceSenwa()) {
-					diff = new DifferenceSenwa<>(new AutomataLibraryServices(getServices()), stateFactoryForRefinement,
-							minuend, subtrahend, psd, false);
-				} else {
-					diff = new Difference<>(new AutomataLibraryServices(getServices()), stateFactoryForRefinement,
-							minuend, subtrahend, psd, exploitSigmaStarConcatOfIa);
-				}
-				mCegarLoopBenchmark.reportInterpolantAutomatonStates(subtrahend.size());
-
-			} catch (final AutomataOperationCanceledException | ToolchainCanceledException tce) {
-				throw tce;
-			} finally {
-				// We never enhance in main thread!
-			}
-
-			// Future work:
-			assert !mPref.dumpOnlyReuseAutomata();
-			assert mFaultLocalizationMode == RelevanceAnalysisMode.NONE;
-
-			if (REMOVE_DEAD_ENDS) {
-				if (mProofUpdater != null) {
-					// SENWA is rejected in the constructor if we compute a proof
-					final Difference<L, IPredicate> difference = (Difference<L, IPredicate>) diff;
-					mProofUpdater.updateOnIntersection(difference.getFst2snd2res(), difference.getResult());
-				}
-				diff.removeDeadEnds();
-				if (mProofUpdater != null) {
-					mProofUpdater.addDeadEndDoubleDeckers(diff);
-				}
-			}
-			return diff;
-		} finally {
-		}
 	}
 
 	/** See {@link WorkerSolverSettings#getSolverSettings}. */

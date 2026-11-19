@@ -81,15 +81,41 @@ public final class JsonCodec {
 		TRUE, FALSE, UNKNOWN
 	}
 
-	/** {@code COUNTEREXAMPLE}: a word for a TA worker to check against an abstraction generation. */
-	public record Counterexample(long job, long generation, List<String> word, List<Integer> nesting) {
+	/**
+	 * {@code COUNTEREXAMPLE}: a word for a TA worker to check against an abstraction generation.
+	 * {@code pathProgramCount} is how often the coordinator handed out a word of this path program, this one included.
+	 */
+	public record Counterexample(long job, long generation, List<String> word, List<Integer> nesting,
+			int pathProgramCount) {
 		static final Set<String> OPTIONAL = Set.of();
 	}
 
-	/** {@code RESULT}: a TA worker's answer for a job. A SAT result carries the feasible word. */
+	/** The reason of the synthetic {@link Result} for a lost TA session, which has no automaton type. */
+	public static final String REASON_SESSION_LOST = "SESSION_LOST";
+
+	/**
+	 * {@code RESULT}: a TA worker's answer for a job. A SAT result carries the feasible word. A TA worker always sets
+	 * the automaton type; only the synthetic result for a lost session ({@link #REASON_SESSION_LOST}) has none.
+	 */
 	public record Result(long job, long generation, ResultStatus status, AutomatonType automatonType,
 			List<String> word, List<Integer> nesting, String reason) {
-		static final Set<String> OPTIONAL = Set.of("word", "nesting", "reason");
+		static final Set<String> OPTIONAL = Set.of("automatonType", "word", "nesting", "reason");
+
+		/**
+		 * @return whether this is the synthetic result for a lost TA session
+		 * @throws IllegalArgumentException
+		 *             if the result has no automaton type but is not the synthetic one
+		 */
+		public boolean isSessionLost() {
+			final boolean lost = REASON_SESSION_LOST.equals(reason);
+			if (lost && (status != ResultStatus.UNKNOWN || automatonType != null || word != null)) {
+				throw new IllegalArgumentException("Malformed " + REASON_SESSION_LOST + " result for job " + job);
+			}
+			if (!lost && automatonType == null) {
+				throw new IllegalArgumentException("Result for job " + job + " without an automaton type");
+			}
+			return lost;
+		}
 	}
 
 	/** {@code CANCEL}: stop working on a job. */

@@ -72,6 +72,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.co
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.ParallelNwaCegarLoop;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.FileExchange;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSession;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessedCegarCoordinator;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences.Concurrency;
@@ -280,16 +281,16 @@ public class CegarLoopFactory<L extends IIcfgTransition<?>> {
 				mTransitionClazz, stateFactoryForRefinement);
 		case NONE -> {
 			if (MultiProcessSupport.isMultiProcess(mPrefs)) {
-				// TraceAbstractionStarter only gets here for the coordinator
-				try (FileExchange exchange = MultiProcessSession.openExchange(mPrefs)) {
-					final MultiProcessComponent kind = mPrefs.getMultiProcessComponent();
-					try {
-						MultiProcessSession.announceReady(exchange, kind, services, mLogger, root, abstraction);
-						throw new UnsupportedOperationException("Session kind COORDINATOR is not implemented yet");
-					} catch (final RuntimeException | Error e) {
-						MultiProcessSession.reportException(exchange, kind, e);
-						throw e;
-					}
+				// TraceAbstractionStarter only gets here for the coordinator; it closes the exchange after the verdict
+				final FileExchange exchange = MultiProcessSession.openExchange(mPrefs);
+				try {
+					yield new MultiProcessedCegarCoordinator<>(name, abstraction, root, csToolkit, predicateFactory,
+							mPrefs, errorLocs, proofProducer, services, mTransitionClazz, stateFactoryForRefinement,
+							exchange);
+				} catch (final RuntimeException | Error e) {
+					MultiProcessSession.reportException(exchange, MultiProcessComponent.COORDINATOR, e);
+					exchange.close();
+					throw e;
 				}
 			}
 			if (mPrefs.isSequentialKInductionCegarLoop() && !IcfgUtils.isConcurrent(root)) {
