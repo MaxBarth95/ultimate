@@ -51,6 +51,7 @@ import de.uni_freiburg.informatik.ultimate.cli.exceptions.InvalidFileArgumentExc
 import de.uni_freiburg.informatik.ultimate.cli.options.CommandLineOptions;
 import de.uni_freiburg.informatik.ultimate.core.coreplugin.toolchain.BasicToolchainJob;
 import de.uni_freiburg.informatik.ultimate.core.coreplugin.toolchain.DefaultToolchainJob;
+import de.uni_freiburg.informatik.ultimate.core.lib.results.ExceptionOrErrorResult;
 import de.uni_freiburg.informatik.ultimate.core.lib.results.ResultSummarizer;
 import de.uni_freiburg.informatik.ultimate.core.lib.results.ResultUtil;
 import de.uni_freiburg.informatik.ultimate.core.lib.results.StatisticsResult;
@@ -82,7 +83,17 @@ import de.uni_freiburg.informatik.ultimate.util.csv.ICsvProviderProvider;
  */
 public class CommandLineController implements IController<RunDefinition> {
 
+	/**
+	 * If this JVM property is true, the controller exits with {@link #EXIT_EXCEPTION} when the toolchain reported an
+	 * exception. Without it the exit code stays 0, and callers such as Ultimate.py read the result from the output.
+	 * UltimateCloud sessions set it, so that a crash is a non-zero exit.
+	 */
+	public static final String PROPERTY_EXIT_ON_EXCEPTION = "ultimate.cli.exitOnException";
+	private static final int EXIT_EXCEPTION = 1;
+
 	private ILogger mLogger;
+	// whether the toolchain reported an exception, written by the toolchain job
+	private volatile boolean mToolchainFailed;
 	private IToolchainData<RunDefinition> mToolchain;
 
 	private ParsedParameter mCliParams;
@@ -190,6 +201,10 @@ public class CommandLineController implements IController<RunDefinition> {
 			// from now on, use the shutdown hook that disables the toolchain if the user presses CTRL+C (hopefully)
 			Runtime.getRuntime().addShutdownHook(new Thread(new SigIntTrap(currentToolchain, mLogger), "SigIntTrap"));
 			startExecutingToolchain(core, fullParams, mLogger, currentToolchain);
+			if (mToolchainFailed && Boolean.getBoolean(PROPERTY_EXIT_ON_EXCEPTION)) {
+				mLogger.info("Exiting with code " + EXIT_EXCEPTION + " because the toolchain reported an exception");
+				return EXIT_EXCEPTION;
+			}
 		} catch (final ParseException pex) {
 			printParseException(args, pex);
 			fullParser.printHelp();
@@ -321,6 +336,9 @@ public class CommandLineController implements IController<RunDefinition> {
 	public void displayToolchainResults(final IToolchain<RunDefinition> toolchain,
 			final Map<String, List<IResult>> results) {
 		final ResultSummarizer summarizer = new ResultSummarizer(results);
+		if (!ResultUtil.filterResults(results, ExceptionOrErrorResult.class).isEmpty()) {
+			mToolchainFailed = true;
+		}
 		switch (summarizer.getResultSummary()) {
 		case CORRECT:
 			mLogger.info("RESULT: Ultimate proved your program to be correct!");
@@ -426,6 +444,7 @@ public class CommandLineController implements IController<RunDefinition> {
 	@Override
 	public void displayException(final IToolchain<RunDefinition> toolchain, final String description,
 			final Throwable ex) {
+		mToolchainFailed = true;
 		mLogger.fatal("RESULT: An exception occured during the execution of Ultimate: " + description, ex);
 	}
 
