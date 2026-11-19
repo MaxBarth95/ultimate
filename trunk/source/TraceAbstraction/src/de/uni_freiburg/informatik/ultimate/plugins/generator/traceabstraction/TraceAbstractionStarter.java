@@ -84,6 +84,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.mu
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.SessionStatistics;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.TaWorkerSession;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.WitnessSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.FloydHoareAutomataReuse;
@@ -250,6 +251,14 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 							new SubtaskFileIdentifier(null, icfg.getIdentifier() + "_" + kind));
 					statistics = ta.getStatistics();
 					statistics.write(exchange, ta.run(), null);
+					break;
+				}
+				case WITNESS: {
+					final WitnessSession<L> witness = new WitnessSession<>(mServices, mLogger, mPrefs, icfg, exchange,
+							session.predicateFactory(), session.abstraction(), mResultReporter::reportResult);
+					statistics = witness.getStatistics();
+					// written before the WitnessPrinter, which runs after this plug-in, writes witness.yml
+					statistics.write(exchange, witness.run(), null);
 					break;
 				}
 				default:
