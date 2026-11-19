@@ -78,6 +78,7 @@ public final class FileExchange implements IExchange {
 	public static final String BLOBS = "blobs";
 	public static final String SHUTDOWN = "shutdown";
 	public static final String READY = "ready.json";
+	public static final String STATISTICS = "statistics.json";
 
 	private static final String TMP = ".tmp";
 	private static final String REF_EXTENSION = "ref.json";
@@ -345,6 +346,11 @@ public final class FileExchange implements IExchange {
 		}
 		writeAtomically(mOut.resolve(READY), JsonCodec.encodePlain(ready).getBytes(StandardCharsets.UTF_8));
 		mReady = true;
+	}
+
+	@Override
+	public void writeStatistics(final String json) {
+		writeAtomically(mOut.resolve(STATISTICS), json.getBytes(StandardCharsets.UTF_8));
 	}
 
 	@Override

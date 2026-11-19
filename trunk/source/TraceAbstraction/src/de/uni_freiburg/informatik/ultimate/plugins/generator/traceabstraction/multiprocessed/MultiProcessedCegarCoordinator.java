@@ -134,6 +134,8 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 	private int mPublishedSize;
 	private int mRefinements;
 	private NestedWord<L> mViolation;
+	private final SessionStatistics mStatistics;
+	private SessionStatistics.End mEnd = SessionStatistics.End.DONE;
 
 	/**
 	 * Writes {@code ready.json} with the fingerprint of the initial abstraction, before any work.
@@ -168,6 +170,9 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 				csToolkit.getSymbolTable(), SimplificationTechnique.SIMPLIFY_DDA);
 		mGeneration = 0;
 		mPublishedSize = initialAbstraction.size();
+		mStatistics = new SessionStatistics(MultiProcessComponent.COORDINATOR, taPrefs.getMultiProcessSessionId());
+		mStatistics.declare("jobs", "refinements", "cancels", "abstractionsPublished", "lostTaSessions",
+				"refinementTimeMs", "searchTimeMs", "idleTimeMs", "abstractionSize");
 		MultiProcessSession.announceReady(exchange, MultiProcessComponent.COORDINATOR, services, mLogger, rootNode,
 				initialAbstraction);
 	}
@@ -189,8 +194,10 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		while (true) {
 			abortIfTimeout();
 			while (mJobs.size() < mTaWorkers - mLostTaSessions) {
+				final long searchStart = System.nanoTime();
 				final NestedRun<L, IPredicate> cex =
 						mSearch.search(getServices(), mAbstraction, mStateFactoryForRefinement, !freshAbstraction);
+				mStatistics.add("searchTimeMs", (System.nanoTime() - searchStart) / 1_000_000);
 				freshAbstraction = false;
 				if (cex == null) {
 					break;
@@ -207,16 +214,21 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 						"No job in flight and no counterexample found, but the abstraction is not empty");
 			}
 			final Optional<ExchangeMessage> next;
+			final long idleStart = System.nanoTime();
 			try {
 				next = mExchange.take(deadline);
 			} catch (final DeadlineExpiredException e) {
 				mLogger.info("Coordinator reached its time limit with %s jobs in flight", mJobs.size());
 				mResultBuilder.addResultForAllRemaining(Result.TIMEOUT);
+				mEnd = SessionStatistics.End.TIME_LIMIT;
 				return;
+			} finally {
+				mStatistics.add("idleTimeMs", (System.nanoTime() - idleStart) / 1_000_000);
 			}
 			if (next.isEmpty()) {
 				mLogger.info("Coordinator was asked to shut down");
 				mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
+				mEnd = SessionStatistics.End.SHUTDOWN;
 				return;
 			}
 			// as the threaded loop: handle every message that is there, then minimize once
@@ -230,7 +242,9 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 			}
 			if (mRefinements > refinementsBefore) {
 				if (!mPref.minimizeAbstractionPerWorker()) {
+					final long minimizationStart = System.nanoTime();
 					minimizeAbstractionIfEnabled();
+					mStatistics.add("refinementTimeMs", (System.nanoTime() - minimizationStart) / 1_000_000);
 				}
 				cancelJobsNoLongerAccepted();
 				publishIfSmaller();
@@ -264,6 +278,7 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 				JsonCodec.encode(new JsonCodec.Counterexample(job, mGeneration, encoded.word(), encoded.nesting(),
 						pathProgramCount)));
 		mJobs.put(job, new Job<>(run));
+		mStatistics.increment("jobs");
 		mLogger.info("Coordinator: job %s, a counterexample of length %s (generation %s, %s jobs in flight)", job,
 				word.length(), mGeneration, mJobs.size());
 	}
@@ -331,6 +346,7 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		mJobs.remove(jobId);
 		mSearch.forget(job.mRun);
 		mLostTaSessions++;
+		mStatistics.increment("lostTaSessions");
 		if (mPref.getRefinementStrategy() != RefinementStrategy.FOX) {
 			mLogger.warn("Coordinator: the TA session of job %s was lost, reporting UNKNOWN to leave the time to the "
 					+ "bit-precise analysis", jobId);
@@ -369,6 +385,7 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		mLogger.info("Coordinator: refining with the %s automaton of job %s (%s states)", type, jobId,
 				automaton.size());
 
+		final long refinementStart = System.nanoTime();
 		mCegarLoopBenchmark.announceNextIteration();
 		mSearch.refinedWith(job.mRun);
 		// Future work:
@@ -383,6 +400,8 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		mJobs.remove(jobId);
 		mRefinements++;
 		mIteration++;
+		mStatistics.increment("refinements");
+		mStatistics.add("refinementTimeMs", (System.nanoTime() - refinementStart) / 1_000_000);
 		mCegarLoopBenchmark.reportAbstractionSize(mAbstraction.size(), mIteration);
 
 		if (mAbstraction.size() == 0 || isAbstractionEmpty()) {
@@ -438,6 +457,7 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		final Job<L> job = mJobs.remove(jobId);
 		mSearch.forget(job.mRun);
 		mCancelledJobs.add(jobId);
+		mStatistics.increment("cancels");
 		mExchange.send(MessageType.CANCEL, OptionalLong.of(jobId), OptionalLong.empty(),
 				JsonCodec.encode(new JsonCodec.Cancel(jobId)));
 		mLogger.info("Coordinator: cancelled job %s, the abstraction no longer accepts its word", jobId);
@@ -449,6 +469,7 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		}
 		mGeneration++;
 		mPublishedSize = mAbstraction.size();
+		mStatistics.increment("abstractionsPublished");
 		mExchange.send(MessageType.ABSTRACTION, OptionalLong.empty(), OptionalLong.of(mGeneration),
 				mAts.printAbstraction(ABSTRACTION_NAME, mAbstraction, mLocations));
 		mLogger.info("Coordinator: published abstraction generation %s with %s states", mGeneration,
@@ -513,6 +534,29 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 			}
 		}
 		return result;
+	}
+
+	/**
+	 * Writes {@code out/statistics.json} after the verdict.
+	 *
+	 * @param ultimateStatistics
+	 *            Ultimate's flattened benchmark data of the CEGAR loop
+	 */
+	public void writeStatistics(final Map<String, Object> ultimateStatistics) {
+		mStatistics.set("abstractionSize", mAbstraction.size());
+		mStatistics.addUltimate(ultimateStatistics);
+		final SessionStatistics.End end =
+				mEnd == SessionStatistics.End.DONE && !getServices().getProgressMonitorService().continueProcessing()
+						? SessionStatistics.End.TIME_LIMIT
+						: mEnd;
+		mStatistics.write(mExchange, end, null);
+	}
+
+	/**
+	 * Writes {@code out/statistics.json} after an {@code EXCEPTION}, as far as it still can.
+	 */
+	public void writeStatisticsAfterException(final Throwable failure) {
+		mStatistics.write(mExchange, SessionStatistics.End.EXCEPTION, failure);
 	}
 
 	/**

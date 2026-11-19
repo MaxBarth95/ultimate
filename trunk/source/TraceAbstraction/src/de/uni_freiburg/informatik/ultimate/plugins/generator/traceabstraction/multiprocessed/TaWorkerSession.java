@@ -61,6 +61,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pa
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TaJobProcessor.RefinementAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.TaskScopedServices;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.MultiProcessComponent;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.tracehandling.TaCheckAndRefinementPreferences;
 
 /**
@@ -100,6 +101,7 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 	private final PredicateFactoryForInterpolantAutomata mPredicateFactoryInterpolantAutomata;
 	private final TaJobProcessor<L> mProcessor;
 	private final Set<Long> mCancelledJobs = new HashSet<>();
+	private final SessionStatistics mStatistics;
 	private INestedWordAutomaton<L, IPredicate> mAbstraction;
 	private long mGeneration;
 
@@ -136,6 +138,9 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 		mPredicateFactory = predicateFactory;
 		mAbstraction = initialAbstraction;
 		mGeneration = 0;
+		mStatistics = new SessionStatistics(MultiProcessComponent.TA_WORKER, prefs.getMultiProcessSessionId());
+		mStatistics.declare("jobs", "jobsUnsat", "jobsSat", "jobsUnknown", "jobsSkipped", "jobsStopped",
+				"abstractionsInstalled", "traceCheckTimeMs", "automatonTimeMs", "maxJobTimeMs");
 
 		// as ParallelNwaCegarLoop sets up a TA worker thread, but on the main script: the process has it alone
 		final CfgSmtToolkit toolkit = icfg.getCfgSmtToolkit();
@@ -153,9 +158,18 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 	}
 
 	/**
-	 * Works on the messages of {@code in/} until the session is asked to shut down or reaches its time limit.
+	 * @return the statistics of this session, for {@code out/statistics.json}
 	 */
-	public void run() {
+	public SessionStatistics getStatistics() {
+		return mStatistics;
+	}
+
+	/**
+	 * Works on the messages of {@code in/} until the session is asked to shut down or reaches its time limit.
+	 *
+	 * @return how the session ended
+	 */
+	public SessionStatistics.End run() {
 		final long deadlineMillis = mServices.getProgressMonitorService().getDeadline();
 		if (deadlineMillis <= 0) {
 			throw new IllegalArgumentException("A TA_WORKER session needs a time limit (the toolchain timeout)");
@@ -168,11 +182,11 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 				next = mExchange.take(deadline);
 			} catch (final DeadlineExpiredException e) {
 				mLogger.info("TA worker reached its time limit after " + jobs + " jobs");
-				return;
+				return SessionStatistics.End.TIME_LIMIT;
 			}
 			if (next.isEmpty()) {
 				mLogger.info("TA worker shuts down after " + jobs + " jobs");
-				return;
+				return SessionStatistics.End.SHUTDOWN;
 			}
 			final ExchangeMessage message = next.get();
 			switch (message.type()) {
@@ -181,7 +195,8 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 				break;
 			case COUNTEREXAMPLE:
 				if (!runJob(message)) {
-					return;
+					return mExchange.isShutdownRequested() ? SessionStatistics.End.SHUTDOWN
+							: SessionStatistics.End.TIME_LIMIT;
 				}
 				jobs++;
 				break;
@@ -204,6 +219,7 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 				mAts.parseAbstraction(message.body(), mLocations, mPredicateFactory::newDontCarePredicate,
 						mPredicateFactoryInterpolantAutomata);
 		mLogger.info("Installed abstraction generation %s with %s states", generation, abstraction.size());
+		mStatistics.increment("abstractionsInstalled");
 		mAbstraction = abstraction;
 		mGeneration = generation;
 	}
@@ -220,8 +236,11 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 		}
 		if (mCancelledJobs.remove(job)) {
 			mLogger.info("Skipping job %s, it was cancelled before it started", job);
+			mStatistics.increment("jobsSkipped");
 			return true;
 		}
+		mStatistics.increment("jobs");
+		final long jobStart = System.nanoTime();
 		final NestedWord<L> word = WordCodec.decode(new WordCodec.EncodedWord(cex.word(), cex.nesting()), mLetters);
 		final NestedRun<L, IPredicate> run = RunReplay.replay(mAbstraction, word);
 		// as the threaded worker: the count of this check is added again by the strategy
@@ -242,7 +261,10 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 						stopTimer::isRetired);
 			} catch (final ToolchainCanceledException e) {
 				return endStoppedJob(job, generation, stopTimer, e);
+			} finally {
+				mStatistics.add("traceCheckTimeMs", (System.nanoTime() - jobStart) / 1_000_000);
 			}
+			final long automatonStart = System.nanoTime();
 			sendResult(job, generation, feasibility, word);
 			final RefinementAutomaton<L> automaton;
 			try {
@@ -251,6 +273,8 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 				return endStoppedJob(job, generation, stopTimer, e);
 			} catch (final AutomataLibraryException e) {
 				throw new IllegalStateException("Job " + job + ": cannot build the automaton", e);
+			} finally {
+				mStatistics.add("automatonTimeMs", (System.nanoTime() - automatonStart) / 1_000_000);
 			}
 			final NestedWordAutomaton<L, IPredicate> explored = ExploredAutomaton.copy(
 					new AutomataLibraryServices(jobServices), automaton.automaton(),
@@ -267,6 +291,7 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 				Thread.currentThread().interrupt();
 			}
 			jobServices.destroyAll(mLogger);
+			mStatistics.max("maxJobTimeMs", (System.nanoTime() - jobStart) / 1_000_000);
 			if (watcherFailure.get() != null) {
 				// overrides the outcome of the job: the session cannot see cancellations any more
 				throw new IllegalStateException("Job " + job + ": watching for a cancellation failed",
@@ -283,10 +308,12 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 	private boolean endStoppedJob(final long job, final long generation, final RetirementTimer stopTimer,
 			final ToolchainCanceledException cause) {
 		if (stopTimer.isRetired()) {
+			mStatistics.increment("jobsStopped");
 			mLogger.info("Job %s (generation %s) stopped: %s", job, generation, stopTimer.getReason());
 			return !mExchange.isShutdownRequested();
 		}
 		if (!mServices.getProgressMonitorService().continueProcessing()) {
+			mStatistics.increment("jobsStopped");
 			mLogger.info("Job %s (generation %s) stopped by the time limit", job, generation);
 			return false;
 		}
@@ -301,13 +328,16 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 		String reason = null;
 		if (feasibility.status() == LBool.UNSAT) {
 			status = ResultStatus.UNSAT;
+			mStatistics.increment("jobsUnsat");
 			automatonType = JsonCodec.AutomatonType.FLOYD_HOARE;
 		} else if (feasibility.status() == LBool.SAT) {
 			status = ResultStatus.SAT;
+			mStatistics.increment("jobsSat");
 			automatonType = JsonCodec.AutomatonType.ERROR;
 			word = WordCodec.encode(checkedWord, mLetters);
 		} else {
 			status = ResultStatus.UNKNOWN;
+			mStatistics.increment("jobsUnknown");
 			automatonType = JsonCodec.AutomatonType.ERROR;
 			reason = "unable to decide satisfiability of path constraint";
 		}

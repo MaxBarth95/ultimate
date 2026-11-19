@@ -82,6 +82,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.mu
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessedCegarCoordinator;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.SessionStatistics;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.TaWorkerSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer;
@@ -237,21 +238,26 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 	private void runSession(final IIcfg<IcfgLocation> icfg) {
 		final MultiProcessComponent kind = mPrefs.getMultiProcessComponent();
 		try (FileExchange exchange = MultiProcessSession.openExchange(mPrefs)) {
+			SessionStatistics statistics = new SessionStatistics(kind, mPrefs.getMultiProcessSessionId());
 			try {
 				final Set<IcfgLocation> errorLocs = partitionErrorLocations(icfg).get(0).getValue();
 				final var session = mCegarFactory.constructSessionAbstraction(mServices, icfg, errorLocs);
 				MultiProcessSession.announceReady(exchange, kind, mServices, mLogger, icfg, session.abstraction());
 				switch (kind) {
-				case TA_WORKER:
-					new TaWorkerSession<>(mServices, mLogger, mPrefs, icfg, exchange, session.predicateFactory(),
-							session.abstraction(), mCegarFactory.getTransitionClazz(),
-							new SubtaskFileIdentifier(null, icfg.getIdentifier() + "_" + kind)).run();
+				case TA_WORKER: {
+					final TaWorkerSession<L> ta = new TaWorkerSession<>(mServices, mLogger, mPrefs, icfg, exchange,
+							session.predicateFactory(), session.abstraction(), mCegarFactory.getTransitionClazz(),
+							new SubtaskFileIdentifier(null, icfg.getIdentifier() + "_" + kind));
+					statistics = ta.getStatistics();
+					statistics.write(exchange, ta.run(), null);
 					break;
+				}
 				default:
 					throw new UnsupportedOperationException("Session kind " + kind + " is not implemented yet");
 				}
 			} catch (final RuntimeException | Error e) {
 				MultiProcessSession.reportException(exchange, kind, e);
+				statistics.write(exchange, SessionStatistics.End.EXCEPTION, e);
 				throw e;
 			}
 		}
@@ -532,9 +538,11 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 			cegarStatistics.aggregateBenchmarkData(clres.getCegarLoopStatisticsGenerator());
 			cegarStatistics.aggregateBenchmarkData(mCegarFactory.getStatistics());
 			taBenchmark.aggregateBenchmarkData(cegarStatistics);
+			coordinator.writeStatistics(cegarStatistics.getFlattenedKeyValueMap());
 			return new ProvenCegarLoopResult<>(clres, proof);
 		} catch (final RuntimeException | Error e) {
 			coordinator.reportException(e);
+			coordinator.writeStatisticsAfterException(e);
 			throw e;
 		} finally {
 			coordinator.closeExchange();

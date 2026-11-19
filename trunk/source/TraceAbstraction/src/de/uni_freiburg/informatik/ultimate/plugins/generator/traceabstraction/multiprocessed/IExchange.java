@@ -91,6 +91,11 @@ public interface IExchange extends AutoCloseable {
 	 */
 	void announceReady(ReadyFile ready);
 
+	/**
+	 * Writes the statistics of the session ({@code out/statistics.json}), the last file a session writes.
+	 */
+	void writeStatistics(String json);
+
 	@Override
 	void close();
 }
