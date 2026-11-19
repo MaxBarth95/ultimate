@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryException;
 import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryServices;
+import de.uni_freiburg.informatik.ultimate.automata.AutomataOperationCanceledException;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedRun;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWord;
@@ -271,6 +272,9 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 				automaton = mProcessor.constructAutomaton(jobServices, feasibility);
 			} catch (final ToolchainCanceledException e) {
 				return endStoppedJob(job, generation, stopTimer, e);
+			} catch (final AutomataOperationCanceledException e) {
+				// a stop during the difference comes as this subclass of AutomataLibraryException
+				return endStoppedJob(job, generation, stopTimer, e);
 			} catch (final AutomataLibraryException e) {
 				throw new IllegalStateException("Job " + job + ": cannot build the automaton", e);
 			} finally {
@@ -306,7 +310,7 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 	 * @return false if the session must end
 	 */
 	private boolean endStoppedJob(final long job, final long generation, final RetirementTimer stopTimer,
-			final ToolchainCanceledException cause) {
+			final Exception cause) {
 		if (stopTimer.isRetired()) {
 			mStatistics.increment("jobsStopped");
 			mLogger.info("Job %s (generation %s) stopped: %s", job, generation, stopTimer.getReason());
@@ -317,7 +321,10 @@ public final class TaWorkerSession<L extends IIcfgTransition<?>> {
 			mLogger.info("Job %s (generation %s) stopped by the time limit", job, generation);
 			return false;
 		}
-		throw cause;
+		if (cause instanceof RuntimeException) {
+			throw (RuntimeException) cause;
+		}
+		throw new IllegalStateException("Job " + job + " was cancelled, but not by a stop", cause);
 	}
 
 	private void sendResult(final long job, final long generation, final Feasibility<L> feasibility,
