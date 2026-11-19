@@ -814,6 +814,13 @@ public final class TAPreferences {
 	}
 
 	/**
+	 * @return whether a crashed TA session makes the coordinator throw (testing mode)
+	 */
+	public boolean isMultiProcessFailOnTaCrash() {
+		return mPrefs.getBoolean(TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_FAIL_ON_TA_CRASH);
+	}
+
+	/**
 	 * @return how many seconds of CPU time the sequential CEGAR loop with k-induction gives trace abstraction
 	 */
 	public int getSequentialTaTimeLimit() {

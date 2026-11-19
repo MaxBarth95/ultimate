@@ -90,31 +90,36 @@ public final class JsonCodec {
 		static final Set<String> OPTIONAL = Set.of();
 	}
 
-	/** The reason of the synthetic {@link Result} for a lost TA session, which has no automaton type. */
+	/**
+	 * The reason of the synthetic {@link Result} for a TA session that was killed by a signal or became unreachable.
+	 */
 	public static final String REASON_SESSION_LOST = "SESSION_LOST";
+	/** The reason of the synthetic {@link Result} for a TA session whose Ultimate threw. */
+	public static final String REASON_SESSION_CRASHED = "SESSION_CRASHED";
 
 	/**
 	 * {@code RESULT}: a TA worker's answer for a job. A SAT result carries the feasible word. A TA worker always sets
-	 * the automaton type; only the synthetic result for a lost session ({@link #REASON_SESSION_LOST}) has none.
+	 * the automaton type; only the synthetic result for a lost or crashed session ({@link #REASON_SESSION_LOST},
+	 * {@link #REASON_SESSION_CRASHED}) has none.
 	 */
 	public record Result(long job, long generation, ResultStatus status, AutomatonType automatonType,
 			List<String> word, List<Integer> nesting, String reason) {
 		static final Set<String> OPTIONAL = Set.of("automatonType", "word", "nesting", "reason");
 
 		/**
-		 * @return whether this is the synthetic result for a lost TA session
+		 * @return whether this is the synthetic result for a lost or crashed TA session (see {@link #reason()})
 		 * @throws IllegalArgumentException
-		 *             if the result has no automaton type but is not the synthetic one
+		 *             if the result has no automaton type but is not a synthetic one
 		 */
-		public boolean isSessionLost() {
-			final boolean lost = REASON_SESSION_LOST.equals(reason);
-			if (lost && (status != ResultStatus.UNKNOWN || automatonType != null || word != null)) {
-				throw new IllegalArgumentException("Malformed " + REASON_SESSION_LOST + " result for job " + job);
+		public boolean isSynthetic() {
+			final boolean synthetic = REASON_SESSION_LOST.equals(reason) || REASON_SESSION_CRASHED.equals(reason);
+			if (synthetic && (status != ResultStatus.UNKNOWN || automatonType != null || word != null)) {
+				throw new IllegalArgumentException("Malformed " + reason + " result for job " + job);
 			}
-			if (!lost && automatonType == null) {
+			if (!synthetic && automatonType == null) {
 				throw new IllegalArgumentException("Result for job " + job + " without an automaton type");
 			}
-			return lost;
+			return synthetic;
 		}
 	}
 

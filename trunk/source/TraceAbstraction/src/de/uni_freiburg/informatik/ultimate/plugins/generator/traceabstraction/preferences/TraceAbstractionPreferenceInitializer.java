@@ -680,6 +680,11 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 	private static final String DESC_MULTI_PROCESS_SESSION_ID =
 			"The id of this session, given by the scheduler. It is part of every log line.";
 	private static final String DEF_MULTI_PROCESS_SESSION_ID = "";
+	public static final String LABEL_MULTI_PROCESS_FAIL_ON_TA_CRASH = "multi process fail on TA crash";
+	private static final String DESC_MULTI_PROCESS_FAIL_ON_TA_CRASH =
+			"Testing mode of the coordinator: a crashed TA session ends the run with an exception, instead of the run "
+					+ "going on with one TA session less.";
+	private static final boolean DEF_MULTI_PROCESS_FAIL_ON_TA_CRASH = false;
 
 	public static final String LABEL_KINDUCTION_COUNTEREXAMPLE = "K-Induction counterexample";
 	private static final String DESC_KINDUCTION_COUNTEREXAMPLE =
@@ -1132,7 +1137,9 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_EXCHANGE_ROOT, DEF_MULTI_PROCESS_EXCHANGE_ROOT,
 						DESC_MULTI_PROCESS_EXCHANGE_ROOT, PreferenceType.String),
 				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_SESSION_ID, DEF_MULTI_PROCESS_SESSION_ID,
-						DESC_MULTI_PROCESS_SESSION_ID, PreferenceType.String));
+						DESC_MULTI_PROCESS_SESSION_ID, PreferenceType.String),
+				new UltimatePreferenceItem<>(LABEL_MULTI_PROCESS_FAIL_ON_TA_CRASH, DEF_MULTI_PROCESS_FAIL_ON_TA_CRASH,
+						DESC_MULTI_PROCESS_FAIL_ON_TA_CRASH, PreferenceType.Boolean));
 	}
 
 	public static String getSuffixedLabel(final String label, final int index) {

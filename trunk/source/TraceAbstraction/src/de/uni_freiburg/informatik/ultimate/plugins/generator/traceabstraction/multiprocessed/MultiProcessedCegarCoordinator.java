@@ -72,7 +72,6 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.pa
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.parallel.WorkerAutomatonDifference;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.MultiProcessComponent;
-import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.RefinementStrategy;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.RelevanceAnalysisMode;
 import de.uni_freiburg.informatik.ultimate.smtsolver.external.TermParseUtils;
 
@@ -128,7 +127,7 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 	private final Map<Long, Job<L>> mJobs = new LinkedHashMap<>();
 	private final Set<Long> mCancelledJobs = new HashSet<>();
 	private final int mTaWorkers;
-	private int mLostTaSessions;
+	private int mGoneTaSessions;
 	private long mNextJob = 1;
 	private long mGeneration;
 	private int mPublishedSize;
@@ -172,6 +171,7 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		mPublishedSize = initialAbstraction.size();
 		mStatistics = new SessionStatistics(MultiProcessComponent.COORDINATOR, taPrefs.getMultiProcessSessionId());
 		mStatistics.declare("jobs", "refinements", "cancels", "abstractionsPublished", "lostTaSessions",
+				"crashedTaSessions",
 				"refinementTimeMs", "searchTimeMs", "idleTimeMs", "abstractionSize");
 		MultiProcessSession.announceReady(exchange, MultiProcessComponent.COORDINATOR, services, mLogger, rootNode,
 				initialAbstraction);
@@ -193,7 +193,7 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		mIteration = 1;
 		while (true) {
 			abortIfTimeout();
-			while (mJobs.size() < mTaWorkers - mLostTaSessions) {
+			while (mJobs.size() < mTaWorkers - mGoneTaSessions) {
 				final long searchStart = System.nanoTime();
 				final NestedRun<L, IPredicate> cex =
 						mSearch.search(getServices(), mAbstraction, mStateFactoryForRefinement, !freshAbstraction);
@@ -296,8 +296,8 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		if (job.mResult != null) {
 			throw new IllegalArgumentException("Second RESULT for job " + jobId);
 		}
-		if (result.isSessionLost()) {
-			return onSessionLost(jobId, job);
+		if (result.isSynthetic()) {
+			return onSessionGone(jobId, job, JsonCodec.REASON_SESSION_CRASHED.equals(result.reason()));
 		}
 		job.mResult = result.status();
 		final NestedWord<L> word = job.mRun.getWord();
@@ -322,15 +322,14 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 			return false;
 		}
 		case UNKNOWN: {
+			// R2.6: the run ends at once with UNKNOWN, so that a bit-precise run can start
+			mLogger.info("Coordinator: the trace check of job %s answered UNKNOWN, ending with UNKNOWN", jobId);
 			final UnprovabilityReason reason = new UnprovabilityReason(result.reason() == null
 					? "unable to decide satisfiability of path constraint" : result.reason());
 			mResultBuilder.addResultForProgramExecution(Result.UNKNOWN, programExecution(word), null, reason);
 			mResultBuilder.addResult(errorLocation(job.mRun), Result.TIMEOUT, null, null, null);
-			if (mPref.stopAfterFirstViolation()) {
-				mResultBuilder.addResultForAllRemaining(Result.TIMEOUT);
-				return true;
-			}
-			return false;
+			mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
+			return true;
 		}
 		default:
 			throw new AssertionError(result.status());
@@ -338,24 +337,23 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 	}
 
 	/**
-	 * A TA session was lost with this job, as {@code handleCrashedWorker} handles a crashed TA worker thread.
+	 * The TA session of this job is gone (R2.6): it was lost (killed by a signal, unreachable) or it crashed. The run
+	 * goes on with one TA session less; in testing mode a crash throws. This deviates on purpose from the threaded
+	 * {@code handleCrashedWorker}.
 	 *
 	 * @return true if the loop ends
 	 */
-	private boolean onSessionLost(final long jobId, final Job<L> job) {
+	private boolean onSessionGone(final long jobId, final Job<L> job, final boolean crashed) {
+		if (crashed && mPref.isMultiProcessFailOnTaCrash()) {
+			throw new IllegalStateException("The TA session of job " + jobId + " crashed (testing mode)");
+		}
 		mJobs.remove(jobId);
 		mSearch.forget(job.mRun);
-		mLostTaSessions++;
-		mStatistics.increment("lostTaSessions");
-		if (mPref.getRefinementStrategy() != RefinementStrategy.FOX) {
-			mLogger.warn("Coordinator: the TA session of job %s was lost, reporting UNKNOWN to leave the time to the "
-					+ "bit-precise analysis", jobId);
-			mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
-			return true;
-		}
-		mLogger.warn("Coordinator: the TA session of job %s was lost (%s of %s TA sessions lost)", jobId,
-				mLostTaSessions, mTaWorkers);
-		if (mLostTaSessions >= mTaWorkers) {
+		mGoneTaSessions++;
+		mStatistics.increment(crashed ? "crashedTaSessions" : "lostTaSessions");
+		mLogger.warn("Coordinator: the TA session of job %s %s (%s of %s TA sessions gone)", jobId,
+				crashed ? "crashed" : "was lost", mGoneTaSessions, mTaWorkers);
+		if (mGoneTaSessions >= mTaWorkers) {
 			mLogger.warn("Coordinator: no TA session is left, reporting UNKNOWN");
 			mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
 			return true;

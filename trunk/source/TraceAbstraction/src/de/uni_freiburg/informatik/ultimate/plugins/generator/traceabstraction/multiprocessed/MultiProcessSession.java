@@ -74,6 +74,7 @@ public final class MultiProcessSession {
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_COMPONENT,
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_EXCHANGE_ROOT,
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_SESSION_ID,
+			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_FAIL_ON_TA_CRASH,
 			TraceAbstractionPreferenceInitializer.LABEL_NUM_TA_WORKERS);
 
 	private static final String INITIAL_ABSTRACTION_NAME = "initialAbstraction";
