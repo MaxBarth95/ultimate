@@ -117,6 +117,9 @@ public final class MultiProcessSession {
 		final LetterNaming<L> letters = new LetterNaming<>(initialAbstraction.getVpAlphabet());
 		final String ats = new AtsCodec<>(services, logger, letters).printAbstraction(INITIAL_ABSTRACTION_NAME,
 				initialAbstraction, new LocationNaming(icfg));
+		if (logger.isDebugEnabled()) {
+			logger.debug("Initial abstraction, as printed for the fingerprint:%n%s", ats);
+		}
 		return FileExchange.sha256(ats.getBytes(StandardCharsets.UTF_8));
 	}
 

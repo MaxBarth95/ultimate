@@ -41,12 +41,12 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
-import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -105,7 +105,9 @@ public final class FileExchange implements IExchange {
 	private final Set<MessageType> mAccepts;
 	private final Set<MessageType> mEmits;
 	private final WatchService mWatchService;
-	private final Set<String> mConsumed = new HashSet<>();
+	// read by the thread that watches for a cancellation, see waitForStop
+	private final Set<String> mConsumed = ConcurrentHashMap.newKeySet();
+	private WatchService mStopWatchService;
 	private long mLastInSeq = -1;
 	private long mNextOutSeq = 1;
 	private boolean mReady;
@@ -185,6 +187,52 @@ public final class FileExchange implements IExchange {
 	@Override
 	public boolean isShutdownRequested() {
 		return Files.exists(mIn.resolve(SHUTDOWN));
+	}
+
+	@Override
+	public boolean waitForStop(final long job, final Duration timeout) throws InterruptedException {
+		final Instant deadline = Instant.now().plus(timeout);
+		final WatchService watchService = stopWatchService();
+		while (true) {
+			if (isShutdownRequested() || isCancelPending(job)) {
+				return true;
+			}
+			final long remaining = Duration.between(Instant.now(), deadline).toMillis();
+			if (remaining <= 0) {
+				return false;
+			}
+			final WatchKey key = watchService.poll(remaining, TimeUnit.MILLISECONDS);
+			if (key != null) {
+				key.pollEvents();
+				if (!key.reset()) {
+					throw new IllegalStateException("Cannot watch " + mIn + " any longer");
+				}
+			}
+		}
+	}
+
+	private synchronized WatchService stopWatchService() {
+		if (mStopWatchService == null) {
+			try {
+				mStopWatchService = FileSystems.getDefault().newWatchService();
+				mIn.register(mStopWatchService, StandardWatchEventKinds.ENTRY_CREATE);
+			} catch (final IOException e) {
+				throw new UncheckedIOException("Cannot watch " + mIn, e);
+			}
+		}
+		return mStopWatchService;
+	}
+
+	private boolean isCancelPending(final long job) {
+		final String jobId = Long.toString(job);
+		try (Stream<Path> files = Files.list(mIn)) {
+			return files.map(f -> f.getFileName().toString())
+					.filter(name -> !name.endsWith(TMP) && !mConsumed.contains(name)).map(MESSAGE_NAME::matcher)
+					.anyMatch(m -> m.matches() && MessageType.CANCEL.name().equals(m.group(2))
+							&& jobId.equals(m.group(3)));
+		} catch (final IOException e) {
+			throw new UncheckedIOException("Cannot list " + mIn, e);
+		}
 	}
 
 	/**
@@ -300,9 +348,12 @@ public final class FileExchange implements IExchange {
 	}
 
 	@Override
-	public void close() {
+	public synchronized void close() {
 		try {
 			mWatchService.close();
+			if (mStopWatchService != null) {
+				mStopWatchService.close();
+			}
 		} catch (final IOException e) {
 			throw new UncheckedIOException(e);
 		}

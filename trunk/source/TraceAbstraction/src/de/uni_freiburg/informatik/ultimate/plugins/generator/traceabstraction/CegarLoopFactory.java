@@ -207,6 +207,13 @@ public class CegarLoopFactory<L extends IIcfgTransition<?>> {
 	}
 
 	/**
+	 * @return the letter class of the CEGAR loops this factory builds
+	 */
+	public Class<L> getTransitionClazz() {
+		return mTransitionClazz;
+	}
+
+	/**
 	 * The initial abstraction of a sequential program and the factories it was built with.
 	 *
 	 * @param predicateFactory

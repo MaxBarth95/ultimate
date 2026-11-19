@@ -56,6 +56,7 @@ import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceP
 import de.uni_freiburg.informatik.ultimate.lib.icfg.BoogieIcfgLocation;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.IcfgPetrifier;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.IcfgUtils;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.taskidentifier.SubtaskFileIdentifier;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfg;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgForkTransitionThreadCurrent;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
@@ -79,6 +80,7 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.in
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.FileExchange;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.TaWorkerSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer.FloydHoareAutomataReuse;
@@ -237,7 +239,15 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 				final Set<IcfgLocation> errorLocs = partitionErrorLocations(icfg).get(0).getValue();
 				final var session = mCegarFactory.constructSessionAbstraction(mServices, icfg, errorLocs);
 				MultiProcessSession.announceReady(exchange, kind, mServices, mLogger, icfg, session.abstraction());
-				throw new UnsupportedOperationException("Session kind " + kind + " is not implemented yet");
+				switch (kind) {
+				case TA_WORKER:
+					new TaWorkerSession<>(mServices, mLogger, mPrefs, icfg, exchange, session.predicateFactory(),
+							session.abstraction(), mCegarFactory.getTransitionClazz(),
+							new SubtaskFileIdentifier(null, icfg.getIdentifier() + "_" + kind)).run();
+					break;
+				default:
+					throw new UnsupportedOperationException("Session kind " + kind + " is not implemented yet");
+				}
 			} catch (final RuntimeException | Error e) {
 				MultiProcessSession.reportException(exchange, kind, e);
 				throw e;

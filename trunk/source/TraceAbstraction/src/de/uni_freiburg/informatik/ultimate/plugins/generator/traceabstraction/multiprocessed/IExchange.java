@@ -25,6 +25,7 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -58,6 +59,15 @@ public interface IExchange extends AutoCloseable {
 	 * @return whether the session was asked to shut down
 	 */
 	boolean isShutdownRequested();
+
+	/**
+	 * Waits until a {@code CANCEL} for a job is waiting or the session was asked to shut down, but at most for
+	 * {@code timeout}. Consumes nothing. Another thread may call this while the session thread works on the job and
+	 * does not use the exchange.
+	 *
+	 * @return true if the job should stop
+	 */
+	boolean waitForStop(long job, Duration timeout) throws InterruptedException;
 
 	/**
 	 * Sends a message.
