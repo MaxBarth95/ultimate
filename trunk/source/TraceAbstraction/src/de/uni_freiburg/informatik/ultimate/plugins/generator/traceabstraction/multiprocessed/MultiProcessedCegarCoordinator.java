@@ -29,6 +29,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -310,10 +311,19 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 			if (!reported.equals(word)) {
 				throw new IllegalArgumentException("The SAT result of job " + jobId + " carries another word");
 			}
-			mLogger.info("Coordinator: job %s found a feasible counterexample", jobId);
-			mResultBuilder.addResultForProgramExecution(Result.UNSAFE, programExecution(word), null, null);
-			if (mViolation == null) {
-				mViolation = word;
+			final IProgramExecution<L, Term> execution = programExecution(word);
+			final List<UnprovabilityReason> unprovable = UnprovabilityReason.getUnprovabilityReasons(execution);
+			// as in the threaded loop, the result reporter turns an execution with overapproximation into an
+			// unprovable result; such a counterexample may be spurious and never makes the verdict FALSE
+			mResultBuilder.addResultForProgramExecution(Result.UNSAFE, execution, null, null);
+			if (unprovable.isEmpty()) {
+				mLogger.info("Coordinator: job %s found a feasible counterexample", jobId);
+				if (mViolation == null) {
+					mViolation = word;
+				}
+			} else {
+				mLogger.info("Coordinator: job %s found a counterexample that is feasible only with overapproximation"
+						+ " (%s)", jobId, unprovable);
 			}
 			if (mPref.stopAfterFirstViolation()) {
 				mResultBuilder.addResultForAllRemaining(Result.UNKNOWN);
@@ -493,7 +503,8 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 	 */
 	public void publishVerdict(final CegarLoopResult<L> result, final IProof proof) {
 		final VerdictValue verdict;
-		if (result.resultStream().anyMatch(r -> r == Result.UNSAFE)) {
+		if (mViolation != null) {
+			// only a counterexample without overapproximation proves the violation
 			verdict = VerdictValue.FALSE;
 		} else if (result.resultStream().allMatch(r -> r == Result.SAFE)) {
 			verdict = VerdictValue.TRUE;
@@ -510,9 +521,6 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 			mExchange.send(MessageType.PROOF_ANNOTATION, OptionalLong.empty(), OptionalLong.of(mGeneration),
 					JsonCodec.encode(new JsonCodec.ProofAnnotation(mGeneration, invariants(annotation))));
 		} else if (verdict == VerdictValue.FALSE) {
-			if (mViolation == null) {
-				throw new IllegalStateException("UNSAFE without a feasible counterexample");
-			}
 			final WordCodec.EncodedWord word = WordCodec.encode(mViolation, mLetters);
 			evidence = new JsonCodec.Evidence(word.word(), word.nesting(), null);
 		}
