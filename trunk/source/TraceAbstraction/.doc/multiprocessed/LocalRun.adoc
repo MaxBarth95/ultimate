@@ -8,9 +8,9 @@ their messages as described in link:Protocol.adoc[Protocol]. It is the reference
 == Build
 
 Build Automizer (`releaseScripts/default/makePackage.sh -o linux -p Automizer`), which gives
-`releaseScripts/default/UAutomizer-linux`. The toolchains `AutomizerCInline.xml` and
-`AutomizerCInline_WitnessPrinter.xml` come from `trunk/examples/toolchains` (they are not part of the release zip
-yet).
+`releaseScripts/default/UAutomizer-linux`. The release ships the session toolchains `AutomizerCInline.xml` and
+`AutomizerCInline_WitnessPrinter.xml` in `config/`, and `local_router.py` takes them from there; for an older release
+without them it falls back to `trunk/examples/toolchains` (option `--toolchains`).
 
 == Run
 

@@ -6,6 +6,15 @@ WITNESS (see link:Kinds.adoc[Kinds]). The processes never talk to each other. Ea
 *session directory*; a router copies the messages between them. In UltimateCloud the router is the scheduler with the
 worker service; on one machine it is `multiprocess/local_router.py` (see link:LocalRun.adoc[LocalRun]).
 
+Since Phase 3 of UltimateCloud, its worker service (`worker/.doc/` in the UltimateCloud repository) runs the sessions
+in production; `local_router.py` stays the reference router for local runs. What the worker service does that
+concerns Ultimate:
+
+* it names the files of `in/` with the scheduler's timepoint as `seq`, so `seq` has gaps (allowed, see below);
+* it also creates `input/` in the session directory, with the program file;
+* it treats an unknown setting on the command line as a failed setup: the CLI rejects an unknown `--<key>` with exit
+  code 255 ("Unrecognized option") before `ready.json`. An unknown key in the `.epf` is still ignored silently.
+
 The requirements of UltimateCloud (`plans/ultimate-requirements.md` in the UltimateCloud repository) are the source
 of truth; this page describes what the Ultimate side implements. The code is in the package
 `de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed`.
@@ -16,7 +25,7 @@ A session is the Ultimate CLI with an explicit toolchain and settings file (neve
 modes in sequence):
 
 * toolchain: `AutomizerCInline.xml` for COORDINATOR and TA_WORKER, `AutomizerCInline_WitnessPrinter.xml` for
-  WITNESS (both in `trunk/examples/toolchains`), with the witness directory set to `out/`;
+  WITNESS (both in `trunk/examples/toolchains` and in the release's `config/`), with the witness directory set to `out/`;
 * settings: the `.epf` of the mode (integer or bit-vector); every session of a run uses the same one;
 * `--traceabstraction.multi.process.component <KIND>`, `--traceabstraction.multi.process.exchange.root <dir>`,
   `--traceabstraction.multi.process.session.id <id>`;
@@ -43,6 +52,7 @@ directory, session id or time limit, a wrong logger pattern, a log file.
 | `blobs/<sha256>` | bodies larger than 1 MiB, content-addressed
 | `log/` | the router's capture of stdout and stderr; Ultimate writes nothing there
 | `data/` | the Eclipse data directory of the process
+| `input/` | the program file (created by UltimateCloud's worker service; the local router passes the original path)
 |===
 
 === Message files
