@@ -65,6 +65,9 @@ package_product() {
         "AutomizerCInline_WitnessPrinter.xml:AutomizerMemDerefMemtrack.xml"
         "LTLAutomizerC.xml:AutomizerLTL.xml"
         "BuchiAutomizerCInline.xml:AutomizerTerminationWitnessValidation.xml"
+        # the sessions of the multi-process trace abstraction (UltimateCloud): COORDINATOR and TA_WORKER, WITNESS
+        "AutomizerCInline.xml:AutomizerCInline.xml"
+        "AutomizerCInline_WitnessPrinter.xml:AutomizerCInline_WitnessPrinter.xml"
       )
       ;;
     DebugUI)
