@@ -187,9 +187,12 @@ class Router:
         self.log(text)
 
     def check_fingerprints(self):
-        fingerprints = {s.sid: s.ready['fingerprint'] for s in self.sessions() if s.read_ready()}
-        if len(set(fingerprints.values())) > 1:
-            raise RouterError(f'fingerprint mismatch: {fingerprints}')
+        """All sessions of a run must have the same program (fingerprint) and the same settings (settingsHash)."""
+        ready = {s.sid: s.ready for s in self.sessions() if s.read_ready()}
+        for key in ('fingerprint', 'settingsHash'):
+            values = {sid: r[key] for sid, r in ready.items()}
+            if len(set(values.values())) > 1:
+                raise RouterError(f'{key} mismatch: {values}')
 
     def live_tas(self):
         return [t for t in self.tas if not t.gone and t.alive()]
@@ -383,6 +386,9 @@ def parse_args(argv):
     # fault injection, for tests of the protocol
     p.add_argument('--kill-ta-after', type=float, help='kill -9 the first TA once it has a job after this many seconds')
     p.add_argument('--crash-ta-after', type=float, help='make the first TA throw once it has a job after this many seconds')
+    p.add_argument('--kill-witness-at-verdict', action='store_true', help='kill -9 the WITNESS session at the verdict')
+    p.add_argument('--set-ta1', action='append', default=[], metavar='KEY=VALUE',
+                   help='an Ultimate setting for the first TA only (must give a mismatch)')
     args = p.parse_args(argv)
     if args.settings is None:
         args.settings = default_settings(args.tool, args.architecture)
@@ -390,13 +396,19 @@ def parse_args(argv):
         config = os.path.join(args.tool, 'config')
         args.toolchains = config if os.path.exists(os.path.join(config, 'AutomizerCInline.xml')) \
             else os.path.join(here, '..', 'trunk', 'examples', 'toolchains')
-    args.overrides = []
-    for setting in args.set:
+    args.overrides = settings_options(args.set)
+    args.ta1_overrides = settings_options(args.set_ta1)
+    return args
+
+
+def settings_options(settings):
+    options = []
+    for setting in settings:
         key, sep, value = setting.partition('=')
         if not sep:
-            raise SystemExit(f'--set needs KEY=VALUE, not {setting}')
-        args.overrides += ['--' + key, value]
-    return args
+            raise SystemExit(f'a setting needs KEY=VALUE, not {setting}')
+        options += ['--' + key, value]
+    return options
 
 
 def run(args):
@@ -412,7 +424,7 @@ def run(args):
     coordinator = make(COORDINATOR, 'coordinator',
                        ['--traceabstraction.number.of.ta.workers.in.parallel.trace.abstraction', str(args.ta)]
                        + (['--traceabstraction.multi.process.fail.on.ta.crash', 'true'] if args.fail_on_ta_crash else []))
-    tas = [make(TA_WORKER, f'ta{i}', []) for i in range(1, args.ta + 1)]
+    tas = [make(TA_WORKER, f'ta{i}', args.ta1_overrides if i == 1 else []) for i in range(1, args.ta + 1)]
     witness = None if args.no_witness else make(WITNESS, 'witness', [])
     router = Router(coordinator, tas, witness, args.fail_on_ta_crash)
     injected = False
@@ -442,6 +454,9 @@ def run(args):
                 session.shutdown()
 
     status, level, degraded_by_witness = WITNESS_NOT_REQUESTED, None, False
+    if witness is not None and args.kill_witness_at_verdict and witness.alive():
+        witness.process.kill()
+        router.event('injected: kill -9 witness')
     if witness is not None:
         if router.verdict in ('TRUE', 'FALSE'):
             try:

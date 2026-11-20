@@ -35,7 +35,8 @@ class RouterTest(unittest.TestCase):
 
     def session(self, kind, sid, fingerprint='f'):
         session = lr.Session(kind, sid, os.path.join(self.tmp.name, sid), FakeProcess())
-        self.write_out(session, 'ready.json', {'protocol': 'EXCHANGE_V1', 'kind': kind, 'fingerprint': fingerprint})
+        self.write_out(session, 'ready.json', {'protocol': 'EXCHANGE_V1', 'kind': kind, 'fingerprint': fingerprint,
+                                               'settingsHash': 'h'})
         return session
 
     def write_out(self, session, name, body):
@@ -202,6 +203,18 @@ class RouterTest(unittest.TestCase):
 
     def test_fingerprint_mismatch_is_an_error(self):
         other = self.session(lr.TA_WORKER, 'ta3', fingerprint='g')
+        router = lr.Router(self.coord, [self.ta1, other], self.witness, log=lambda _: None)
+        with self.assertRaises(lr.RouterError):
+            router.step()
+
+    def test_settings_hash_mismatch_is_an_error(self):
+        other = lr.Session(lr.TA_WORKER, 'ta4', os.path.join(self.tmp.name, 'ta4'), FakeProcess())
+        self.write_out(other, 'ready.json', {'protocol': 'EXCHANGE_V1', 'kind': lr.TA_WORKER, 'fingerprint': 'f',
+                                             'settingsHash': 'other'})
+        for session in (self.coord, self.ta1, self.witness):
+            ready = json.load(open(session.path('out', 'ready.json')))
+            ready['settingsHash'] = 'h'
+            self.write_out(session, 'ready.json', ready)
         router = lr.Router(self.coord, [self.ta1, other], self.witness, log=lambda _: None)
         with self.assertRaises(lr.RouterError):
             router.step()
