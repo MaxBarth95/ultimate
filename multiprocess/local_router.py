@@ -329,7 +329,7 @@ class UltimateProcess:
                    '--core.toolchain.timeout.in.seconds', str(args.timeout),
                    '--traceabstraction.multi.process.component', session.kind,
                    '--traceabstraction.multi.process.exchange.root', session.dir,
-                   '--traceabstraction.multi.process.session.id', session.sid] + extra
+                   '--traceabstraction.multi.process.session.id', session.sid] + args.overrides + extra
         if session.kind == WITNESS:
             command += ['--witnessprinter.witness.directory', session.path('out'),
                         '--witnessprinter.witness.filename', 'witness',
@@ -372,7 +372,10 @@ def parse_args(argv):
     p.add_argument('--witness-timeout', type=int, default=60, help='seconds to wait for the witness after a verdict')
     p.add_argument('--architecture', default='32bit', choices=['32bit', '64bit'])
     p.add_argument('--settings', help='the .epf (default: the SV-COMP Reach Automizer default of the architecture)')
-    p.add_argument('--toolchains', default=os.path.join(here, '..', 'trunk', 'examples', 'toolchains'))
+    p.add_argument('--toolchains', help='the directory of AutomizerCInline*.xml (default: the tool\'s config/ if it '
+                   'has them, else trunk/examples/toolchains)')
+    p.add_argument('--set', action='append', default=[], metavar='KEY=VALUE',
+                   help='an Ultimate setting for every session, e.g. traceabstraction.trace.refinement.strategy=CAMEL')
     p.add_argument('--heap', default='4G', help='-Xmx of every session')
     p.add_argument('--no-witness', action='store_true', help='run without a WITNESS session')
     p.add_argument('--fail-on-ta-crash', action='store_true', help='testing mode: a crashed TA ends the run with ERROR')
@@ -383,6 +386,16 @@ def parse_args(argv):
     args = p.parse_args(argv)
     if args.settings is None:
         args.settings = default_settings(args.tool, args.architecture)
+    if args.toolchains is None:
+        config = os.path.join(args.tool, 'config')
+        args.toolchains = config if os.path.exists(os.path.join(config, 'AutomizerCInline.xml')) \
+            else os.path.join(here, '..', 'trunk', 'examples', 'toolchains')
+    args.overrides = []
+    for setting in args.set:
+        key, sep, value = setting.partition('=')
+        if not sep:
+            raise SystemExit(f'--set needs KEY=VALUE, not {setting}')
+        args.overrides += ['--' + key, value]
     return args
 
 
