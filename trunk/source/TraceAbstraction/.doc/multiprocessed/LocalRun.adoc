@@ -50,3 +50,13 @@ python3 -m unittest multiprocess/test_local_router.py
 The unit tests drive the routing with fake sessions: the idle rule, cancellation, sequence numbers, lost and crashed
 TA sessions (with and without a job, testing mode), the synthetic results when no TA is left, atomic and idempotent
 blob delivery, fingerprint mismatch and the witness status.
+
+[source,sh]
+----
+python3 multiprocess/e2e_test.py --tool releaseScripts/default/UAutomizer-linux
+----
+
+The end-to-end tests run whole COORDINATOR + TA_WORKER + WITNESS runs on the programs in `multiprocess/programs/`
+(about 90 s in all) and check verdict, health and witness status: a safe and an unsafe loop, a float program whose
+counterexample is feasible only with overapproximation (UNKNOWN, never FALSE), a TA trace check that answers UNKNOWN
+(Fermat with SMTInterpol), a killed WITNESS session and a TA session with other settings.
