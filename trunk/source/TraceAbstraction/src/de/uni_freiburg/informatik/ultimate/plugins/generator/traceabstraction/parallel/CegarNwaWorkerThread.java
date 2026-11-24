@@ -194,7 +194,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		mInvariantSink = invariantSink;
 
 		final Thread.UncaughtExceptionHandler exhandler = (th, ex) -> {
-			mThreadResult = new WorkerThreadResult<>(WorkerType.TA, null, null, null, mCounterexample, null, true);
+			mThreadResult = new WorkerThreadResult<>(WorkerType.TA, null, null, mCfgSmtToolkit.getManagedScript(),
+					mTask == null ? null : mTask.getCounterexample(), null, true);
 			try {
 				mBlockingQueueForResults.put(mThreadResult);
 				throw new AssertionError("Worker Thread failed due to " + ex);
@@ -263,7 +264,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 				mLogger.error("\tat " + element);
 			}
 			try {
-				mBlockingQueueForResults.put(WorkerThreadResult.crashed(WorkerType.TA, t));
+				mBlockingQueueForResults.put(WorkerThreadResult.crashed(WorkerType.TA, t,
+						mCfgSmtToolkit.getManagedScript(), mTask == null ? null : mTask.getCounterexample()));
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}
@@ -298,7 +300,8 @@ public class CegarNwaWorkerThread<L extends IIcfgTransition<?>, A extends IAutom
 		mLogger.info("WorkerThread: retired, %s", mRetirementTimer.getReason());
 		try {
 			mBlockingQueueForResults
-					.put(WorkerThreadResult.retired(WorkerType.TA, mTask == null ? null : mTask.getCounterexample()));
+					.put(WorkerThreadResult.retired(WorkerType.TA, mTask == null ? null : mTask.getCounterexample(),
+							mCfgSmtToolkit.getManagedScript()));
 		} catch (final InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}

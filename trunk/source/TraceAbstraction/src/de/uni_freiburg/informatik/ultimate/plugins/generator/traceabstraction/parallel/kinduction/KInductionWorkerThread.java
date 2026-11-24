@@ -168,7 +168,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 						null, null, null, false));
 				break;
 			case NO_VERDICT:
-				mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.KINDUCTION));
+				mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.KINDUCTION, mCfgSmtToolkit.getManagedScript()));
 				break;
 			default:
 				throw new AssertionError("unknown k-induction verdict");
@@ -190,7 +190,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 					}
 				}
 				try {
-					mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.KINDUCTION));
+					mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.KINDUCTION, mCfgSmtToolkit.getManagedScript()));
 				} catch (final InterruptedException e) {
 					Thread.currentThread().interrupt();
 				}
@@ -201,7 +201,7 @@ public class KInductionWorkerThread<L extends IIcfgTransition<?>, A extends IAut
 				mLogger.error("\tat " + element);
 			}
 			try {
-				mBlockingQueueForResults.put(WorkerThreadResult.crashed(WorkerType.KINDUCTION, t));
+				mBlockingQueueForResults.put(WorkerThreadResult.crashed(WorkerType.KINDUCTION, t, mCfgSmtToolkit.getManagedScript(), null));
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}

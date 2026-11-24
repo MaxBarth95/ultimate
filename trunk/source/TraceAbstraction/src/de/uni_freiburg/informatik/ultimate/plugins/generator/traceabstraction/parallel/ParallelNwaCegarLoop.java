@@ -141,6 +141,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	// k-induction worker and someone to feed it; runs on mInvariantExec, outside the worker pool, since it never
 	// decides the program.
 	private InvariantSupplier<L, A> mInvariantSupplier;
+	// The script of the invariant supplier, closed when the supplier stops, see releaseForKInduction()
+	private ManagedScript mInvariantSupplierScript;
 	private ExecutorService mInvariantExec;
 	// Runs the value analysis worker, outside the worker pool and the thread limit: it can only refute the program
 	// (or end with UNKNOWN), so it must not take a slot from the workers that decide it. Null unless enabled.
@@ -396,6 +398,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// of the workers that decide it: they go on.
 			if (workerResult.getWorkerType() == WorkerType.VALUE_ANALYSIS && workerResult.noVerdict()) {
 				mLogger.info("Main: %s ended with UNKNOWN, the other workers go on", workerResult.getWorkerType());
+				closeSolverOfStoppedWorker(workerResult);
 				workerResult = mWorkerResultQueue.poll();
 				continue;
 			}
@@ -413,6 +416,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// nothing to refine with, so the only thing to do is retire it and let the remaining workers finish.
 			// If it was the last one, nobody is left to decide and the honest answer is UNKNOWN - not a crash.
 			if (workerResult.noVerdict()) {
+				closeSolverOfStoppedWorker(workerResult);
 				mRetiredWorkers += 1;
 				mLogger.warn("Main: %s finished without a verdict (%d of %d worker(s) retired)",
 						workerResult.getWorkerType(), mRetiredWorkers, mThreadLimit);
@@ -590,6 +594,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private boolean handleCrashedWorker(final WorkerThreadResult<L, A> workerResult) {
 		final WorkerType workerType = workerResult.getWorkerType();
 		final Throwable cause = workerResult.getCrashCause();
+		closeSolverOfStoppedWorker(workerResult);
 		switch (workerType) {
 		case INVARIANT:
 			mLogger.warn("Main: the invariant supplier crashed (%s), k-induction goes on with the invariants it has",
@@ -599,8 +604,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			mLogger.warn("Main: %s crashed (%s), the other workers go on", workerType, cause);
 			return false;
 		case TA:
-			// The counterexample it was checking never comes back.
-			mRunningThreads -= 1;
+			// The counterexample it was checking, if any, never comes back.
+			takeBackCounterexample(workerResult.getCounterexample());
 			mGoneTaWorkers += 1;
 			if (mPref.getRefinementStrategy() != RefinementStrategy.FOX) {
 				mLogger.warn("Main: %s crashed (%s), reporting UNKNOWN to leave the time to the bit-precise analysis",
@@ -634,11 +639,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		if (workerResult.getWorkerType() != WorkerType.TA) {
 			throw new AssertionError("Only TA workers report their retirement, not " + workerResult.getWorkerType());
 		}
+		closeSolverOfStoppedWorker(workerResult);
 		final IRun<L, ?> counterexample = workerResult.getCounterexample();
-		if (counterexample != null) {
-			mRunningThreads -= 1;
-			mActiveCounterexamples.remove(counterexample.getWord().asList().hashCode());
-		}
+		takeBackCounterexample(counterexample);
 		mGoneTaWorkers += 1;
 		mRetiredWorkers += 1;
 		mLogger.warn("Main: a TA worker retired %s (%d of %d TA worker(s) gone, %d of %d worker(s) retired)",
@@ -666,6 +669,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		if (mInvariantSupplierTimer != null) {
 			mInvariantSupplierTimer.retire("no TA worker is left to feed it");
 			mInvariantExec.shutdownNow();
+			closeSolverOfInvariantSupplier();
 		}
 		final int abstractionSize = mAbstraction.size();
 		mAbstractionReleased = true;
@@ -678,6 +682,17 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 				"Main: no TA worker is left, released the abstraction (%d states) and stopped the invariant "
 						+ "supplier for k-induction; the used heap went from %d MB to %d MB live",
 				abstractionSize, before >> 20, (runtime.totalMemory() - runtime.freeMemory()) >> 20);
+	}
+
+	/**
+	 * Closes the solver of the retired invariant supplier. k-induction copies the invariants it already got from the
+	 * supplier's script without its solver. The main thread does not wait for the supplier to stop, so that a verdict
+	 * of k-induction is not delayed: a query still running fails, which the retired supplier takes as its stop, as when
+	 * the loop shuts down.
+	 */
+	private void closeSolverOfInvariantSupplier() {
+		mInvariantSupplierScript.getScript().exit();
+		mLogger.info("Main: closed the solver of the retired invariant supplier");
 	}
 
 	private boolean reportUnknownAndTerminate() {
@@ -698,11 +713,46 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	/**
-	 * @return how many counterexamples may be checked or wait for a TA worker at once; a TA worker that is gone takes
-	 *         its share with it
+	 * @return how many counterexamples may be out at once: one per TA worker that is not gone, so that a counterexample
+	 *         is only searched for an idle TA worker, which takes it from the queue right away. k-induction takes no
+	 *         counterexamples and has no share.
 	 */
 	private int dispatchLimit() {
-		return mThreadLimit - mGoneTaWorkers;
+		return mNumTaWorkers - mGoneTaWorkers;
+	}
+
+	/**
+	 * A TA worker stopped without a result for the counterexample it was checking, or, if it stopped while it waited,
+	 * maybe left one in the queue that no worker takes now. That counterexample is no longer out: it goes back to the
+	 * search.
+	 *
+	 * @param counterexample
+	 *            the counterexample the worker was checking, or null if it waited for one
+	 */
+	private void takeBackCounterexample(final IRun<L, ?> counterexample) {
+		IRun<L, ?> takenBack = counterexample;
+		if (takenBack == null) {
+			final WorkerThreadTask<L> leftInQueue = mWorkerTaskQueue.poll();
+			takenBack = leftInQueue == null ? null : leftInQueue.getCounterexample();
+		}
+		if (takenBack == null) {
+			return;
+		}
+		mRunningThreads -= 1;
+		mActiveCounterexamples.remove(takenBack.getWord().asList().hashCode());
+	}
+
+	/**
+	 * Closes the solver of a worker whose result is the last it sends: it no longer uses its script. The terms the main
+	 * thread still transfers from that script only need its symbol table, not the solver.
+	 */
+	private void closeSolverOfStoppedWorker(final WorkerThreadResult<L, A> workerResult) {
+		final ManagedScript workerScript = workerResult.getWorkerMgdScript();
+		if (workerScript == null) {
+			throw new AssertionError("The last result of a " + workerResult.getWorkerType() + " worker has no script");
+		}
+		workerScript.getScript().exit();
+		mLogger.info("Main: closed the solver of the stopped %s worker", workerResult.getWorkerType());
 	}
 
 	/**
@@ -800,6 +850,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 						freshVarPrefix(WorkerType.INVARIANT, id));
 				final RetirementTimer supplierTimer = retirementTimer(iterationServices);
 				mInvariantSupplierTimer = supplierTimer;
+				mInvariantSupplierScript = invariantTransfer.getWorkerCfgSmtToolKit().getManagedScript();
 				mInvariantSupplier = new InvariantSupplier<>(mLogger,
 						iterationServices.getProgressMonitorService().registerChildTimer(iterationServices,
 								supplierTimer),
@@ -958,7 +1009,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		if (mRunningThreads > maxActiveThreads) {
 			maxActiveThreads = mRunningThreads;
 		}
-		if (mRunningThreads == mThreadLimit) {
+		if (mRunningThreads == dispatchLimit()) {
 			mIterationsWithMaxThreads += 1;
 		}
 		if (mRunningThreads == 1) {

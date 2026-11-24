@@ -95,10 +95,14 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	/**
 	 * A worker that ran to completion but neither proved nor refuted the program, for example because the solver
 	 * answered {@code unknown}. It carries nothing to refine with, so the main thread can only retire the worker.
+	 *
+	 * @param workerScript
+	 *            the script of the worker, which it no longer uses; the main thread closes its solver
 	 */
 	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
-			noVerdict(final WorkerType workerType) {
-		return new WorkerThreadResult<>(workerType, null, null, null, null, null, false, true);
+			noVerdict(final WorkerType workerType, final ManagedScript workerScript) {
+		return new WorkerThreadResult<>(workerType, null, null, Objects.requireNonNull(workerScript), null, null, false,
+				true);
 	}
 
 	/**
@@ -107,11 +111,17 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	 *
 	 * @param cause
 	 *            what the worker threw; the worker has already logged its stack trace
+	 * @param workerScript
+	 *            the script of the worker, which it no longer uses; the main thread closes its solver
+	 * @param counterexample
+	 *            the counterexample of the main thread that a TA worker was checking, or null if it waited for one or
+	 *            is no TA worker
 	 */
 	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
-			crashed(final WorkerType workerType, final Throwable cause) {
-		final WorkerThreadResult<L, A> result =
-				new WorkerThreadResult<>(workerType, null, null, null, null, null, true, false);
+			crashed(final WorkerType workerType, final Throwable cause, final ManagedScript workerScript,
+					final IRun<L, ?> counterexample) {
+		final WorkerThreadResult<L, A> result = new WorkerThreadResult<>(workerType, null, null,
+				Objects.requireNonNull(workerScript), counterexample, null, true, false);
 		result.mCrashCause = Objects.requireNonNull(cause);
 		return result;
 	}
@@ -141,11 +151,13 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	 *
 	 * @param counterexample
 	 *            the counterexample of the main thread that the worker was checking, or null if it waited for one
+	 * @param workerScript
+	 *            the script of the worker, which it no longer uses; the main thread closes its solver
 	 */
 	public static <L extends IIcfgTransition<?>, A extends IAutomaton<L, IPredicate>> WorkerThreadResult<L, A>
-			retired(final WorkerType workerType, final IRun<L, ?> counterexample) {
-		final WorkerThreadResult<L, A> result =
-				new WorkerThreadResult<>(workerType, null, null, null, counterexample, null, false, false);
+			retired(final WorkerType workerType, final IRun<L, ?> counterexample, final ManagedScript workerScript) {
+		final WorkerThreadResult<L, A> result = new WorkerThreadResult<>(workerType, null, null,
+				Objects.requireNonNull(workerScript), counterexample, null, false, false);
 		result.mRetired = true;
 		return result;
 	}
@@ -194,21 +206,22 @@ public final class WorkerThreadResult<L extends IIcfgTransition<?>, A extends IA
 	}
 
 	/**
-	 * @return what the worker of a result made by {@link #crashed(WorkerType, Throwable)} threw, null otherwise
+	 * @return what the worker of a result made by {@link #crashed(WorkerType, Throwable, ManagedScript, IRun)} threw,
+	 *         null otherwise
 	 */
 	public Throwable getCrashCause() {
 		return mCrashCause;
 	}
 
 	/**
-	 * @return true if the worker finished without a verdict, see {@link #noVerdict(WorkerType)}.
+	 * @return true if the worker finished without a verdict, see {@link #noVerdict(WorkerType, ManagedScript)}.
 	 */
 	public boolean noVerdict() {
 		return mNoVerdict;
 	}
 
 	/**
-	 * @return true if the worker was retired, see {@link #retired(WorkerType, IRun)}
+	 * @return true if the worker was retired, see {@link #retired(WorkerType, IRun, ManagedScript)}
 	 */
 	public boolean workerRetired() {
 		return mRetired;

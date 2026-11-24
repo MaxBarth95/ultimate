@@ -320,7 +320,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 				mLogger.error("\tat " + element);
 			}
 			try {
-				mResultQueue.put(WorkerThreadResult.crashed(WorkerType.INVARIANT, t));
+				mResultQueue.put(WorkerThreadResult.crashed(WorkerType.INVARIANT, t, mScript, null));
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}

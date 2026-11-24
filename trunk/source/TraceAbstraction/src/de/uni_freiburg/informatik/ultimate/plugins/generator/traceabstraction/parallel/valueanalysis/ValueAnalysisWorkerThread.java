@@ -211,7 +211,7 @@ public class ValueAnalysisWorkerThread<L extends IIcfgTransition<?>, A extends I
 	private void finishUnknown(final String reason) {
 		mLogger.info("Value analysis: %s; result UNKNOWN, the other workers go on", reason);
 		try {
-			mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.VALUE_ANALYSIS));
+			mBlockingQueueForResults.put(WorkerThreadResult.noVerdict(WorkerType.VALUE_ANALYSIS, mCfgSmtToolkit.getManagedScript()));
 		} catch (final InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}
