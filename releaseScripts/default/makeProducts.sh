@@ -68,6 +68,7 @@ package_product() {
         # the sessions of the multi-process trace abstraction (UltimateCloud): COORDINATOR and TA_WORKER, WITNESS
         "AutomizerCInline.xml:AutomizerCInline.xml"
         "AutomizerCInline_WitnessPrinter.xml:AutomizerCInline_WitnessPrinter.xml"
+        "AutomizerPackage.xml:AutomizerPackage.xml"
       )
       ;;
     DebugUI)

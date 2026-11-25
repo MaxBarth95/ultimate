@@ -204,6 +204,10 @@
          version="0.0.0"/>
 
    <plugin
+         id="de.uni_freiburg.informatik.ultimate.source.programpackage"
+         version="0.0.0"/>
+
+   <plugin
          id="de.uni_freiburg.informatik.ultimate.plugins.chctoboogie"
          version="0.0.0"/>
 

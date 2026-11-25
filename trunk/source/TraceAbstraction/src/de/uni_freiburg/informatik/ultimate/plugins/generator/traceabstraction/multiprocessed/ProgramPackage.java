@@ -33,17 +33,21 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions
 
 /**
  * The program package (format PACKAGE_JSON_V1, message {@code PROGRAM_PACKAGE}): the ICFG that TraceAbstraction
- * receives, after block encoding, written by the FRONTEND session ({@link ProgramPackageWriter}). Every list is in a
- * deterministic order, so that equal programs give equal bytes.
+ * receives (the IcfgBuilder's output, with its large block encoding), written by the FRONTEND session
+ * ({@link ProgramPackageWriter}). Every list is in a deterministic order, so that equal programs give equal bytes.
  *
  * Variables are referred to by the name of their {@link de.uni_freiburg.informatik.ultimate.logic.TermVariable}, which
  * is unique among the program variables. Formulas and declarations are SMT-LIB text.
  *
+ * @param identifier
+ *            the identifier of the ICFG
  * @param logic
  *            the SMT logic of the script that built the ICFG
  * @param declarations
- *            the {@code declare-sort}, {@code define-sort}, {@code declare-fun} and {@code define-fun} commands the
- *            ICFG needs, in declaration order (the order in which they replay)
+ *            the {@code declare-sort}, {@code declare-fun} and {@code define-fun} commands the ICFG needs, in
+ *            declaration order (the order in which they replay)
+ * @param functions
+ *            the declared or defined SMT functions that are program functions (e.g. Boogie functions), ordered
  * @param axioms
  *            the closed formula of the axioms
  * @param globals
@@ -57,7 +61,8 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions
  * @param edges
  *            ordered by id
  */
-public record ProgramPackage(String logic, List<String> declarations, String axioms, List<GlobalVariable> globals,
+public record ProgramPackage(String identifier, String logic, List<String> declarations, List<String> functions,
+		String axioms, List<GlobalVariable> globals,
 		List<Constant> constants, List<Procedure> procedures, List<Location> locations, List<Edge> edges) {
 
 	/**
@@ -147,10 +152,13 @@ public record ProgramPackage(String logic, List<String> declarations, String axi
 	 *            {@code transFormula}
 	 * @param call
 	 *            for a return, the id of its call
+	 * @param overapproximations
+	 *            the reasons why the edge overapproximates the program ({@code Overapprox} annotation), ordered; a
+	 *            counterexample through such an edge does not prove a violation
 	 */
 	public record Edge(int id, EdgeKind kind, String source, String target, TransitionFormula transFormula,
-			TransitionFormula withBranchEncoders, Integer call) {
-		static final Set<String> OPTIONAL = Set.of("withBranchEncoders", "call");
+			TransitionFormula withBranchEncoders, Integer call, List<String> overapproximations) {
+		static final Set<String> OPTIONAL = Set.of("withBranchEncoders", "call", "overapproximations");
 	}
 
 	/**

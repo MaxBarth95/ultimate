@@ -32,6 +32,8 @@ import de.uni_freiburg.informatik.ultimate.automata.AutomataLibraryServices;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.NestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.automata.nestedword.VpAlphabet;
 import de.uni_freiburg.informatik.ultimate.automata.statefactory.IEmptyStackStateFactory;
+import de.uni_freiburg.informatik.ultimate.core.lib.models.annotation.DefaultLocation;
+import de.uni_freiburg.informatik.ultimate.core.lib.models.annotation.Overapprox;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger.LogLevel;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
@@ -138,6 +140,8 @@ final class TestProgram {
 		mReturn = edgeFactory.createReturnTransition(mFExit, mL2, mCall, null, skip, skip);
 		connect(mReturn);
 		mAssume = connect(edgeFactory.createInternalTransition(mL2, mErr, null, assume));
+		// as the C frontend marks an edge it overapproximates (e.g. float operations in integer mode)
+		new Overapprox("float in integer mode", new DefaultLocation()).annotate(mAssume);
 		mAlphabet = new VpAlphabet<>(Set.of(mInc, mSkip, mAssume), Set.of(mCall), Set.of(mReturn));
 		mEmptyStack = mPredicateFactory.newEmptyStackPredicate();
 	}

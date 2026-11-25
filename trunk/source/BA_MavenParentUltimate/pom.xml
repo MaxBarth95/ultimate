@@ -330,6 +330,7 @@
 		<module>../Sifa</module>
 		<module>../SMTInterpol</module>
 		<module>../SmtParser</module>
+		<module>../ProgramPackageReader</module>
 		<module>../SMTSolverBridge</module>
 		<module>../SpaceExParser</module>
 		<module>../SyntaxChecker</module>

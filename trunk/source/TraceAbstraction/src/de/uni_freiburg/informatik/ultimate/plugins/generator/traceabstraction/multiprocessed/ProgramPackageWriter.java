@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -38,6 +39,7 @@ import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
+import de.uni_freiburg.informatik.ultimate.core.lib.models.annotation.Overapprox;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.CfgSmtToolkit;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.IIcfgSymbolTable;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IActionWithBranchEncoders;
@@ -50,6 +52,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.I
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.ILocalProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramConst;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramFunction;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramNonOldVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramOldVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
@@ -96,6 +99,7 @@ public final class ProgramPackageWriter {
 	private final LocationNaming mLocations;
 	/** Names of the non-theory functions and sorts the package uses. */
 	private final Set<String> mUsedFunctions = new HashSet<>();
+	private final Map<String, FunctionSymbol> mFunctionSymbols = new HashMap<>();
 	private final Set<String> mUsedSorts = new HashSet<>();
 	private final Set<Term> mVisited = new HashSet<>();
 
@@ -154,8 +158,24 @@ public final class ProgramPackageWriter {
 		}
 		final Term axioms = mToolkit.getSmtFunctionsAndAxioms().getAxioms().getClosedFormula();
 		collectSymbols(axioms);
-		return new ProgramPackage(logic(), declarations(), axioms.toString(), globals, constants, procedures,
-				locations, packedEdges);
+		final List<String> declarations = declarations();
+		return new ProgramPackage(mIcfg.getIdentifier(), logic(), declarations, programFunctions(symbols), axioms.toString(),
+				globals, constants, procedures, locations, packedEdges);
+	}
+
+	/**
+	 * The used functions that the symbol table knows as program functions (not constants).
+	 */
+	private List<String> programFunctions(final IIcfgSymbolTable symbols) {
+		final List<String> result = new ArrayList<>();
+		for (final Map.Entry<String, FunctionSymbol> entry : mFunctionSymbols.entrySet()) {
+			final IProgramFunction fun = symbols.getProgramFun(entry.getValue());
+			if (fun != null && !(fun instanceof IProgramConst)) {
+				result.add(entry.getKey());
+			}
+		}
+		result.sort(null);
+		return result;
 	}
 
 	private String logic() {
@@ -219,18 +239,30 @@ public final class ProgramPackageWriter {
 		return params.stream().map(p -> p.getTermVariable().getName()).toList();
 	}
 
+	private static List<String> overapproximations(final IcfgEdge edge) {
+		final Overapprox overapprox = Overapprox.getAnnotation(edge);
+		if (overapprox == null || overapprox.getOverapproximatedLocations().isEmpty()) {
+			return null;
+		}
+		final List<String> reasons = new ArrayList<>(overapprox.getOverapproximatedLocations().keySet());
+		reasons.sort(null);
+		return reasons;
+	}
+
 	private Edge edge(final IcfgEdge edge) {
 		final int id = LetterNaming.idOf(edge);
+		final List<String> overapproximations = overapproximations(edge);
 		final String source = mLocations.name(edge.getSource());
 		final String target = mLocations.name(edge.getTarget());
 		if (edge instanceof IIcfgCallTransition<?>) {
 			return new Edge(id, EdgeKind.CALL, source, target,
-					transitionFormula(((IIcfgCallTransition<?>) edge).getLocalVarsAssignment()), null, null);
+					transitionFormula(((IIcfgCallTransition<?>) edge).getLocalVarsAssignment()), null, null,
+					overapproximations);
 		}
 		if (edge instanceof IIcfgReturnTransition<?, ?>) {
 			final IIcfgReturnTransition<?, ?> ret = (IIcfgReturnTransition<?, ?>) edge;
 			return new Edge(id, EdgeKind.RETURN, source, target, transitionFormula(ret.getAssignmentOfReturn()),
-					null, LetterNaming.idOf(ret.getCorrespondingCall()));
+					null, LetterNaming.idOf(ret.getCorrespondingCall()), overapproximations);
 		}
 		if (edge instanceof IIcfgInternalTransition<?>) {
 			final TransitionFormula tf = transitionFormula(edge.getTransformula());
@@ -242,7 +274,7 @@ public final class ProgramPackageWriter {
 					withBranchEncoders = encoded;
 				}
 			}
-			return new Edge(id, EdgeKind.INTERNAL, source, target, tf, withBranchEncoders, null);
+			return new Edge(id, EdgeKind.INTERNAL, source, target, tf, withBranchEncoders, null, overapproximations);
 		}
 		throw new UnsupportedOperationException(
 				"Edges of type " + edge.getClass().getSimpleName() + " are not supported: " + edge);
@@ -294,6 +326,7 @@ public final class ProgramPackageWriter {
 				final FunctionSymbol fun = ((ApplicationTerm) term).getFunction();
 				if (!fun.isIntern()) {
 					mUsedFunctions.add(fun.getName());
+					mFunctionSymbols.put(fun.getName(), fun);
 				}
 				for (final Term param : ((ApplicationTerm) term).getParameters()) {
 					todo.push(param);
@@ -386,17 +419,11 @@ public final class ProgramPackageWriter {
 		final StringBuilder sb = new StringBuilder();
 		if (declaration instanceof DeclarableSortSymbol) {
 			final DeclarableSortSymbol sort = (DeclarableSortSymbol) declaration;
-			if (sort.getDefinition() == null) {
-				sb.append("(declare-sort ").append(PrintTerm.quoteIdentifier(sort.getName())).append(' ')
-						.append(sort.getArity()).append(')');
-			} else {
-				sb.append("(define-sort ").append(PrintTerm.quoteIdentifier(sort.getName())).append(" (");
-				final Sort[] params = sort.getParams() == null ? new Sort[0] : sort.getParams();
-				for (int i = 0; i < params.length; i++) {
-					sb.append(i == 0 ? "" : " ").append(params[i]);
-				}
-				sb.append(") ").append(sort.getDefinition()).append(')');
+			if (sort.getDefinition() != null || sort.getParams() != null) {
+				throw new UnsupportedOperationException("define-sort is not supported in a program package: " + sort);
 			}
+			sb.append("(declare-sort ").append(PrintTerm.quoteIdentifier(sort.getName())).append(' ')
+					.append(sort.getArity()).append(')');
 			return sb.toString();
 		}
 		if (!(declaration instanceof DeclarableFunctionSymbol)) {

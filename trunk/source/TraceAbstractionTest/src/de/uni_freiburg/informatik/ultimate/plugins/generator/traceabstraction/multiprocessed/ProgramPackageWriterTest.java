@@ -100,6 +100,8 @@ public class ProgramPackageWriterTest {
 		assertNull(assume.call());
 		assertTrue(assume.transFormula().formula(), assume.transFormula().formula().contains("1"));
 		assertEquals(1, assume.transFormula().inVars().size());
+		assertEquals(List.of("float in integer mode"), assume.overapproximations());
+		assertNull(call.overapproximations());
 	}
 
 	private static Edge edge(final ProgramPackage pkg, final int id) {

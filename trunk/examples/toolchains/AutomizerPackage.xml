@@ -1,0 +1,9 @@
+<rundefinition>
+	<name>Ultimate Toolchain</name>
+	<toolchain>
+
+	<!-- the input is a program package (PACKAGE_JSON_V1), read by the source plug-in de.uni_freiburg.informatik.ultimate.source.programpackage -->
+	<plugin id="de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction"/>
+
+	</toolchain>
+</rundefinition>

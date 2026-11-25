@@ -59,7 +59,8 @@ exit 0 PRESENT, exit 1 MISSING; UNKNOWN not applicable.
 == FRONTEND (`TraceAbstractionStarter.runSession`, `ProgramPackageWriter`)
 
 Runs the C toolchain of the other kinds (`AutomizerCInline.xml`) and writes the program package: the ICFG that
-TraceAbstraction receives, after block encoding (see link:Formats.adoc[Formats], PACKAGE_JSON_V1). It serializes first,
+TraceAbstraction receives, i.e. the IcfgBuilder's output with its large block encoding (see link:Formats.adoc[Formats],
+PACKAGE_JSON_V1). It serializes first,
 before any other work on the ICFG or its script, then writes `ready.json`, sends `PROGRAM_PACKAGE` (usually a blob)
 and `statistics.json` (end `DONE`; counters `packageBytes`, `serializeTimeMs`, `locations`, `edges`) and exits with 0.
 It accepts no message.
