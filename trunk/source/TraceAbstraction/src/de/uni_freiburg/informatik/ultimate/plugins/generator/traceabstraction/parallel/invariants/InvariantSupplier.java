@@ -274,6 +274,16 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 		return subscription;
 	}
 
+	/**
+	 * Stops the supplier from the outside: the sink drops every message from now on, and the inbox is emptied, so that
+	 * it holds no terms of the producers any more. The thread of {@link #run()} stops at its next check; the caller
+	 * also retires its timer and interrupts it.
+	 */
+	public void stop() {
+		mStopped = true;
+		mInbox.clear();
+	}
+
 	@Override
 	public void run() {
 		Thread.currentThread().setName("Invariant Supplier Thread");
@@ -294,7 +304,7 @@ public final class InvariantSupplier<L extends IIcfgTransition<?>, A extends IAu
 				}
 				mInbox.drainTo(batch);
 				if (!mServices.getProgressMonitorService().continueProcessing()) {
-					mLogger.info("InvariantSupplier: stopping, the time is up or no TA worker is left");
+					mLogger.info("InvariantSupplier: stopping, the time is up or it is no longer needed");
 					return;
 				}
 				if (!batch.isEmpty()) {

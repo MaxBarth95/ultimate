@@ -130,18 +130,23 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private int mRetiredWorkers = 0;
 	// TA workers that crashed or retired. They take no more counterexamples.
 	private int mGoneTaWorkers = 0;
+	// k-induction workers that crashed or ended without a verdict. They read no more invariants.
+	private int mGoneKInductionWorkers = 0;
 	// Retires the value analysis and the TA workers when the heap fills up, see HeapWatchdog. Null until the workers
 	// are set up.
 	private HeapWatchdog mHeapWatchdog;
-	// Stops the invariant supplier once no TA worker is left to feed it, see releaseForKInduction()
+	// Stops the invariant supplier once no TA worker is left to feed it or no k-induction worker is left to read it,
+	// see stopInvariantSupplier()
 	private RetirementTimer mInvariantSupplierTimer;
+	// Set once the invariant supplier stopped or crashed and its solver is closed, see stopInvariantSupplier()
+	private boolean mInvariantSupplierStopped;
 	// Set once the last TA worker retired and the abstraction was given up for k-induction: no refinement any more.
 	private boolean mAbstractionReleased;
 	// Collects invariants from the TA workers for the k-induction workers. Null unless there is a
 	// k-induction worker and someone to feed it; runs on mInvariantExec, outside the worker pool, since it never
 	// decides the program.
 	private InvariantSupplier<L, A> mInvariantSupplier;
-	// The script of the invariant supplier, closed when the supplier stops, see releaseForKInduction()
+	// The script of the invariant supplier, closed when the supplier stops, see stopInvariantSupplier()
 	private ManagedScript mInvariantSupplierScript;
 	private ExecutorService mInvariantExec;
 	// Runs the value analysis worker, outside the worker pool and the thread limit: it can only refute the program
@@ -417,6 +422,9 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			// If it was the last one, nobody is left to decide and the honest answer is UNKNOWN - not a crash.
 			if (workerResult.noVerdict()) {
 				closeSolverOfStoppedWorker(workerResult);
+				if (workerResult.getWorkerType() == WorkerType.KINDUCTION) {
+					kInductionWorkerGone();
+				}
 				mRetiredWorkers += 1;
 				mLogger.warn("Main: %s finished without a verdict (%d of %d worker(s) retired)",
 						workerResult.getWorkerType(), mRetiredWorkers, mThreadLimit);
@@ -597,6 +605,8 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 		closeSolverOfStoppedWorker(workerResult);
 		switch (workerType) {
 		case INVARIANT:
+			// Its solver is closed already, a later stop must not close it again.
+			mInvariantSupplierStopped = true;
 			mLogger.warn("Main: the invariant supplier crashed (%s), k-induction goes on with the invariants it has",
 					cause);
 			return false;
@@ -614,6 +624,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 			}
 			break;
 		case KINDUCTION:
+			kInductionWorkerGone();
 			break;
 		default:
 			throw new AssertionError("Unknown worker type " + workerType);
@@ -658,6 +669,37 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	/**
+	 * A k-induction worker crashed or ended without a verdict. Once none is left, nobody reads the invariants of the
+	 * supplier, so it stops, and the TA workers get the core, the solver and the memory it held.
+	 */
+	private void kInductionWorkerGone() {
+		mGoneKInductionWorkers += 1;
+		if (mGoneKInductionWorkers >= mNumKInductionWorkers) {
+			stopInvariantSupplier("no k-induction worker is left to read it");
+		}
+	}
+
+	/**
+	 * Stops the invariant supplier and closes its solver, if there is one that has not stopped yet: once no TA worker
+	 * is left to feed it, see {@link #releaseForKInduction()}, or no k-induction worker is left to read it, see
+	 * {@link #kInductionWorkerGone()}. The sink drops what the TA workers still submit from now on.
+	 *
+	 * @param reason
+	 *            why the supplier stops, for the log
+	 */
+	private void stopInvariantSupplier(final String reason) {
+		if (mInvariantSupplierTimer == null || mInvariantSupplierStopped) {
+			return;
+		}
+		mInvariantSupplierStopped = true;
+		mInvariantSupplier.stop();
+		mInvariantSupplierTimer.retire(reason);
+		mInvariantExec.shutdownNow();
+		closeSolverOfInvariantSupplier();
+		mLogger.info("Main: stopped the invariant supplier, %s", reason);
+	}
+
+	/**
 	 * No TA worker is left, so the abstraction will never be refined again and the invariant supplier gets no more
 	 * interpolants. Both go, so that k-induction, which runs on, gets the memory they held. The abstraction becomes an
 	 * empty automaton, as when k-induction proves the program; {@link #mAbstractionReleased} makes sure that it is
@@ -666,11 +708,7 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	private void releaseForKInduction() {
 		final Runtime runtime = Runtime.getRuntime();
 		final long before = runtime.totalMemory() - runtime.freeMemory();
-		if (mInvariantSupplierTimer != null) {
-			mInvariantSupplierTimer.retire("no TA worker is left to feed it");
-			mInvariantExec.shutdownNow();
-			closeSolverOfInvariantSupplier();
-		}
+		stopInvariantSupplier("no TA worker is left to feed it");
 		final int abstractionSize = mAbstraction.size();
 		mAbstractionReleased = true;
 		mActiveCounterexamples.clear();
@@ -685,10 +723,10 @@ public class ParallelNwaCegarLoop<L extends IIcfgTransition<?>, A extends IAutom
 	}
 
 	/**
-	 * Closes the solver of the retired invariant supplier. k-induction copies the invariants it already got from the
-	 * supplier's script without its solver. The main thread does not wait for the supplier to stop, so that a verdict
-	 * of k-induction is not delayed: a query still running fails, which the retired supplier takes as its stop, as when
-	 * the loop shuts down.
+	 * Closes the solver of the retired invariant supplier. k-induction, if it still runs, copies the invariants it
+	 * already got from the supplier's script without its solver. The main thread does not wait for the supplier to
+	 * stop, so that a verdict of k-induction is not delayed: a query still running fails, which the retired supplier
+	 * takes as its stop, as when the loop shuts down.
 	 */
 	private void closeSolverOfInvariantSupplier() {
 		mInvariantSupplierScript.getScript().exit();
