@@ -230,6 +230,12 @@ class RouterTest(unittest.TestCase):
         with self.assertRaises(lr.RouterError):
             self.router.step()
 
+    def test_witness_gets_the_time_limit_plus_the_witness_timeout(self):
+        args = type('Args', (), {'timeout': 120, 'witness_timeout': 60})()
+        self.assertEqual(lr.session_timeout(args, lr.COORDINATOR), 120)
+        self.assertEqual(lr.session_timeout(args, lr.TA_WORKER), 120)
+        self.assertEqual(lr.session_timeout(args, lr.WITNESS), 180)
+
     def test_witness_status(self):
         self.assertEqual(lr.witness_status('FALSE', 0, 3), (lr.WITNESS_PRESENT, False))
         self.assertEqual(lr.witness_status('FALSE', 0, 2), (lr.WITNESS_DEGRADED, False))

@@ -67,10 +67,12 @@ public final class MultiProcessSession {
 			"de.uni_freiburg.informatik.ultimate.plugins.blockencoding", Activator.PLUGIN_ID);
 
 	/**
-	 * Settings that differ between the sessions of one run by design. The logger patterns carry the session id.
+	 * Settings that differ between the sessions of one run by design. The logger patterns carry the session id. The
+	 * toolchain timeout is the session's time limit: the WITNESS session gets the run's time limit plus the witness
+	 * timeout, so that a verdict at the end of the run can still be witnessed.
 	 */
 	private static final Set<String> SESSION_SETTINGS = Set.of(CorePreferenceInitializer.LABEL_LOG4J_PATTERN,
-			CorePreferenceInitializer.LABEL_LOG4J_CONTROLLER_PATTERN,
+			CorePreferenceInitializer.LABEL_LOG4J_CONTROLLER_PATTERN, CorePreferenceInitializer.LABEL_TIMEOUT,
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_COMPONENT,
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_EXCHANGE_ROOT,
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_SESSION_ID,

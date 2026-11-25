@@ -29,7 +29,8 @@ modes in sequence):
 * settings: the `.epf` of the mode (integer or bit-vector); every session of a run uses the same one;
 * `--traceabstraction.multi.process.component <KIND>`, `--traceabstraction.multi.process.exchange.root <dir>`,
   `--traceabstraction.multi.process.session.id <id>`;
-* `--core.toolchain.timeout.in.seconds <s>`: mandatory, the session time limit;
+* `--core.toolchain.timeout.in.seconds <s>`: mandatory, the session time limit. It is the run's time limit; WITNESS
+  gets that plus the witness timeout, so that a verdict at the end of the run can still be witnessed;
 * JVM options:
 ** `-Dultimate.logger.pattern=%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %p [<id>] %c: %m%n`: every log line starts with time,
    level, session id and logger. As a JVM option it applies from the first line; a session checks it at startup.
@@ -80,7 +81,7 @@ missing or corrupt blob. Shutdown (`in/shutdown`) takes precedence over messages
   The fingerprint is the SHA-256 of the initial abstraction printed by `AtsCodec`; all sessions of a run must have the
   same. `settingsHash` covers the settings of core, CACSL2Boogie, procedure inliner, Boogie preprocessor, IcfgBuilder,
   BlockEncoding and TraceAbstraction, without those that differ per session (kind, directory, session id, number of TA
-  workers, fail on TA crash, the two logger patterns).
+  workers, fail on TA crash, the two logger patterns, the toolchain timeout).
 * `statistics.json`: the last file of a session, see link:Formats.adoc[Formats]. WITNESS writes it just before the
   WitnessPrinter writes the witness.
 * `witness.yml` (WITNESS only): written by the WitnessPrinter, not atomically; it is valid once the process exited

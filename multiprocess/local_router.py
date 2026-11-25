@@ -329,7 +329,7 @@ class UltimateProcess:
                    '-data', '@noDefault', '-ultimatedata', session.path('data'),
                    '-tc', os.path.join(args.toolchains, toolchain), '-s', args.settings, '-i', os.path.abspath(args.file),
                    '--cacsl2boogietranslator.entry.function', 'main',
-                   '--core.toolchain.timeout.in.seconds', str(args.timeout),
+                   '--core.toolchain.timeout.in.seconds', str(session_timeout(args, session.kind)),
                    '--traceabstraction.multi.process.component', session.kind,
                    '--traceabstraction.multi.process.exchange.root', session.dir,
                    '--traceabstraction.multi.process.session.id', session.sid] + args.overrides + extra
@@ -353,6 +353,12 @@ class UltimateProcess:
 
     def kill(self):
         self.process.kill()
+
+
+def session_timeout(args, kind):
+    """The toolchain timeout of a session: the run's time limit, and for WITNESS that plus the witness timeout, so that
+    a verdict at the end of the run can still be witnessed. Ultimate leaves the timeout out of settingsHash."""
+    return args.timeout + args.witness_timeout if kind == WITNESS else args.timeout
 
 
 def sha256_of(path):
