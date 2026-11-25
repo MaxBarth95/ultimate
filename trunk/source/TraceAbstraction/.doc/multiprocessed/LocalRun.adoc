@@ -60,6 +60,8 @@ python3 multiprocess/e2e_test.py --tool releaseScripts/default/UAutomizer-linux
 ----
 
 The end-to-end tests run whole COORDINATOR + TA_WORKER + WITNESS runs on the programs in `multiprocess/programs/`
-(about 90 s in all) and check verdict, health and witness status: a safe and an unsafe loop, a float program whose
-counterexample is feasible only with overapproximation (UNKNOWN, never FALSE), a TA trace check that answers UNKNOWN
-(Fermat with SMTInterpol), a killed WITNESS session and a TA session with other settings.
+(about 100 s in all; `--package` runs them in package mode) and check verdict, health and witness status: a safe and
+an unsafe loop, a safe program whose callee modifies a global (in package mode the call's summary edge must not be a
+shortcut), a float program whose counterexample is feasible only with overapproximation (UNKNOWN, never FALSE), a
+TA trace check that answers UNKNOWN (Fermat with SMTInterpol), a killed WITNESS session and a TA session with other
+settings.

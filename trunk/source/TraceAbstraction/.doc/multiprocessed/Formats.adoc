@@ -113,7 +113,9 @@ packages, also for `aws_byte_cursor_read_harness`).
 * `edges`, ordered by id: `{id, kind: INTERNAL|CALL|RETURN, source, target, transFormula, withBranchEncoders?, call?,
   overapproximations?}`. `overapproximations` are the reasons of the edge's `Overapprox` annotation: a counterexample
   through such an edge does not prove a violation, also in a session started from the package.
-  The id is the CodeBlock serial, so `e<id>` letters match. `transFormula` is the edge's formula (for a call the
+  The id is the CodeBlock serial, so `e<id>` letters match. The summary edges of calls to procedures with an
+  implementation are left out: an interprocedural analysis never uses them, and as plain internal edges they would be
+  shortcuts that havoc the callee's effects (multi-process sessions therefore require the interprocedural analysis). `transFormula` is the edge's formula (for a call the
   local-variable assignment, for a return the assignment of the return values): `{formula, inVars, outVars, auxVars,
   branchEncoders, nonTheoryConsts, infeasibility}`, formula in SMT-LIB with lets.
 

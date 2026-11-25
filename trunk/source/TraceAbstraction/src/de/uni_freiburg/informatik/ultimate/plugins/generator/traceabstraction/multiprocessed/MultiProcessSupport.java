@@ -124,6 +124,12 @@ public final class MultiProcessSupport {
 			throw new UnsupportedOperationException(
 					"Multi-process sessions need the language operation DIFFERENCE, not " + languageOperation);
 		}
+		if (!prefs.interprocedural()) {
+			// the program package leaves out the summary edges of implemented calls, which only a
+			// non-interprocedural analysis uses
+			throw new UnsupportedOperationException("Multi-process sessions need the setting "
+					+ label(TraceAbstractionPreferenceInitializer.LABEL_INTERPROCEDURAL));
+		}
 		if (prefs.interpolantAutomaton() == InterpolantAutomaton.TOTALINTERPOLATION) {
 			throw new UnsupportedOperationException("Multi-process sessions do not support total interpolation");
 		}

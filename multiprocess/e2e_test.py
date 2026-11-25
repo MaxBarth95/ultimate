@@ -20,6 +20,8 @@ PROGRAMS = os.path.join(HERE, 'programs')
 CASES = [
     ('loop-safe', 'loop-safe.c', ['--ta', '2'], ('TRUE', 'OK', 'WITNESS_PRESENT')),
     ('loop-unsafe', 'loop-unsafe.c', ['--ta', '2'], ('FALSE', 'OK', 'WITNESS_PRESENT')),
+    # procedure calls: in package mode the summary edge of a call must not be a shortcut
+    ('call-global-safe', 'call-global-safe.c', ['--ta', '2'], ('TRUE', 'OK', 'WITNESS_PRESENT')),
     # an overapproximated counterexample never gives FALSE (Ultimate's integer run answers unprovable)
     ('float-integer-mode', 'float-integer-mode.c', ['--ta', '1'], ('UNKNOWN', 'OK', 'WITNESS_NOT_APPLICABLE')),
     # a real UNKNOWN of a TA trace check ends the run with UNKNOWN at once (R2.6 rule 3)

@@ -47,6 +47,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.I
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgCallTransition;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgInternalTransition;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgReturnTransition;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgSummaryTransition;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgEdge;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula;
@@ -89,6 +90,10 @@ import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.mu
  * the ones the ICFG uses: the sorts and functions that occur in the edge formulas, the axioms and the constants of the
  * program variables, closed under the bodies of defined functions and the sorts of used functions. So nothing the
  * solver declared for other purposes before the package was written leaks into it.
+ *
+ * Summary edges of calls to procedures with an implementation are left out: an interprocedural TraceAbstraction never
+ * uses them, and the reader could only turn them into plain internal edges, i.e. shortcuts that havoc the callee's
+ * effects. Multi-process sessions therefore require the interprocedural analysis ({@link MultiProcessSupport}).
  *
  * Every unsupported construct throws (concurrent edges, unknown edge, variable or constant types).
  */
@@ -148,7 +153,14 @@ public final class ProgramPackageWriter {
 				locations.add(new Location(proc, loc.getDebugIdentifier().toString(), initial.contains(loc),
 						errors.contains(loc), mIcfg.getProcedureEntryNodes().get(proc) == loc,
 						mIcfg.getProcedureExitNodes().get(proc) == loc, loopHeads.contains(loc)));
-				edges.addAll(loc.getOutgoingEdges());
+				for (final IcfgEdge edge : loc.getOutgoingEdges()) {
+					if (isSummaryOfImplementedCall(edge)) {
+						// an interprocedural analysis never uses it (Cfg2Automaton); as a plain internal edge it
+						// would be a shortcut that havocs the callee's effects
+						continue;
+					}
+					edges.add(edge);
+				}
 			}
 		}
 		edges.sort(Comparator.comparingInt(LetterNaming::idOf));
@@ -176,6 +188,15 @@ public final class ProgramPackageWriter {
 		}
 		result.sort(null);
 		return result;
+	}
+
+	/**
+	 * @return whether the edge summarizes a call to a procedure with an implementation; summaries of procedures without
+	 *         one are internal edges like any other
+	 */
+	static boolean isSummaryOfImplementedCall(final IcfgEdge edge) {
+		return edge instanceof IIcfgSummaryTransition<?>
+				&& ((IIcfgSummaryTransition<?>) edge).calledProcedureHasImplementation();
 	}
 
 	private String logic() {
