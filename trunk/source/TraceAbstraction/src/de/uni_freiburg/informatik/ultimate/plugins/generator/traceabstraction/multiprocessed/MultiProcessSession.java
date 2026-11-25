@@ -35,15 +35,12 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.TreeMap;
 
-import de.uni_freiburg.informatik.ultimate.automata.nestedword.INestedWordAutomaton;
 import de.uni_freiburg.informatik.ultimate.core.coreplugin.UltimateCore;
 import de.uni_freiburg.informatik.ultimate.core.coreplugin.preferences.CorePreferenceInitializer;
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfg;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.predicates.IPredicate;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.Activator;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TAPreferences;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.preferences.TraceAbstractionPreferenceInitializer;
@@ -79,8 +76,6 @@ public final class MultiProcessSession {
 			TraceAbstractionPreferenceInitializer.LABEL_MULTI_PROCESS_FAIL_ON_TA_CRASH,
 			TraceAbstractionPreferenceInitializer.LABEL_NUM_TA_WORKERS);
 
-	private static final String INITIAL_ABSTRACTION_NAME = "initialAbstraction";
-
 	private MultiProcessSession() {
 		// static helpers only
 	}
@@ -96,13 +91,28 @@ public final class MultiProcessSession {
 
 	/**
 	 * Writes {@code ready.json}: the kind, the fingerprint of the program, the Ultimate version and the settings hash.
+	 * The fingerprint is the SHA-256 of the program package of the ICFG the session runs on (see
+	 * {@link #fingerprint(String)}).
 	 *
-	 * @return the fingerprint, the SHA-256 of the initial abstraction printed by {@link AtsCodec}
+	 * @return the fingerprint
 	 */
-	public static <L extends IIcfgTransition<?>> String announceReady(final IExchange exchange,
-			final MultiProcessComponent kind, final IUltimateServiceProvider services, final ILogger logger,
-			final IIcfg<? extends IcfgLocation> icfg, final INestedWordAutomaton<L, IPredicate> initialAbstraction) {
-		final String fingerprint = fingerprint(services, logger, icfg, initialAbstraction);
+	public static String announceReady(final IExchange exchange, final MultiProcessComponent kind,
+			final IUltimateServiceProvider services, final ILogger logger, final IIcfg<? extends IcfgLocation> icfg) {
+		final long start = System.nanoTime();
+		final String programPackage = ProgramPackageWriter.writeJson(icfg);
+		logger.info(String.format("Serialized the program package for the fingerprint in %d ms (%d bytes)",
+				(System.nanoTime() - start) / 1_000_000, programPackage.getBytes(StandardCharsets.UTF_8).length));
+		return announceReady(exchange, kind, services, logger, programPackage);
+	}
+
+	/**
+	 * Writes {@code ready.json} for a session that already has the program package of its ICFG.
+	 *
+	 * @return the fingerprint
+	 */
+	public static String announceReady(final IExchange exchange, final MultiProcessComponent kind,
+			final IUltimateServiceProvider services, final ILogger logger, final String programPackage) {
+		final String fingerprint = fingerprint(programPackage);
 		final ReadyFile ready =
 				ReadyFile.of(kind, fingerprint, new UltimateCore().getUltimateVersionString(), settingsHash(services));
 		exchange.announceReady(ready);
@@ -112,19 +122,12 @@ public final class MultiProcessSession {
 	}
 
 	/**
-	 * @return the SHA-256 of the initial abstraction printed by {@link AtsCodec}, with full letter names
-	 *         ({@code e<id>:<text>}) so that the fingerprint also covers the text of every edge
+	 * The fingerprint of a program: the SHA-256 of its program package (PACKAGE_JSON_V1). FRONTEND and WITNESS
+	 * serialize their C-built ICFG; COORDINATOR and TA_WORKER serialize the ICFG they run on, which for a session
+	 * started from a package gives the package's bytes again ({@link ProgramPackageReader} reads without loss).
 	 */
-	public static <L extends IIcfgTransition<?>> String fingerprint(final IUltimateServiceProvider services,
-			final ILogger logger, final IIcfg<? extends IcfgLocation> icfg,
-			final INestedWordAutomaton<L, IPredicate> initialAbstraction) {
-		final LetterNaming<L> letters = new LetterNaming<>(initialAbstraction.getVpAlphabet(), LetterNaming.Style.FULL);
-		final String ats = new AtsCodec<>(services, logger, letters).printAbstraction(INITIAL_ABSTRACTION_NAME,
-				initialAbstraction, new LocationNaming(icfg));
-		if (logger.isDebugEnabled()) {
-			logger.debug("Initial abstraction, as printed for the fingerprint:%n%s", ats);
-		}
-		return FileExchange.sha256(ats.getBytes(StandardCharsets.UTF_8));
+	public static String fingerprint(final String programPackage) {
+		return FileExchange.sha256(programPackage.getBytes(StandardCharsets.UTF_8));
 	}
 
 	/**

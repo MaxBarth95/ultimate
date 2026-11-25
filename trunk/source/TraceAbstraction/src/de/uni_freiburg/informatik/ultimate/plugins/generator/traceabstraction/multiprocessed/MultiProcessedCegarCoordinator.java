@@ -174,8 +174,7 @@ public final class MultiProcessedCegarCoordinator<L extends IIcfgTransition<?>> 
 		mStatistics.declare("jobs", "refinements", "cancels", "abstractionsPublished", "lostTaSessions",
 				"crashedTaSessions",
 				"refinementTimeMs", "searchTimeMs", "idleTimeMs", "abstractionSize");
-		MultiProcessSession.announceReady(exchange, MultiProcessComponent.COORDINATOR, services, mLogger, rootNode,
-				initialAbstraction);
+		MultiProcessSession.announceReady(exchange, MultiProcessComponent.COORDINATOR, services, mLogger, rootNode);
 	}
 
 	@Override

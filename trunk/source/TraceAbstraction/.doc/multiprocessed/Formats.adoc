@@ -91,25 +91,45 @@ Files without `format`: `ready.json`, the `.ref.json` of a blob (`{sha256, size}
 
 == PACKAGE_JSON_V1: the program package
 
-The `PROGRAM_PACKAGE` message (extension `json`, normally a blob): the ICFG after block encoding, written by
+The `PROGRAM_PACKAGE` message (extension `json`, normally a blob): the ICFG that TraceAbstraction receives (the
+IcfgBuilder's output, with its large block encoding), written by
 `ProgramPackageWriter` as the record `ProgramPackage` with `"format": "PACKAGE_JSON_V1"` and read as strictly as
 JSON_V1. Every list has a fixed order, so that equal programs give equal bytes (three JVMs give byte-identical
 packages, also for `aws_byte_cursor_read_harness`).
 
+* `identifier`: the identifier of the ICFG.
 * `logic`: the SMT logic of the script that built the ICFG.
 * `declarations`: `declare-sort`, `define-sort`, `declare-fun` and `define-fun` commands in declaration order, the
   order in which they replay (a `define-fun` may use earlier symbols). Only what the ICFG uses: the sorts and functions
   of the edge formulas, the axioms and the program-variable constants, closed under defined-function bodies, so
   nothing the solver declared before for other purposes is included.
+* `functions`: the used SMT functions that are program functions (e.g. Boogie functions such as `~bitwiseAnd`);
+  predicates over them need them in the symbol table.
 * `axioms`: the closed axiom formula.
 * `globals` (with their old variables), `constants`, and `procedures` (locals including parameters, in/out parameters,
   modifiable globals). A variable is `{identifier, sort, termVariable, defaultConstant, primedConstant}`; elsewhere a
   program variable is referred to by the name of its term variable.
 * `locations`: `{procedure, debugId, initial, error, entry, exit, loopHead}`, named `<procedure>::<debugId>`.
-* `edges`, ordered by id: `{id, kind: INTERNAL|CALL|RETURN, source, target, transFormula, withBranchEncoders?, call?}`.
+* `edges`, ordered by id: `{id, kind: INTERNAL|CALL|RETURN, source, target, transFormula, withBranchEncoders?, call?,
+  overapproximations?}`. `overapproximations` are the reasons of the edge's `Overapprox` annotation: a counterexample
+  through such an edge does not prove a violation, also in a session started from the package.
   The id is the CodeBlock serial, so `e<id>` letters match. `transFormula` is the edge's formula (for a call the
   local-variable assignment, for a return the assignment of the return values): `{formula, inVars, outVars, auxVars,
   branchEncoders, nonTheoryConsts, infeasibility}`, formula in SMT-LIB with lets.
+
+*Reading* (`ProgramPackageReader`, wrapped by the source plug-in `de.uni_freiburg.informatik.ultimate.source.programpackage`
+of the toolchain `AutomizerPackage.xml`): the script is built like the IcfgBuilder's, from the session's IcfgBuilder
+SMT settings; its logic must be the package's `logic`. The declarations replay in package order, formulas are parsed
+with their variables bound and only the lets expanded (no other normalization), and the edges are generic
+`IcfgInternalTransition`/`IcfgCallTransition`/`IcfgReturnTransition` with the package ids. Writing the read ICFG
+gives the package's bytes again (checked under `-ea`, in `ProgramPackageReaderTest`, and by every package-mode run,
+whose fingerprints are hashes of re-serializations). The source plug-in registers an identity backtranslator and
+annotates the ICFG, its locations and edges with a location naming the package file, so that the results of the
+coordinator are reported on the level of the ICFG.
+
+*Fingerprint:* the SHA-256 of the package bytes, for every kind (`MultiProcessSession.fingerprint`). FRONTEND hashes
+the package it sends; every other kind serializes the ICFG it runs on: WITNESS and C-mode sessions their C-built ICFG,
+package-mode sessions the read one.
 
 == YAML_V1: the witness
 

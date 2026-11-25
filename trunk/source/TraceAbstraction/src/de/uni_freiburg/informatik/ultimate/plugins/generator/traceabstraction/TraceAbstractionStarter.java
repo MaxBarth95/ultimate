@@ -245,21 +245,23 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 		try (FileExchange exchange = MultiProcessSession.openExchange(mPrefs)) {
 			SessionStatistics statistics = new SessionStatistics(kind, mPrefs.getMultiProcessSessionId());
 			try {
-				// FRONTEND serializes first, before any other work on the ICFG or its script
-				final String programPackage;
 				if (kind == MultiProcessComponent.FRONTEND) {
+					// serializes first, before any other work on the ICFG or its script
 					final long start = System.nanoTime();
-					programPackage = ProgramPackageWriter.writeJson(icfg);
+					final String programPackage = ProgramPackageWriter.writeJson(icfg);
 					statistics.set("serializeTimeMs", (System.nanoTime() - start) / 1_000_000);
 					statistics.set("packageBytes", programPackage.getBytes(StandardCharsets.UTF_8).length);
 					statistics.set("locations", IcfgUtils.getNumberOfLocations(icfg));
 					statistics.set("edges", IcfgUtils.getNumberOfEdges(icfg));
-				} else {
-					programPackage = null;
+					MultiProcessSession.announceReady(exchange, kind, mServices, mLogger, programPackage);
+					exchange.send(MessageType.PROGRAM_PACKAGE, OptionalLong.empty(), OptionalLong.empty(),
+							programPackage);
+					statistics.write(exchange, SessionStatistics.End.DONE, null);
+					return;
 				}
 				final Set<IcfgLocation> errorLocs = partitionErrorLocations(icfg).get(0).getValue();
 				final var session = mCegarFactory.constructSessionAbstraction(mServices, icfg, errorLocs);
-				MultiProcessSession.announceReady(exchange, kind, mServices, mLogger, icfg, session.abstraction());
+				MultiProcessSession.announceReady(exchange, kind, mServices, mLogger, icfg);
 				switch (kind) {
 				case TA_WORKER: {
 					final TaWorkerSession<L> ta = new TaWorkerSession<>(mServices, mLogger, mPrefs, icfg, exchange,
@@ -267,12 +269,6 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 							new SubtaskFileIdentifier(null, icfg.getIdentifier() + "_" + kind));
 					statistics = ta.getStatistics();
 					statistics.write(exchange, ta.run(), null);
-					break;
-				}
-				case FRONTEND: {
-					exchange.send(MessageType.PROGRAM_PACKAGE, OptionalLong.empty(), OptionalLong.empty(),
-							programPackage);
-					statistics.write(exchange, SessionStatistics.End.DONE, null);
 					break;
 				}
 				case WITNESS: {
