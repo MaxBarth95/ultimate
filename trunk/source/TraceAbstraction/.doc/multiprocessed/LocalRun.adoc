@@ -23,7 +23,9 @@ python3 multiprocess/local_router.py --tool releaseScripts/default/UAutomizer-li
 Options: `--architecture 32bit|64bit`, `--settings <epf>` (default: the SV-COMP Reach Automizer default of the
 architecture), `--witness-timeout <s>` (default 60: how long the router waits for the witness after the verdict; the
 WITNESS session's time limit is `--timeout` plus this), `--no-witness`, `--fail-on-ta-crash` (testing mode), `--heap`,
-`--report <file>`. For tests of the protocol: `--kill-ta-after <s>` (kill -9 the first TA once it has a job) and
+`--report <file>`, `--package` (UltimateCloud Phase 6: a FRONTEND session runs first; COORDINATOR and the TA sessions
+then start from its program package with `AutomizerPackage.xml`, WITNESS from C; the report adds `frontend` and the
+seconds until each session's `ready.json`). For tests of the protocol: `--kill-ta-after <s>` (kill -9 the first TA once it has a job) and
 `--crash-ta-after <s>` (send the first TA an unknown message type, so that it throws).
 
 The root holds one session directory per session (`coordinator/`, `ta1/` ..., `witness/`), each with `log/stdout.log`

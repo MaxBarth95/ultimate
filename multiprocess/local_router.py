@@ -20,6 +20,10 @@ UltimateCloud's scheduler (CooperativeStrategy, Phase 4) does:
   every queued and later COUNTEREXAMPLE is answered at once with the synthetic SESSION_LOST result.
 - VERDICT: fixes the verdict, shuts the coordinator and the TA sessions down and waits for the witness.
 
+With --package (UltimateCloud Phase 6) a FRONTEND session runs first and writes the program package; COORDINATOR and
+the TA sessions then start from the package (toolchain AutomizerPackage.xml), WITNESS from C. All of them, FRONTEND
+included, must have the same fingerprint and settingsHash.
+
 Only the standard library is used. Tests: python3 -m unittest multiprocess/test_local_router.py
 """
 
@@ -39,7 +43,8 @@ MESSAGE_NAME = re.compile(r'(\d+)-([A-Z_]+)(?:-j(\d+))?(?:-g(\d+))?\.(ref\.json|
 LOG_PATTERN = "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %p [{sid}] %c: %m%n"
 SPECIFICATION = 'CHECK( init(main()), LTL(G ! call(reach_error())) )'
 
-COORDINATOR, TA_WORKER, WITNESS = 'COORDINATOR', 'TA_WORKER', 'WITNESS'
+COORDINATOR, TA_WORKER, WITNESS, FRONTEND = 'COORDINATOR', 'TA_WORKER', 'WITNESS', 'FRONTEND'
+PACKAGE_TOOLCHAIN = 'AutomizerPackage.xml'
 SESSION_LOST, SESSION_CRASHED = 'SESSION_LOST', 'SESSION_CRASHED'
 
 # health of a run, as UltimateCloud's scheduler reports it
@@ -165,8 +170,12 @@ def witness_status(verdict, witness_exit, witness_level):
 class Router:
     """The routing of one run. step() routes whatever is there; it never blocks."""
 
-    def __init__(self, coordinator, tas, witness, fail_on_ta_crash=False, log=print):
+    def __init__(self, coordinator, tas, witness, fail_on_ta_crash=False, log=print, reference=None):
         self.coordinator = coordinator
+        # sid -> ready.json of a session outside the routing (FRONTEND), checked like the others
+        self.reference = reference or {}
+        self.start = time.time()
+        self.ready_seconds = {}
         self.tas = tas
         self.witness = witness
         self.fail_on_ta_crash = fail_on_ta_crash
@@ -188,7 +197,11 @@ class Router:
 
     def check_fingerprints(self):
         """All sessions of a run must have the same program (fingerprint) and the same settings (settingsHash)."""
-        ready = {s.sid: s.ready for s in self.sessions() if s.read_ready()}
+        ready = dict(self.reference)
+        for s in self.sessions():
+            if s.read_ready():
+                ready[s.sid] = s.ready
+                self.ready_seconds.setdefault(s.sid, round(time.time() - self.start, 1))
         for key in ('fingerprint', 'settingsHash'):
             values = {sid: r[key] for sid, r in ready.items()}
             if len(set(values.values())) > 1:
@@ -317,17 +330,19 @@ class Router:
 class UltimateProcess:
     """An Ultimate CLI process for one session (R1.3: the CLI, an explicit toolchain and .epf, no Ultimate.py)."""
 
-    def __init__(self, args, session, extra):
+    def __init__(self, args, session, extra, program=None, toolchain=None):
         tool = os.path.abspath(args.tool)
+        program = os.path.abspath(args.file) if program is None else program
         launchers = [f for f in os.listdir(os.path.join(tool, 'plugins')) if f.startswith('org.eclipse.equinox.launcher_')]
         if len(launchers) != 1:
             raise RouterError(f'no unique Equinox launcher in {tool}/plugins')
-        toolchain = 'AutomizerCInline_WitnessPrinter.xml' if session.kind == WITNESS else 'AutomizerCInline.xml'
+        if toolchain is None:
+            toolchain = 'AutomizerCInline_WitnessPrinter.xml' if session.kind == WITNESS else 'AutomizerCInline.xml'
         command = ['java', '-Dultimate.logger.pattern=' + LOG_PATTERN.replace('{sid}', session.sid),
                    '-Dultimate.cli.exitOnException=true', '-Dosgi.configuration.area=' + session.path('data', 'config'),
                    f'-Xmx{args.heap}', '-Xss1M', '-jar', os.path.join(tool, 'plugins', launchers[0]),
                    '-data', '@noDefault', '-ultimatedata', session.path('data'),
-                   '-tc', os.path.join(args.toolchains, toolchain), '-s', args.settings, '-i', os.path.abspath(args.file),
+                   '-tc', os.path.join(args.toolchains, toolchain), '-s', args.settings, '-i', program,
                    '--cacsl2boogietranslator.entry.function', 'main',
                    '--core.toolchain.timeout.in.seconds', str(session_timeout(args, session.kind)),
                    '--traceabstraction.multi.process.component', session.kind,
@@ -389,6 +404,8 @@ def parse_args(argv):
     p.add_argument('--no-witness', action='store_true', help='run without a WITNESS session')
     p.add_argument('--fail-on-ta-crash', action='store_true', help='testing mode: a crashed TA ends the run with ERROR')
     p.add_argument('--report', help='write the report as JSON to this file (default: <root>/report.json)')
+    p.add_argument('--package', action='store_true',
+                   help='run a FRONTEND session first; COORDINATOR and TA sessions start from its program package')
     # fault injection, for tests of the protocol
     p.add_argument('--kill-ta-after', type=float, help='kill -9 the first TA once it has a job after this many seconds')
     p.add_argument('--crash-ta-after', type=float, help='make the first TA throw once it has a job after this many seconds')
@@ -417,14 +434,56 @@ def settings_options(settings):
     return options
 
 
+def run_frontend(args, root):
+    """Runs the FRONTEND session to its end. Returns the path of the program package, its ready.json and statistics."""
+    frontend = Session(FRONTEND, 'frontend', os.path.join(root, 'frontend'))
+    frontend.process = UltimateProcess(args, frontend, [])
+    try:
+        code = frontend.process.wait(args.timeout + 60)
+    except subprocess.TimeoutExpired:
+        frontend.process.kill()
+        raise RouterError('FRONTEND did not end in time')
+    if code != 0:
+        raise RouterError(f'FRONTEND ended with exit code {code}')
+    ready = frontend.read_ready()
+    if ready is None:
+        raise RouterError('FRONTEND wrote no ready.json')
+    messages = frontend.new_messages()
+    if len(messages) != 1 or messages[0][2].group(2) != 'PROGRAM_PACKAGE':
+        raise RouterError(f'FRONTEND must send exactly one PROGRAM_PACKAGE, sent {[m[1] for m in messages]}')
+    _, name, match = messages[0]
+    source = frontend.path('out', name)
+    if match.group(5) == 'ref.json':
+        source = frontend.path('blobs', json.load(open(source))['sha256'])
+    package = os.path.join(root, 'program-package.json')
+    shutil.copyfile(source, package)
+    if hashlib.sha256(open(package, 'rb').read()).hexdigest() != ready['fingerprint']:
+        raise RouterError('the fingerprint of FRONTEND is not the hash of its program package')
+    return package, ready, frontend.statistics() or {}
+
+
 def run(args):
     shutil.rmtree(args.root, ignore_errors=True)
     root = os.path.abspath(args.root)
     start = time.time()
+    package, frontend_ready, frontend_statistics, frontend_seconds = None, None, {}, None
+    if args.package:
+        try:
+            package, frontend_ready, frontend_statistics = run_frontend(args, root)
+        except RouterError as e:
+            report = {'verdict': 'ERROR', 'health': ERROR, 'witness': {'status': WITNESS_NOT_APPLICABLE},
+                      'events': [f'ERROR: {e}']}
+            with open(args.report or os.path.join(root, 'report.json'), 'w') as f:
+                json.dump(report, f, indent=2)
+            return report
+        frontend_seconds = round(time.time() - start, 1)
 
     def make(kind, sid, extra):
         session = Session(kind, sid, os.path.join(root, sid))
-        session.process = UltimateProcess(args, session, extra)
+        if package is not None and kind in (COORDINATOR, TA_WORKER):
+            session.process = UltimateProcess(args, session, extra, program=package, toolchain=PACKAGE_TOOLCHAIN)
+        else:
+            session.process = UltimateProcess(args, session, extra)
         return session
 
     coordinator = make(COORDINATOR, 'coordinator',
@@ -432,7 +491,8 @@ def run(args):
                        + (['--traceabstraction.multi.process.fail.on.ta.crash', 'true'] if args.fail_on_ta_crash else []))
     tas = [make(TA_WORKER, f'ta{i}', args.ta1_overrides if i == 1 else []) for i in range(1, args.ta + 1)]
     witness = None if args.no_witness else make(WITNESS, 'witness', [])
-    router = Router(coordinator, tas, witness, args.fail_on_ta_crash)
+    router = Router(coordinator, tas, witness, args.fail_on_ta_crash,
+                    reference={'frontend': frontend_ready} if frontend_ready else None)
     injected = False
     verdict_time = None
     try:
@@ -493,10 +553,14 @@ def run(args):
                     'file': witness.path('out', 'witness.yml') if status in (WITNESS_PRESENT, WITNESS_DEGRADED) else None},
         'verdictSeconds': None if verdict_time is None else round(verdict_time, 1),
         'totalSeconds': round(time.time() - start, 1),
+        'readySeconds': router.ready_seconds,
         'messages': router.counts,
         'exitCodes': exits,
         'events': router.events,
     }
+    if args.package:
+        report['frontend'] = {'seconds': frontend_seconds, 'fingerprint': frontend_ready['fingerprint'],
+                              'counters': frontend_statistics.get('counters', {})}
     with open(args.report or os.path.join(root, 'report.json'), 'w') as f:
         json.dump(report, f, indent=2)
     return report

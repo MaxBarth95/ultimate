@@ -230,6 +230,16 @@ class RouterTest(unittest.TestCase):
         with self.assertRaises(lr.RouterError):
             self.router.step()
 
+    def test_frontend_fingerprint_must_match(self):
+        router = lr.Router(self.coord, [self.ta1, self.ta2], self.witness, log=lambda _: None,
+                           reference={'frontend': {'fingerprint': 'other', 'settingsHash': 'h'}})
+        with self.assertRaises(lr.RouterError):
+            router.step()
+        router = lr.Router(self.coord, [self.ta1, self.ta2], self.witness, log=lambda _: None,
+                           reference={'frontend': {'fingerprint': 'f', 'settingsHash': 'h'}})
+        router.step()
+        self.assertEqual(set(router.ready_seconds), {'coordinator', 'ta1', 'ta2', 'witness'})
+
     def test_witness_gets_the_time_limit_plus_the_witness_timeout(self):
         args = type('Args', (), {'timeout': 120, 'witness_timeout': 60})()
         self.assertEqual(lr.session_timeout(args, lr.COORDINATOR), 120)

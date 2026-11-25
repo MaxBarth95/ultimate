@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end tests of the multi-process trace abstraction: local_router.py on small programs with expected outcomes.
 
-    python3 multiprocess/e2e_test.py --tool releaseScripts/default/UAutomizer-linux [--root /tmp/e2e] [--only NAME]
+    python3 multiprocess/e2e_test.py --tool releaseScripts/default/UAutomizer-linux [--root /tmp/e2e] [--only NAME] [--package]
 
 Each case runs a whole COORDINATOR + TA_WORKER + WITNESS run and checks verdict, health and witness status. A case
 takes 15-40 s. The routing logic itself is unit-tested in test_local_router.py, without Ultimate.
@@ -42,6 +42,7 @@ def main():
     p.add_argument('--root', default='/tmp/ultimate-multiprocess-e2e')
     p.add_argument('--only', action='append')
     p.add_argument('--timeout', default='120')
+    p.add_argument('--package', action='store_true', help='run every case in package mode (FRONTEND first)')
     args = p.parse_args()
     failures = 0
     for name, program, options, expected in CASES:
@@ -49,7 +50,8 @@ def main():
             continue
         root = os.path.join(args.root, name)
         command = [sys.executable, os.path.join(HERE, 'local_router.py'), '--tool', args.tool,
-                   '--file', os.path.join(PROGRAMS, program), '--root', root, '--timeout', args.timeout] + options
+                   '--file', os.path.join(PROGRAMS, program), '--root', root, '--timeout', args.timeout] + options \
+            + (['--package'] if args.package else [])
         subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         try:
             report = json.load(open(os.path.join(root, 'report.json')))
