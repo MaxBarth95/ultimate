@@ -27,12 +27,14 @@
  */
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -79,9 +81,11 @@ import de.uni_freiburg.informatik.ultimate.lib.tracecheckerutils.partialorder.pe
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.AbstractCegarLoop.Result;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.interpolantautomata.transitionappender.AbstractInterpolantAutomaton;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.FileExchange;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MessageType;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessedCegarCoordinator;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.MultiProcessSupport;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackageWriter;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.SessionStatistics;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.TaWorkerSession;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.WitnessSession;
@@ -178,7 +182,7 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 		case DISABLED, COORDINATOR:
 			// the coordinator is a CEGAR loop, see CegarLoopFactory
 			break;
-		case TA_WORKER, WITNESS:
+		case TA_WORKER, WITNESS, FRONTEND:
 			runSession(icfg);
 			return;
 		default:
@@ -234,13 +238,25 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 	}
 
 	/**
-	 * Runs a multi-process session kind that is not a CEGAR loop (TA_WORKER, WITNESS).
+	 * Runs a multi-process session kind that is not a CEGAR loop (TA_WORKER, WITNESS, FRONTEND).
 	 */
 	private void runSession(final IIcfg<IcfgLocation> icfg) {
 		final MultiProcessComponent kind = mPrefs.getMultiProcessComponent();
 		try (FileExchange exchange = MultiProcessSession.openExchange(mPrefs)) {
 			SessionStatistics statistics = new SessionStatistics(kind, mPrefs.getMultiProcessSessionId());
 			try {
+				// FRONTEND serializes first, before any other work on the ICFG or its script
+				final String programPackage;
+				if (kind == MultiProcessComponent.FRONTEND) {
+					final long start = System.nanoTime();
+					programPackage = ProgramPackageWriter.writeJson(icfg);
+					statistics.set("serializeTimeMs", (System.nanoTime() - start) / 1_000_000);
+					statistics.set("packageBytes", programPackage.getBytes(StandardCharsets.UTF_8).length);
+					statistics.set("locations", IcfgUtils.getNumberOfLocations(icfg));
+					statistics.set("edges", IcfgUtils.getNumberOfEdges(icfg));
+				} else {
+					programPackage = null;
+				}
 				final Set<IcfgLocation> errorLocs = partitionErrorLocations(icfg).get(0).getValue();
 				final var session = mCegarFactory.constructSessionAbstraction(mServices, icfg, errorLocs);
 				MultiProcessSession.announceReady(exchange, kind, mServices, mLogger, icfg, session.abstraction());
@@ -251,6 +267,12 @@ public class TraceAbstractionStarter<L extends IIcfgTransition<?>> {
 							new SubtaskFileIdentifier(null, icfg.getIdentifier() + "_" + kind));
 					statistics = ta.getStatistics();
 					statistics.write(exchange, ta.run(), null);
+					break;
+				}
+				case FRONTEND: {
+					exchange.send(MessageType.PROGRAM_PACKAGE, OptionalLong.empty(), OptionalLong.empty(),
+							programPackage);
+					statistics.write(exchange, SessionStatistics.End.DONE, null);
 					break;
 				}
 				case WITNESS: {

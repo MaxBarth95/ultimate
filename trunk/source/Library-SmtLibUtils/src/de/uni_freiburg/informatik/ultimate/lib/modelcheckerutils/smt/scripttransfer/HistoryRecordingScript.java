@@ -27,10 +27,12 @@
 package de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.Hashtable;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.ISmtDeclarable.IllegalSmtDeclarableUsageException;
@@ -153,6 +155,22 @@ public class HistoryRecordingScript extends WrapperScript {
 		mHistory.push(declarable);
 		final ISmtDeclarable old = mSymbolTable.put(declarable.getName(), declarable);
 		assert old == null : "overwriting already existing symbol in history: " + old;
+	}
+
+	/**
+	 * @return the declarations and definitions of all open stack levels, oldest first (the order in which they can be
+	 *         replayed), without the stack markers
+	 */
+	public List<ISmtDeclarable> getDeclarationsInOrder() {
+		final List<ISmtDeclarable> result = new ArrayList<>(mHistory.size());
+		final Iterator<ISmtDeclarable> iter = mHistory.descendingIterator();
+		while (iter.hasNext()) {
+			final ISmtDeclarable current = iter.next();
+			if (current != StackMarker.INSTANCE) {
+				result.add(current);
+			}
+		}
+		return result;
 	}
 
 	/**

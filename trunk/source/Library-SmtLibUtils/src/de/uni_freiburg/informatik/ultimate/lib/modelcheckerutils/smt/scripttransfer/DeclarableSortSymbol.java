@@ -86,6 +86,27 @@ public class DeclarableSortSymbol implements ISmtDeclarable {
 		return mName;
 	}
 
+	/**
+	 * @return the number of sort parameters
+	 */
+	public int getArity() {
+		return mArity;
+	}
+
+	/**
+	 * @return the sort parameters of a {@code define-sort}, or null for a {@code declare-sort}
+	 */
+	public Sort[] getParams() {
+		return mParams;
+	}
+
+	/**
+	 * @return the definition of a {@code define-sort}, or null for a {@code declare-sort}
+	 */
+	public Sort getDefinition() {
+		return mDefinition;
+	}
+
 	@Override
 	public String toString() {
 		return "(" + PrintTerm.quoteIdentifier(mName) + " " + mArity + ")";

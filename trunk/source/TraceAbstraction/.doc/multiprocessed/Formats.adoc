@@ -86,7 +86,30 @@ Files without `format`: `ready.json`, the `.ref.json` of a blob (`{sha256, size}
 * COORDINATOR: `jobs`, `refinements`, `cancels`, `abstractionsPublished`, `lostTaSessions`, `crashedTaSessions`,
   `refinementTimeMs`, `searchTimeMs`, `idleTimeMs`, `abstractionSize`;
 * WITNESS: `results`, `resultsSat`, `proofAnnotations`, `invariantsReported`, `invariantsDropped`, `witnessLevel`
-  (3 with values, 2 without values, 1 target only, 0 none).
+  (3 with values, 2 without values, 1 target only, 0 none);
+* FRONTEND: `packageBytes`, `serializeTimeMs`, `locations`, `edges`.
+
+== PACKAGE_JSON_V1: the program package
+
+The `PROGRAM_PACKAGE` message (extension `json`, normally a blob): the ICFG after block encoding, written by
+`ProgramPackageWriter` as the record `ProgramPackage` with `"format": "PACKAGE_JSON_V1"` and read as strictly as
+JSON_V1. Every list has a fixed order, so that equal programs give equal bytes (three JVMs give byte-identical
+packages, also for `aws_byte_cursor_read_harness`).
+
+* `logic`: the SMT logic of the script that built the ICFG.
+* `declarations`: `declare-sort`, `define-sort`, `declare-fun` and `define-fun` commands in declaration order, the
+  order in which they replay (a `define-fun` may use earlier symbols). Only what the ICFG uses: the sorts and functions
+  of the edge formulas, the axioms and the program-variable constants, closed under defined-function bodies, so
+  nothing the solver declared before for other purposes is included.
+* `axioms`: the closed axiom formula.
+* `globals` (with their old variables), `constants`, and `procedures` (locals including parameters, in/out parameters,
+  modifiable globals). A variable is `{identifier, sort, termVariable, defaultConstant, primedConstant}`; elsewhere a
+  program variable is referred to by the name of its term variable.
+* `locations`: `{procedure, debugId, initial, error, entry, exit, loopHead}`, named `<procedure>::<debugId>`.
+* `edges`, ordered by id: `{id, kind: INTERNAL|CALL|RETURN, source, target, transFormula, withBranchEncoders?, call?}`.
+  The id is the CodeBlock serial, so `e<id>` letters match. `transFormula` is the edge's formula (for a call the
+  local-variable assignment, for a return the assignment of the return values): `{formula, inVars, outVars, auxVars,
+  branchEncoders, nonTheoryConsts, infeasibility}`, formula in SMT-LIB with lets.
 
 == YAML_V1: the witness
 

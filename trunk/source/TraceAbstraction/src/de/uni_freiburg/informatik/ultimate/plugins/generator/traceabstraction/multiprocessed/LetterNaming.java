@@ -225,6 +225,16 @@ public final class LetterNaming<L extends IIcfgTransition<?>> {
 		return letter;
 	}
 
+	/**
+	 * @return the id of an edge: the serial number of a {@link CodeBlock}, the id of an
+	 *         {@link AbstractIcfgTransition}
+	 * @throws IllegalArgumentException
+	 *             for any other edge type, or an edge without an id
+	 */
+	static int idOf(final IIcfgTransition<?> letter) {
+		return serialOf(letter);
+	}
+
 	private static int serialOf(final IIcfgTransition<?> letter) {
 		final int serial;
 		if (letter instanceof CodeBlock) {

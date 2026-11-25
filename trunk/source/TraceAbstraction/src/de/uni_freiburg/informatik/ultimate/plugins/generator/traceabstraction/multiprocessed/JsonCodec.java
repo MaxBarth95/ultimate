@@ -161,8 +161,15 @@ public final class JsonCodec {
 	 * @return the JSON_V1 text of a message record
 	 */
 	public static String encode(final Record message) {
+		return encode(message, FORMAT);
+	}
+
+	/**
+	 * @return the JSON text of a record with the given {@code format} field (e.g. PACKAGE_JSON_V1)
+	 */
+	public static String encode(final Record message, final String format) {
 		final JsonObject object = new JsonObject();
-		object.addProperty(FORMAT_KEY, FORMAT);
+		object.addProperty(FORMAT_KEY, format);
 		final JsonObject fields = GSON.toJsonTree(message).getAsJsonObject();
 		for (final Map.Entry<String, JsonElement> entry : fields.entrySet()) {
 			object.add(entry.getKey(), entry.getValue());
@@ -176,11 +183,20 @@ public final class JsonCodec {
 	 *             if the text is not JSON_V1, has unknown fields, or misses a required field
 	 */
 	public static <T extends Record> T decode(final String json, final Class<T> clazz) {
+		return decode(json, clazz, FORMAT);
+	}
+
+	/**
+	 * @return the record of a JSON text whose {@code format} field is {@code expectedFormat}
+	 * @throws IllegalArgumentException
+	 *             if the text has another format, unknown fields, or misses a required field
+	 */
+	public static <T extends Record> T decode(final String json, final Class<T> clazz, final String expectedFormat) {
 		final JsonObject object = parseObject(json);
 		final JsonElement format = object.remove(FORMAT_KEY);
-		if (format == null || !format.isJsonPrimitive() || !FORMAT.equals(format.getAsString())) {
+		if (format == null || !format.isJsonPrimitive() || !expectedFormat.equals(format.getAsString())) {
 			throw new IllegalArgumentException(
-					"Not a " + FORMAT + " message (format " + format + "): " + clazz.getSimpleName());
+					"Not a " + expectedFormat + " message (format " + format + "): " + clazz.getSimpleName());
 		}
 		return decodePlain(object, clazz);
 	}
@@ -248,6 +264,7 @@ public final class JsonCodec {
 				checkFields(value.getAsJsonObject(), type);
 			}
 			checkNoNullElements(clazz, name, component.getGenericType(), value);
+			checkRecordElements(clazz, name, component.getGenericType(), value);
 		}
 		for (final String key : object.keySet()) {
 			if (!known.contains(key)) {
@@ -287,6 +304,27 @@ public final class JsonCodec {
 							clazz.getSimpleName() + "." + name + "." + entry.getKey() + " is null");
 				}
 			}
+		}
+	}
+
+	/**
+	 * Checks the fields of every element of a list of records.
+	 */
+	private static void checkRecordElements(final Class<?> clazz, final String name, final Type type,
+			final JsonElement value) {
+		if (!(type instanceof ParameterizedType) || !value.isJsonArray()) {
+			return;
+		}
+		final Type[] arguments = ((ParameterizedType) type).getActualTypeArguments();
+		if (arguments.length != 1 || !(arguments[0] instanceof Class<?>) || !((Class<?>) arguments[0]).isRecord()) {
+			return;
+		}
+		for (final JsonElement element : value.getAsJsonArray()) {
+			if (!element.isJsonObject()) {
+				throw new IllegalArgumentException(
+						clazz.getSimpleName() + "." + name + " must contain objects, not " + element);
+			}
+			checkFields(element.getAsJsonObject(), (Class<?>) arguments[0]);
 		}
 	}
 

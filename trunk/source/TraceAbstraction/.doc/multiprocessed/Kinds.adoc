@@ -3,8 +3,8 @@
 
 The setting `multi process component` selects the kind (`TraceAbstractionPreferenceInitializer.MultiProcessComponent`).
 `DISABLED` is the normal single-process Automizer. `TraceAbstractionStarter` dispatches: the coordinator is a CEGAR
-loop built by `CegarLoopFactory`; TA_WORKER and WITNESS run no CEGAR loop and branch off before it. All three build
-the initial abstraction exactly as the CEGAR loops do and write `ready.json` before any work.
+loop built by `CegarLoopFactory`; TA_WORKER, WITNESS and FRONTEND run no CEGAR loop and branch off before it. All
+build the initial abstraction exactly as the CEGAR loops do and write `ready.json` before any other message.
 
 == COORDINATOR (`MultiProcessedCegarCoordinator`)
 
@@ -56,11 +56,19 @@ the `VERDICT` it reports results, from which the WitnessPrinter (the next plug-i
 The router reads the outcome as: FALSE level 3 PRESENT, levels 2 and 1 DEGRADED, exit 1 MISSING (run DEGRADED); TRUE
 exit 0 PRESENT, exit 1 MISSING; UNKNOWN not applicable.
 
+== FRONTEND (`TraceAbstractionStarter.runSession`, `ProgramPackageWriter`)
+
+Runs the C toolchain of the other kinds (`AutomizerCInline.xml`) and writes the program package: the ICFG that
+TraceAbstraction receives, after block encoding (see link:Formats.adoc[Formats], PACKAGE_JSON_V1). It serializes first,
+before any other work on the ICFG or its script, then writes `ready.json`, sends `PROGRAM_PACKAGE` (usually a blob)
+and `statistics.json` (end `DONE`; counters `packageBytes`, `serializeTimeMs`, `locations`, `edges`) and exits with 0.
+It accepts no message.
+
 == Settings
 
 [cols="2,3"]
 |===
-| `multi process component` | `DISABLED`, `COORDINATOR`, `TA_WORKER`, `WITNESS`
+| `multi process component` | `DISABLED`, `COORDINATOR`, `TA_WORKER`, `WITNESS`, `FRONTEND`
 | `multi process exchange root` | the session directory
 | `multi process session id` | the session id, also in every log line
 | `multi process fail on TA crash` | testing mode of the coordinator

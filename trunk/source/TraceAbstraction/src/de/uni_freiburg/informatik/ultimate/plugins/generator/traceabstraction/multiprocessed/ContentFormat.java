@@ -47,11 +47,15 @@ public enum ContentFormat {
 	 */
 	JSON_V1("json"),
 	/**
+	 * The program package, see {@link ProgramPackage}. It has the extension of {@link #JSON_V1}.
+	 */
+	PACKAGE_JSON_V1("json"),
+	/**
 	 * A YAML witness, format 2.x.
 	 */
 	YAML_V1("yml"),
 	/**
-	 * A protobuf nested word automaton (Phase 6).
+	 * A protobuf nested word automaton (reserved, not implemented).
 	 */
 	NWA_PB_V1("pb");
 
@@ -69,7 +73,8 @@ public enum ContentFormat {
 	}
 
 	/**
-	 * @return the current format with this file extension ({@link #ATS_V2} for {@code ats})
+	 * @return the current format with this file extension ({@link #ATS_V2} for {@code ats}, {@link #JSON_V1} for
+	 *         {@code json}); the message type decides between formats that share an extension
 	 * @throws IllegalArgumentException
 	 *             if no format has this extension
 	 */

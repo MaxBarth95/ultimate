@@ -279,8 +279,9 @@ public final class FileExchange implements IExchange {
 		if (REF_EXTENSION.equals(extension)) {
 			body = readBlob(JsonCodec.decodePlain(readString(mIn.resolve(file.name())), BlobRef.class));
 		} else {
-			final ContentFormat format = ContentFormat.fromExtension(extension);
-			if (format != type.getFormat()) {
+			// throws for an unknown extension; formats that share an extension are told apart by the type
+			ContentFormat.fromExtension(extension);
+			if (!type.getFormat().getExtension().equals(extension)) {
 				throw new IllegalArgumentException(
 						type + " needs format " + type.getFormat() + ", not ." + extension + ": " + file.name());
 			}

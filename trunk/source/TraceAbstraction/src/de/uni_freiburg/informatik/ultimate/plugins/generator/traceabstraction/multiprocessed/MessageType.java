@@ -69,7 +69,11 @@ public enum MessageType {
 	/**
 	 * A session stops early without a verdict.
 	 */
-	RETIRED(ContentFormat.JSON_V1);
+	RETIRED(ContentFormat.JSON_V1),
+	/**
+	 * The program package of the FRONTEND session, see {@link ProgramPackage}.
+	 */
+	PROGRAM_PACKAGE(ContentFormat.PACKAGE_JSON_V1);
 
 	private final ContentFormat mFormat;
 

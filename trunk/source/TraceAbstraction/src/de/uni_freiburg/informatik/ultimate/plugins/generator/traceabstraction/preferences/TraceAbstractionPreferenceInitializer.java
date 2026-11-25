@@ -1447,6 +1447,10 @@ public class TraceAbstractionPreferenceInitializer extends UltimatePreferenceIni
 		/**
 		 * Collects the evidence and writes the witness of the verdict.
 		 */
-		WITNESS
+		WITNESS,
+		/**
+		 * Writes the program package (the ICFG after block encoding) and exits.
+		 */
+		FRONTEND
 	}
 }

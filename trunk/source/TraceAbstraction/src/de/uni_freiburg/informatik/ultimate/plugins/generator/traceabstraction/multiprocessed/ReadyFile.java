@@ -73,6 +73,7 @@ public record ReadyFile(String protocol, String kind, String fingerprint, String
 		case COORDINATOR -> EnumSet.of(MessageType.RESULT, MessageType.INTERPOLANT_AUTOMATON);
 		case TA_WORKER -> EnumSet.of(MessageType.ABSTRACTION, MessageType.COUNTEREXAMPLE, MessageType.CANCEL);
 		case WITNESS -> EnumSet.of(MessageType.RESULT, MessageType.PROOF_ANNOTATION, MessageType.VERDICT);
+		case FRONTEND -> EnumSet.noneOf(MessageType.class);
 		case DISABLED -> throw new IllegalArgumentException("DISABLED is not a session kind");
 		};
 	}
@@ -87,6 +88,7 @@ public record ReadyFile(String protocol, String kind, String fingerprint, String
 				MessageType.VERDICT, MessageType.PROOF_ANNOTATION, MessageType.EXCEPTION);
 		case TA_WORKER -> EnumSet.of(MessageType.RESULT, MessageType.INTERPOLANT_AUTOMATON, MessageType.EXCEPTION);
 		case WITNESS -> EnumSet.of(MessageType.WITNESS, MessageType.EXCEPTION);
+		case FRONTEND -> EnumSet.of(MessageType.PROGRAM_PACKAGE, MessageType.EXCEPTION);
 		case DISABLED -> throw new IllegalArgumentException("DISABLED is not a session kind");
 		};
 	}
