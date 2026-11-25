@@ -112,12 +112,13 @@ public final class MultiProcessSession {
 	}
 
 	/**
-	 * @return the SHA-256 of the initial abstraction printed by {@link AtsCodec}
+	 * @return the SHA-256 of the initial abstraction printed by {@link AtsCodec}, with full letter names
+	 *         ({@code e<id>:<text>}) so that the fingerprint also covers the text of every edge
 	 */
 	public static <L extends IIcfgTransition<?>> String fingerprint(final IUltimateServiceProvider services,
 			final ILogger logger, final IIcfg<? extends IcfgLocation> icfg,
 			final INestedWordAutomaton<L, IPredicate> initialAbstraction) {
-		final LetterNaming<L> letters = new LetterNaming<>(initialAbstraction.getVpAlphabet());
+		final LetterNaming<L> letters = new LetterNaming<>(initialAbstraction.getVpAlphabet(), LetterNaming.Style.FULL);
 		final String ats = new AtsCodec<>(services, logger, letters).printAbstraction(INITIAL_ABSTRACTION_NAME,
 				initialAbstraction, new LocationNaming(icfg));
 		if (logger.isDebugEnabled()) {

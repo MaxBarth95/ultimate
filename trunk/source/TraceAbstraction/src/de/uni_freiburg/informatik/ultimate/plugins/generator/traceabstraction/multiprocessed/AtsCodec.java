@@ -63,10 +63,11 @@ import de.uni_freiburg.informatik.ultimate.plugins.source.automatascriptparser.A
 import de.uni_freiburg.informatik.ultimate.plugins.source.automatascriptparser.AST.NestedwordAutomatonAST;
 
 /**
- * Prints and parses the automata of the exchange (format ATS_V1).
+ * Prints and parses the automata of the exchange (format ATS_V2).
  *
  * <ul>
- * <li>Letters are {@link LetterNaming} names.</li>
+ * <li>Letters are {@link LetterNaming} names in the naming's style: {@code e<id>} in messages, full names for the
+ * fingerprint. The parser accepts both forms, so ATS_V1 automata (full names) stay readable.</li>
  * <li>A state of an abstraction is {@code q<n>@<location>}: only its program point, as a {@link LocationNaming}
  * name. The receiver builds its own predicates for it.</li>
  * <li>A state of an interpolant automaton is {@code q<n>#<formula>}: only its formula, in SMT-LIB over the program

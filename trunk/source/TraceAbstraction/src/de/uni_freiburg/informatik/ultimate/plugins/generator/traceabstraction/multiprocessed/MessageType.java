@@ -33,7 +33,7 @@ public enum MessageType {
 	/**
 	 * The coordinator's abstraction, a full snapshot, by generation.
 	 */
-	ABSTRACTION(ContentFormat.ATS_V1),
+	ABSTRACTION(ContentFormat.ATS_V2),
 	/**
 	 * A counterexample word for a TA worker to check (a job).
 	 */
@@ -49,7 +49,7 @@ public enum MessageType {
 	/**
 	 * The automaton a TA worker built for a job, which the coordinator refines with.
 	 */
-	INTERPOLANT_AUTOMATON(ContentFormat.ATS_V1),
+	INTERPOLANT_AUTOMATON(ContentFormat.ATS_V2),
 	/**
 	 * A decision of the run, with its evidence.
 	 */

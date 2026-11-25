@@ -64,8 +64,8 @@ directory, session id or time limit, a wrong logger pattern, a log file.
   contiguous);
 * `TYPE`: `ABSTRACTION`, `COUNTEREXAMPLE`, `CANCEL`, `RESULT`, `INTERPOLANT_AUTOMATON`, `PROOF_ANNOTATION`, `VERDICT`,
   `EXCEPTION`, `RETIRED`;
-* `ext`: `ats` (ATS_V1), `json` (JSON_V1), `yml` (YAML_V1), `pb` (NWA_PB_V1, later), or `ref.json` for a body in
-  `blobs/` (`{sha256, size}`; the reader checks both).
+* `ext`: `ats` (ATS_V2; ATS_V1 is still read), `json` (JSON_V1), `yml` (YAML_V1), `pb` (NWA_PB_V1, reserved), or
+  `ref.json` for a body in `blobs/` (`{sha256, size}`; the reader checks both).
 
 Every file is written as `<name>.tmp` and renamed atomically; readers ignore `*.tmp`. A router must deliver blobs the
 same way and must never rewrite an existing blob: two messages may carry the same content.

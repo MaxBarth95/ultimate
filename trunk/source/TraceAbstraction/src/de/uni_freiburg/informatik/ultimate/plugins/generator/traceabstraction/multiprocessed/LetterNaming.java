@@ -36,10 +36,16 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.A
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IIcfgTransition;
 
 /**
- * Names the letters of a program across processes: {@code e<serial>:<text>}, where {@code <serial>} is the serial
- * number of the edge and {@code <text>} its {@code toString} without line breaks. The serial makes the name unique
- * ({@code toString} alone is not: every goto prints {@code goto;}), the text lets the receiver check that its letter
- * with that serial is the same edge.
+ * Names the letters of a program across processes.
+ *
+ * <ul>
+ * <li>In messages (format ATS_V2 and the words of JSON_V1) a letter is {@code e<id>}, where {@code <id>} is the serial
+ * number of the edge (the edge id of the program package, once sessions start from it). The fingerprint check of the
+ * scheduler guarantees that all sessions of a run have the same edges with the same ids.</li>
+ * <li>The full name {@code e<id>:<text>} adds the edge's {@code toString} without line breaks. It is what ATS_V1 used,
+ * and what the fingerprint prints, so that the fingerprint also covers the text of every edge.</li>
+ * </ul>
+ * {@link #resolve(String)} accepts both forms; for a full name it checks that the text matches the local edge.
  *
  * The names are raw strings. Printing them into an automata script needs escaping, see {@link AtsCodec}; JSON escapes
  * them itself.
@@ -56,19 +62,50 @@ public final class LetterNaming<L extends IIcfgTransition<?>> {
 		INTERNAL, CALL, RETURN
 	}
 
+	/**
+	 * Which form {@link LetterNaming#name(IIcfgTransition)} returns.
+	 */
+	public enum Style {
+		/**
+		 * {@code e<id>}, the form of the messages.
+		 */
+		ID,
+		/**
+		 * {@code e<id>:<text>}, the form of the fingerprint.
+		 */
+		FULL
+	}
+
 	private final Map<Integer, L> mSerialToLetter = new HashMap<>();
-	private final Map<L, String> mLetterToName = new HashMap<>();
+	private final Map<L, Integer> mLetterToSerial = new HashMap<>();
+	private final Map<L, String> mLetterToFullName = new HashMap<>();
 	private final Map<L, LetterKind> mLetterToKind = new HashMap<>();
 	private final VpAlphabet<L> mAlphabet;
+	private final Style mStyle;
 
 	/**
+	 * Names in the form of the messages, {@code e<id>}.
+	 *
 	 * @param alphabet
 	 *            the alphabet of the initial abstraction
 	 * @throws IllegalArgumentException
 	 *             if a letter has no serial number, or two letters have the same one
 	 */
 	public LetterNaming(final VpAlphabet<L> alphabet) {
+		this(alphabet, Style.ID);
+	}
+
+	/**
+	 * @param alphabet
+	 *            the alphabet of the initial abstraction
+	 * @param style
+	 *            the form of {@link #name(IIcfgTransition)}
+	 * @throws IllegalArgumentException
+	 *             if a letter has no serial number, or two letters have the same one
+	 */
+	public LetterNaming(final VpAlphabet<L> alphabet, final Style style) {
 		mAlphabet = Objects.requireNonNull(alphabet);
+		mStyle = Objects.requireNonNull(style);
 		addAll(alphabet.getInternalAlphabet(), LetterKind.INTERNAL);
 		addAll(alphabet.getCallAlphabet(), LetterKind.CALL);
 		addAll(alphabet.getReturnAlphabet(), LetterKind.RETURN);
@@ -85,7 +122,8 @@ public final class LetterNaming<L extends IIcfgTransition<?>> {
 			if (mLetterToKind.put(letter, kind) != null) {
 				throw new IllegalArgumentException("Letter " + letter + " is in more than one alphabet");
 			}
-			mLetterToName.put(letter, "e" + serial + ":" + text(letter));
+			mLetterToSerial.put(letter, serial);
+			mLetterToFullName.put(letter, "e" + serial + ":" + text(letter));
 		}
 	}
 
@@ -97,16 +135,45 @@ public final class LetterNaming<L extends IIcfgTransition<?>> {
 	}
 
 	/**
-	 * @return the name of a letter
+	 * @return the name of a letter in this naming's {@link Style}
 	 * @throws IllegalArgumentException
 	 *             if the letter is not in the alphabet
 	 */
 	public String name(final L letter) {
-		final String name = mLetterToName.get(letter);
+		return mStyle == Style.ID ? idName(letter) : fullName(letter);
+	}
+
+	/**
+	 * @return {@code e<id>}
+	 * @throws IllegalArgumentException
+	 *             if the letter is not in the alphabet
+	 */
+	public String idName(final L letter) {
+		final Integer serial = mLetterToSerial.get(letter);
+		if (serial == null) {
+			throw new IllegalArgumentException("Letter not in the alphabet: " + letter);
+		}
+		return "e" + serial;
+	}
+
+	/**
+	 * @return {@code e<id>:<text>}
+	 * @throws IllegalArgumentException
+	 *             if the letter is not in the alphabet
+	 */
+	public String fullName(final L letter) {
+		final String name = mLetterToFullName.get(letter);
 		if (name == null) {
 			throw new IllegalArgumentException("Letter not in the alphabet: " + letter);
 		}
 		return name;
+	}
+
+	/**
+	 * @return the form of {@link #name(IIcfgTransition)}
+	 */
+	public Style getStyle() {
+		return mStyle;
 	}
 
 	/**
@@ -121,33 +188,39 @@ public final class LetterNaming<L extends IIcfgTransition<?>> {
 	}
 
 	/**
-	 * @return the letter with this name
+	 * @return the letter with this name, {@code e<id>} or {@code e<id>:<text>}
 	 * @throws IllegalArgumentException
-	 *             if the name is malformed, its serial is unknown, or its text does not match the letter with that
-	 *             serial
+	 *             if the name is malformed, its id is unknown, or (for a full name) its text does not match the letter
+	 *             with that id
 	 */
 	public L resolve(final String name) {
 		if (!name.startsWith("e")) {
 			throw new IllegalArgumentException("Malformed letter name (no 'e'): " + name);
 		}
 		final int colon = name.indexOf(':');
-		if (colon < 0) {
-			throw new IllegalArgumentException("Malformed letter name (no ':'): " + name);
+		final String digits = colon < 0 ? name.substring(1) : name.substring(1, colon);
+		if (digits.isEmpty() || !digits.chars().allMatch(c -> c >= '0' && c <= '9')) {
+			throw new IllegalArgumentException("Malformed letter name (bad id): " + name);
 		}
 		final int serial;
 		try {
-			serial = Integer.parseInt(name.substring(1, colon));
+			serial = Integer.parseInt(digits);
 		} catch (final NumberFormatException e) {
-			throw new IllegalArgumentException("Malformed letter name (bad serial): " + name, e);
+			throw new IllegalArgumentException("Malformed letter name (bad id): " + name, e);
+		}
+		if (!digits.equals(String.valueOf(serial))) {
+			throw new IllegalArgumentException("Malformed letter name (leading zeros): " + name);
 		}
 		final L letter = mSerialToLetter.get(serial);
 		if (letter == null) {
-			throw new IllegalArgumentException("Unknown letter serial " + serial + " in " + name);
+			throw new IllegalArgumentException("Unknown letter id " + serial + " in " + name);
 		}
-		final String expected = mLetterToName.get(letter);
-		if (!expected.equals(name)) {
-			throw new IllegalArgumentException(
-					"Letter " + name + " does not match the local letter with serial " + serial + ": " + expected);
+		if (colon >= 0) {
+			final String expected = mLetterToFullName.get(letter);
+			if (!expected.equals(name)) {
+				throw new IllegalArgumentException(
+						"Letter " + name + " does not match the local letter with id " + serial + ": " + expected);
+			}
 		}
 		return letter;
 	}

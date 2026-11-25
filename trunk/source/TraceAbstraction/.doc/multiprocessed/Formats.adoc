@@ -3,18 +3,23 @@
 
 == Names of letters and locations
 
-* *Letter* (`LetterNaming`): `e<serial>:<text>`. `<serial>` is the serial number of a `CodeBlock` or the id of an
-  `AbstractIcfgTransition` (other letter types throw); `<text>` is the letter's `toString` without line breaks. The
-  reader looks the serial up among its own letters and throws if it is unknown or the text differs. The serial makes
-  the name unique (`toString` alone is not: every goto prints `goto;`), the text catches a different program.
+* *Letter* (`LetterNaming`): `e<id>` in every message (ATS_V2 automata and the words of JSON_V1). `<id>` is the
+  serial number of a `CodeBlock` or the id of an `AbstractIcfgTransition` (other letter types throw). The reader looks
+  the id up among its own letters and throws if it is unknown or not canonical (leading zeros). The fingerprint check
+  guarantees that all sessions have the same edges under the same ids.
+* *Full letter name*: `e<id>:<text>`, where `<text>` is the letter's `toString` without line breaks. It was the
+  message form until Phase 5 (ATS_V1); the reader still accepts it and throws if the text differs from its own letter.
+  The fingerprint prints full names, so it also covers the text of every edge (`toString` alone is not unique: every
+  goto prints `goto;`).
 * *Location* (`LocationNaming`): `<procedure>::<debugId>`.
 
 Both rely on a deterministic frontend: equal programs give equal serials and debug ids in every process. The
 fingerprint in `ready.json` checks this.
 
-== ATS_V1: automata
+== ATS_V2: automata
 
-Printed with `AutomatonDefinitionPrinter.toString` (no header, no timestamp) and parsed with
+ATS with `e<id>` letters; ATS_V1 (Phases 2 to 5) is the same with full letter names and is still read. Both use the
+extension `ats`. Printed with `AutomatonDefinitionPrinter.toString` (no header, no timestamp) and parsed with
 `AutomataScriptParserRun` + `AutomataDefinitionInterpreter` (`AtsCodec`).
 
 * `ABSTRACTION`: states `q<n>@<location>`, only the program point. The receiver gives each state a don't-care

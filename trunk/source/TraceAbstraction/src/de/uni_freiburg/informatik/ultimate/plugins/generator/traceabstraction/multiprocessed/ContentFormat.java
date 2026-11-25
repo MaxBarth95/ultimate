@@ -33,9 +33,15 @@ import java.util.Arrays;
  */
 public enum ContentFormat {
 	/**
-	 * An automaton in the automata script format, see {@link AtsCodec}.
+	 * An automaton in the automata script format with full letter names {@code e<id>:<text>} (Phases 2 to 5). It has
+	 * the extension of {@link #ATS_V2}; {@link AtsCodec} still reads it, for old recordings.
 	 */
 	ATS_V1("ats"),
+	/**
+	 * An automaton in the automata script format with edge-id letters {@code e<id>}, see {@link AtsCodec}. Since Phase
+	 * 6, the extension {@code ats} means this format.
+	 */
+	ATS_V2("ats"),
 	/**
 	 * Every message that is not an automaton, see {@link JsonCodec}.
 	 */
@@ -63,12 +69,12 @@ public enum ContentFormat {
 	}
 
 	/**
-	 * @return the format with this file extension
+	 * @return the current format with this file extension ({@link #ATS_V2} for {@code ats})
 	 * @throws IllegalArgumentException
 	 *             if no format has this extension
 	 */
 	public static ContentFormat fromExtension(final String extension) {
-		return Arrays.stream(values()).filter(f -> f.mExtension.equals(extension)).findFirst()
+		return Arrays.stream(values()).filter(f -> f != ATS_V1 && f.mExtension.equals(extension)).findFirst()
 				.orElseThrow(() -> new IllegalArgumentException("Unknown message file extension: ." + extension));
 	}
 }
