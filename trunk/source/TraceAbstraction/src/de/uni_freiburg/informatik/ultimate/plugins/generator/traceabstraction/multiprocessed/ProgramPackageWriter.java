@@ -32,11 +32,11 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.SortedMap;
 import java.util.TreeMap;
 
 import de.uni_freiburg.informatik.ultimate.core.lib.models.annotation.Overapprox;
@@ -62,6 +62,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttrans
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.DeclarableSortSymbol;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.HistoryRecordingScript;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.ISmtDeclarable;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.logic.AnnotatedTerm;
 import de.uni_freiburg.informatik.ultimate.logic.ApplicationTerm;
 import de.uni_freiburg.informatik.ultimate.logic.FunctionSymbol;
@@ -76,9 +77,12 @@ import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Constant;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Edge;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.EdgeKind;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.FreshVariable;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.FreshVariables;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.GlobalVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Location;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Procedure;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.SpecialLocations;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.TransitionFormula;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.TypedName;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Variable;
@@ -107,6 +111,8 @@ public final class ProgramPackageWriter {
 	private final Map<String, FunctionSymbol> mFunctionSymbols = new HashMap<>();
 	private final Set<String> mUsedSorts = new HashSet<>();
 	private final Set<Term> mVisited = new HashSet<>();
+	/** Every term variable of the package, by name. */
+	private final Map<String, TermVariable> mTermVariables = new HashMap<>();
 
 	private ProgramPackageWriter(final IIcfg<? extends IcfgLocation> icfg) {
 		mIcfg = icfg;
@@ -131,36 +137,39 @@ public final class ProgramPackageWriter {
 	private ProgramPackage build() {
 		final IIcfgSymbolTable symbols = mToolkit.getSymbolTable();
 		final List<GlobalVariable> globals = new ArrayList<>();
-		for (final IProgramNonOldVar global : sorted(symbols.getGlobals(), IProgramNonOldVar::getIdentifier)) {
+		for (final IProgramNonOldVar global : inOrder(symbols.getGlobals(), IProgramNonOldVar::getIdentifier)) {
 			globals.add(new GlobalVariable(variable(global), variable(global.getOldVar())));
 		}
 		final List<Constant> constants = new ArrayList<>();
-		for (final IProgramConst constant : sorted(symbols.getConstants(), IProgramConst::getIdentifier)) {
+		for (final IProgramConst constant : inOrder(symbols.getConstants(), IProgramConst::getIdentifier)) {
 			constants.add(constant(constant));
 		}
 		final List<Procedure> procedures = new ArrayList<>();
-		for (final String proc : sorted(mToolkit.getProcedures(), p -> p)) {
+		for (final String proc : inOrder(mToolkit.getProcedures(), p -> p)) {
 			procedures.add(procedure(proc, symbols));
 		}
 		final List<Location> locations = new ArrayList<>();
 		final List<IcfgEdge> edges = new ArrayList<>();
-		final Set<IcfgLocation> initial = new HashSet<>(mIcfg.getInitialNodes());
-		final Set<IcfgLocation> loopHeads = new HashSet<>(mIcfg.getLoopLocations());
-		for (final String proc : sorted(mIcfg.getProgramPoints().keySet(), p -> p)) {
+		for (final String proc : inOrder(mIcfg.getProgramPoints().keySet(), p -> p)) {
 			final Map<?, ? extends IcfgLocation> points = mIcfg.getProgramPoints().get(proc);
-			final Set<? extends IcfgLocation> errors = mIcfg.getProcedureErrorNodes().getOrDefault(proc, Set.of());
-			for (final IcfgLocation loc : sorted(points.values(), l -> l.getDebugIdentifier().toString())) {
-				locations.add(new Location(proc, loc.getDebugIdentifier().toString(), initial.contains(loc),
-						errors.contains(loc), mIcfg.getProcedureEntryNodes().get(proc) == loc,
-						mIcfg.getProcedureExitNodes().get(proc) == loc, loopHeads.contains(loc)));
+			for (final IcfgLocation loc : inOrder(points.values(), l -> l.getDebugIdentifier().toString())) {
+				final List<Integer> outgoing = new ArrayList<>();
 				for (final IcfgEdge edge : loc.getOutgoingEdges()) {
-					if (isSummaryOfImplementedCall(edge)) {
-						// an interprocedural analysis never uses it (Cfg2Automaton); as a plain internal edge it
-						// would be a shortcut that havocs the callee's effects
-						continue;
+					// an interprocedural analysis never uses it (Cfg2Automaton); as a plain internal edge it
+					// would be a shortcut that havocs the callee's effects
+					if (!isSummaryOfImplementedCall(edge)) {
+						edges.add(edge);
+						outgoing.add(LetterNaming.idOf(edge));
 					}
-					edges.add(edge);
 				}
+				final List<Integer> incoming = new ArrayList<>();
+				for (final IcfgEdge edge : loc.getIncomingEdges()) {
+					if (!isSummaryOfImplementedCall(edge)) {
+						incoming.add(LetterNaming.idOf(edge));
+					}
+				}
+				locations.add(new Location(proc, loc.getDebugIdentifier().toString(),
+						loc.getDebugIdentifier().hashCode(), outgoing, incoming));
 			}
 		}
 		edges.sort(Comparator.comparingInt(LetterNaming::idOf));
@@ -171,8 +180,40 @@ public final class ProgramPackageWriter {
 		final Term axioms = mToolkit.getSmtFunctionsAndAxioms().getAxioms().getClosedFormula();
 		collectSymbols(axioms);
 		final List<String> declarations = declarations();
-		return new ProgramPackage(mIcfg.getIdentifier(), logic(), declarations, programFunctions(symbols), axioms.toString(),
-				globals, constants, procedures, locations, packedEdges);
+		return new ProgramPackage(mIcfg.getIdentifier(), logic(), declarations, programFunctions(symbols),
+				freshVariables(), axioms.toString(), globals, constants, procedures, locations, specialLocations(),
+				packedEdges);
+	}
+
+	private SpecialLocations specialLocations() {
+		final List<String> errors = new ArrayList<>();
+		for (final Set<? extends IcfgLocation> procErrors : mIcfg.getProcedureErrorNodes().values()) {
+			errors.addAll(names(procErrors));
+		}
+		return new SpecialLocations(names(mIcfg.getInitialNodes()), errors,
+				names(mIcfg.getProcedureEntryNodes().values()), names(mIcfg.getProcedureExitNodes().values()),
+				names(mIcfg.getLoopLocations()), names(mIcfg.getLocationsOfInterest()));
+	}
+
+	private List<String> names(final Collection<? extends IcfgLocation> locs) {
+		final List<String> result = new ArrayList<>(locs.size());
+		for (final IcfgLocation loc : locs) {
+			result.add(mLocations.name(loc));
+		}
+		return result;
+	}
+
+	private FreshVariables freshVariables() {
+		final ManagedScript mgdScript = mToolkit.getManagedScript();
+		final List<FreshVariable> variables = new ArrayList<>();
+		for (final String name : new TreeMap<>(mTermVariables).keySet()) {
+			final TermVariable tv = mTermVariables.get(name);
+			final String basename = mgdScript.getFreshVariableBasename(tv);
+			if (basename != null) {
+				variables.add(new FreshVariable(name, tv.getSort().toString(), basename));
+			}
+		}
+		return new FreshVariables(mgdScript.getFreshVariableCounters(), variables);
 	}
 
 	/**
@@ -203,7 +244,15 @@ public final class ProgramPackageWriter {
 		return mToolkit.getManagedScript().getScript().getTheory().getLogic().name();
 	}
 
+	private void noteTermVariable(final TermVariable tv) {
+		final TermVariable previous = mTermVariables.put(tv.getName(), tv);
+		if (previous != null && previous != tv) {
+			throw new IllegalArgumentException("Two term variables named " + tv.getName());
+		}
+	}
+
 	private Variable variable(final IProgramVar var) {
+		noteTermVariable(var.getTermVariable());
 		collectSymbols(var.getDefaultConstant());
 		collectSymbols(var.getPrimedConstant());
 		collectSort(var.getSort());
@@ -241,14 +290,13 @@ public final class ProgramPackageWriter {
 
 	private Procedure procedure(final String proc, final IIcfgSymbolTable symbols) {
 		final List<Variable> locals = new ArrayList<>();
-		for (final ILocalProgramVar local : sorted(symbols.getLocals(proc), ILocalProgramVar::getIdentifier)) {
+		for (final ILocalProgramVar local : inOrder(symbols.getLocals(proc), ILocalProgramVar::getIdentifier)) {
 			locals.add(variable(local));
 		}
 		final List<String> modifiable = new ArrayList<>();
 		for (final IProgramNonOldVar global : mToolkit.getModifiableGlobalsTable().getModifiedBoogieVars(proc)) {
 			modifiable.add(global.getTermVariable().getName());
 		}
-		modifiable.sort(null);
 		return new Procedure(proc, locals, termVariables(mToolkit.getInParams().get(proc)),
 				termVariables(mToolkit.getOutParams().get(proc)), modifiable);
 	}
@@ -305,15 +353,15 @@ public final class ProgramPackageWriter {
 		collectSymbols(tf.getFormula());
 		return new TransitionFormula(tf.getFormula().toString(), varMap(tf.getInVars()), varMap(tf.getOutVars()),
 				typed(tf.getAuxVars()), typed(tf.getBranchEncoders()),
-				tf.getNonTheoryConsts().stream().map(c -> c.getDefaultConstant().getFunction().getName()).sorted()
-						.toList(),
+				tf.getNonTheoryConsts().stream().map(c -> c.getDefaultConstant().getFunction().getName()).toList(),
 				tf.isInfeasible());
 	}
 
-	private static SortedMap<String, String> varMap(final Map<IProgramVar, TermVariable> vars) {
-		final SortedMap<String, String> result = new TreeMap<>();
+	private Map<String, String> varMap(final Map<IProgramVar, TermVariable> vars) {
+		final Map<String, String> result = new LinkedHashMap<>();
 		for (final Map.Entry<IProgramVar, TermVariable> entry : vars.entrySet()) {
 			final String key = entry.getKey().getTermVariable().getName();
+			noteTermVariable(entry.getValue());
 			if (result.put(key, entry.getValue().getName()) != null) {
 				throw new IllegalArgumentException("Two program variables with the term variable " + key);
 			}
@@ -324,10 +372,10 @@ public final class ProgramPackageWriter {
 	private List<TypedName> typed(final Collection<TermVariable> vars) {
 		final List<TypedName> result = new ArrayList<>(vars.size());
 		for (final TermVariable var : vars) {
+			noteTermVariable(var);
 			collectSort(var.getSort());
 			result.add(new TypedName(var.getName(), var.getSort().toString()));
 		}
-		result.sort(Comparator.comparing(TypedName::name));
 		return result;
 	}
 
@@ -354,6 +402,7 @@ public final class ProgramPackageWriter {
 				}
 			} else if (term instanceof QuantifiedFormula) {
 				for (final TermVariable var : ((QuantifiedFormula) term).getVariables()) {
+					noteTermVariable(var);
 					collectSort(var.getSort());
 				}
 				todo.push(((QuantifiedFormula) term).getSubformula());
@@ -474,13 +523,19 @@ public final class ProgramPackageWriter {
 		return sb.toString();
 	}
 
-	private static <T> List<T> sorted(final Collection<? extends T> items,
+	/**
+	 * The items in their iteration order, which the reading side reproduces by inserting in this order.
+	 *
+	 * @throws IllegalArgumentException
+	 *             if two items have the same key
+	 */
+	private static <T> List<T> inOrder(final Collection<? extends T> items,
 			final java.util.function.Function<T, String> key) {
 		final List<T> result = new ArrayList<>(items);
-		result.sort(Comparator.comparing(key));
-		for (int i = 1; i < result.size(); i++) {
-			if (key.apply(result.get(i - 1)).equals(key.apply(result.get(i)))) {
-				throw new IllegalArgumentException("Two program elements with the same key " + key.apply(result.get(i)));
+		final Set<String> keys = new HashSet<>();
+		for (final T item : result) {
+			if (!keys.add(key.apply(item))) {
+				throw new IllegalArgumentException("Two program elements with the same key " + key.apply(item));
 			}
 		}
 		return result;

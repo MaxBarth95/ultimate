@@ -139,7 +139,30 @@ public class BasicIcfg<LOC extends IcfgLocation> extends BasePayloadContainer im
 			return;
 		}
 		assert old == null : "Duplicate debug identifier for loc " + loc;
+		addFlags(loc, proc, isInitial, isError, isProcEntry, isProcExit, isLoopLocation, isLocationOfInterest);
+	}
 
+	/**
+	 * Marks a location that is already in this ICFG as initial, error, procedure entry or exit, loop location or
+	 * location of interest. The collections of these locations keep the order of the calls, so that a reader can
+	 * reproduce the iteration order of another ICFG.
+	 *
+	 * @throws IllegalArgumentException
+	 *             if the location is not in this ICFG
+	 */
+	public void markLocation(final LOC loc, final boolean isInitial, final boolean isError, final boolean isProcEntry,
+			final boolean isProcExit, final boolean isLoopLocation, final boolean isLocationOfInterest) {
+		final String proc = getProcedure(loc);
+		final Map<DebugIdentifier, LOC> name2Loc = mProgramPoints.get(proc);
+		if (name2Loc == null || name2Loc.get(loc.getDebugIdentifier()) != loc) {
+			throw new IllegalArgumentException("Location is not in this ICFG: " + loc);
+		}
+		addFlags(loc, proc, isInitial, isError, isProcEntry, isProcExit, isLoopLocation, isLocationOfInterest);
+	}
+
+	private void addFlags(final LOC loc, final String proc, final boolean isInitial, final boolean isError,
+			final boolean isProcEntry, final boolean isProcExit, final boolean isLoopLocation,
+			final boolean isLocationOfInterest) {
 		if (isInitial) {
 			mInitialNodes.add(loc);
 		}

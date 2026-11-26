@@ -382,6 +382,21 @@ public class TransFormulaBuilder {
 	}
 
 	/**
+	 * Constructs a TransFormula that keeps the given maps and sets as they are, without copying them and without
+	 * removing superfluous variables, so that their iteration order carries over to the TransFormula. Meant for a
+	 * reader that rebuilds a TransFormula of another process with the same iteration order (the collections must not
+	 * be modified afterwards, and must already be minimal as {@link #finishConstruction(ManagedScript)} leaves them).
+	 */
+	public static UnmodifiableTransFormula constructKeepingCollections(final Term formula,
+			final Map<IProgramVar, TermVariable> inVars, final Map<IProgramVar, TermVariable> outVars,
+			final Set<IProgramConst> nonTheoryConsts, final Set<TermVariable> auxVars,
+			final Set<TermVariable> branchEncoders, final Infeasibility infeasibility, final ManagedScript script) {
+		return new UnmodifiableTransFormula(formula, Collections.unmodifiableMap(inVars),
+				Collections.unmodifiableMap(outVars), ImmutableSet.of(nonTheoryConsts), ImmutableSet.of(auxVars),
+				ImmutableSet.of(branchEncoders), infeasibility, script);
+	}
+
+	/**
 	 * Construct TransFormula with "true" formula and no variables.
 	 */
 	public static UnmodifiableTransFormula getTrivialTransFormula(final ManagedScript script) {

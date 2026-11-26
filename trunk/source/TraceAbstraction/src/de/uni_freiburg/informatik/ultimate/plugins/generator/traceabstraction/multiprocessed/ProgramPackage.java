@@ -26,6 +26,7 @@
 package de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
 
@@ -35,6 +36,11 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions
  * The program package (format PACKAGE_JSON_V1, message {@code PROGRAM_PACKAGE}): the ICFG that TraceAbstraction
  * receives (the IcfgBuilder's output, with its large block encoding), written by the FRONTEND session
  * ({@link ProgramPackageWriter}). Every list is in a deterministic order, so that equal programs give equal bytes.
+ *
+ * Collections that the ICFG iterates (symbol table, procedures, program points, the edges of a location, the variables
+ * of a transition formula) are written in the iteration order of the writing process, and read back by inserting in
+ * that order; locations keep the hash code of their debug identifier. Then the reading process iterates them in the
+ * same order, builds the same SMT queries in the same order, and behaves like a process that built the ICFG from C.
  *
  * Variables are referred to by the name of their {@link de.uni_freiburg.informatik.ultimate.logic.TermVariable}, which
  * is unique among the program variables. Formulas and declarations are SMT-LIB text.
@@ -48,22 +54,28 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions
  *            declaration order (the order in which they replay)
  * @param functions
  *            the declared or defined SMT functions that are program functions (e.g. Boogie functions), ordered
+ * @param freshVariables
+ *            the state of the script's variable manager, so that the reading side constructs the same fresh names
  * @param axioms
  *            the closed formula of the axioms
  * @param globals
- *            the global variables with their old variables, ordered by identifier
+ *            the global variables with their old variables, in the symbol table's iteration order
  * @param constants
- *            the global constants, ordered by identifier
+ *            the global constants, in the symbol table's iteration order
  * @param procedures
- *            ordered by name
+ *            in the iteration order of {@code CfgSmtToolkit.getProcedures()}
  * @param locations
- *            ordered by procedure and debug identifier
+ *            in the iteration order of {@code IIcfg.getProgramPoints()}
+ * @param special
+ *            the initial, error, entry, exit and loop locations and the locations of interest, each in iteration
+ *            order
  * @param edges
  *            ordered by id
  */
 public record ProgramPackage(String identifier, String logic, List<String> declarations, List<String> functions,
-		String axioms, List<GlobalVariable> globals,
-		List<Constant> constants, List<Procedure> procedures, List<Location> locations, List<Edge> edges) {
+		FreshVariables freshVariables, String axioms, List<GlobalVariable> globals,
+		List<Constant> constants, List<Procedure> procedures, List<Location> locations, SpecialLocations special,
+		List<Edge> edges) {
 
 	/**
 	 * The format of the package, the value of its {@code format} field.
@@ -111,13 +123,13 @@ public record ProgramPackage(String identifier, String logic, List<String> decla
 	 * A procedure.
 	 *
 	 * @param locals
-	 *            its local variables, including the parameters, ordered by identifier
+	 *            its local variables, including the parameters, in the symbol table's iteration order
 	 * @param inParams
 	 *            the term variables of its in-parameters, in parameter order
 	 * @param outParams
 	 *            the term variables of its out-parameters, in parameter order
 	 * @param modifiableGlobals
-	 *            the term variables of the globals it may modify, ordered
+	 *            the term variables of the globals it may modify, in the modifiable globals table's iteration order
 	 */
 	public record Procedure(String name, List<Variable> locals, List<String> inParams, List<String> outParams,
 			List<String> modifiableGlobals) {
@@ -125,9 +137,26 @@ public record ProgramPackage(String identifier, String logic, List<String> decla
 
 	/**
 	 * A location, named {@code <procedure>::<debugId>} in messages (see {@link LocationNaming}).
+	 *
+	 * @param hash
+	 *            the hash code of its debug identifier, which the location's hash code is computed from
+	 * @param outgoing
+	 *            the ids of its outgoing edges, in their order at the location
+	 * @param incoming
+	 *            the ids of its incoming edges, in their order at the location
 	 */
-	public record Location(String procedure, String debugId, boolean initial, boolean error, boolean entry,
-			boolean exit, boolean loopHead) {
+	public record Location(String procedure, String debugId, int hash, List<Integer> outgoing,
+			List<Integer> incoming) {
+	}
+
+	/**
+	 * The special locations of the ICFG, as {@link LocationNaming} names, each list in the iteration order of the
+	 * collection it comes from ({@code getInitialNodes()}, {@code getProcedureErrorNodes()} flattened in key order,
+	 * {@code getProcedureEntryNodes()}, {@code getProcedureExitNodes()}, {@code getLoopLocations()},
+	 * {@code getLocationsOfInterest()}).
+	 */
+	public record SpecialLocations(List<String> initial, List<String> error, List<String> entry, List<String> exit,
+			List<String> loopHeads, List<String> ofInterest) {
 	}
 
 	/**
@@ -168,18 +197,18 @@ public record ProgramPackage(String identifier, String logic, List<String> decla
 	 *            SMT-LIB over the term variables of {@code inVars}, {@code outVars}, {@code auxVars} and
 	 *            {@code branchEncoders}
 	 * @param inVars
-	 *            program variable (its term variable) to the term variable of the formula
+	 *            program variable (its term variable) to the term variable of the formula, in iteration order
 	 * @param outVars
-	 *            program variable (its term variable) to the term variable of the formula
+	 *            program variable (its term variable) to the term variable of the formula, in iteration order
 	 * @param auxVars
-	 *            ordered by name
+	 *            in iteration order
 	 * @param branchEncoders
-	 *            ordered by name
+	 *            in iteration order
 	 * @param nonTheoryConsts
-	 *            the SMT constants of the program constants the formula uses, ordered
+	 *            the SMT constants of the program constants the formula uses, in iteration order
 	 */
-	public record TransitionFormula(String formula, SortedMap<String, String> inVars,
-			SortedMap<String, String> outVars, List<TypedName> auxVars, List<TypedName> branchEncoders,
+	public record TransitionFormula(String formula, Map<String, String> inVars, Map<String, String> outVars,
+			List<TypedName> auxVars, List<TypedName> branchEncoders,
 			List<String> nonTheoryConsts, Infeasibility infeasibility) {
 	}
 
@@ -187,5 +216,25 @@ public record ProgramPackage(String identifier, String logic, List<String> decla
 	 * A term variable.
 	 */
 	public record TypedName(String name, String sort) {
+	}
+
+	/**
+	 * The state of the {@code ManagedScript}'s variable manager: the counter of each basename and the basename of each
+	 * term variable of the package that the manager constructed. With it, a reading process constructs the same fresh
+	 * names as the writing one, and no fresh variable clashes with a variable of the package (term variables are equal
+	 * when their names are).
+	 *
+	 * @param counters
+	 *            basename to the number of fresh variables constructed for it
+	 * @param variables
+	 *            ordered by name
+	 */
+	public record FreshVariables(SortedMap<String, Integer> counters, List<FreshVariable> variables) {
+	}
+
+	/**
+	 * A term variable and the basename the variable manager constructed it for.
+	 */
+	public record FreshVariable(String name, String sort, String basename) {
 	}
 }

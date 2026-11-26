@@ -31,6 +31,8 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
 import de.uni_freiburg.informatik.ultimate.core.model.services.IUltimateServiceProvider;
@@ -298,6 +300,50 @@ public class ManagedScript {
 	 *
 	 * @author Matthias Heizmann
 	 */
+	/**
+	 * @return the counter of every basename for which a fresh variable was constructed (a sorted copy); together with
+	 *         {@link #getFreshVariableBasename(TermVariable)} the state that makes later fresh names, see
+	 *         {@link #restoreFreshVariableState(Map, Map)}
+	 */
+	public SortedMap<String, Integer> getFreshVariableCounters() {
+		final SortedMap<String, Integer> result = new TreeMap<>();
+		for (final String basename : mVariableManager.mTvForBasenameCounter.getElements()) {
+			result.put(basename, mVariableManager.mTvForBasenameCounter.getNumber(basename));
+		}
+		return result;
+	}
+
+	/**
+	 * @return the basename the variable manager recorded when it constructed {@code tv}, or null if it did not
+	 *         construct it
+	 */
+	public String getFreshVariableBasename(final TermVariable tv) {
+		return mVariableManager.mTv2Basename.get(tv);
+	}
+
+	/**
+	 * Gives the variable manager of a new script the state of another one, so that both construct the same fresh
+	 * names from now on and no fresh variable can clash with a variable of the other script: the basename of each
+	 * given variable and the counter of each basename. Used when a program is read in another process.
+	 *
+	 * @throws IllegalStateException
+	 *             if this manager already counted a basename higher than the given counter
+	 */
+	public void restoreFreshVariableState(final Map<TermVariable, String> basenames,
+			final Map<String, Integer> counters) {
+		for (final Map.Entry<String, Integer> entry : counters.entrySet()) {
+			final int current = mVariableManager.mTvForBasenameCounter.getNumber(entry.getKey());
+			if (current > entry.getValue()) {
+				throw new IllegalStateException("Fresh variable counter of " + entry.getKey() + " is already "
+						+ current + ", above " + entry.getValue());
+			}
+			if (entry.getValue() > current) {
+				mVariableManager.mTvForBasenameCounter.increment(entry.getKey(), entry.getValue() - current);
+			}
+		}
+		mVariableManager.mTv2Basename.putAll(basenames);
+	}
+
 	private class VariableManager {
 
 		/**

@@ -50,7 +50,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.I
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgEdge;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgEdgeFactory;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
-import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.debugidentifiers.StringDebugIdentifier;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.debugidentifiers.DebugIdentifier;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.TransFormulaBuilder;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.transitions.UnmodifiableTransFormula;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.ILocalProgramVar;
@@ -77,9 +77,12 @@ import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Constant;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Edge;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.EdgeKind;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.FreshVariable;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.FreshVariables;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.GlobalVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Location;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Procedure;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.SpecialLocations;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.TransitionFormula;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.TypedName;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Variable;
@@ -202,6 +205,8 @@ public final class ProgramPackageReader {
 		final SmtFunctionsAndAxioms smtFunctionsAndAxioms =
 				new SmtFunctionsAndAxioms(axioms, axiomFunctions, mMgdScript);
 
+		restoreFreshVariables(pkg.freshVariables());
+
 		final PackageSerialProvider serials = new PackageSerialProvider();
 		final IcfgEdgeFactory edgeFactory = new IcfgEdgeFactory(serials);
 		final CfgSmtToolkit toolkit = new CfgSmtToolkit(new ModifiableGlobalsTable(modifiable), mMgdScript, symbols,
@@ -216,16 +221,36 @@ public final class ProgramPackageReader {
 			if (withLocations.add(location.procedure())) {
 				icfg.addProcedure(location.procedure());
 			}
-			final IcfgLocation loc =
-					new IcfgLocation(new StringDebugIdentifier(location.debugId()), location.procedure());
+			final IcfgLocation loc = new IcfgLocation(new PackageDebugIdentifier(location.debugId(), location.hash()),
+					location.procedure());
 			final String name = location.procedure() + "::" + location.debugId();
 			if (locations.put(name, loc) != null) {
 				throw new IllegalArgumentException("Two locations named " + name);
 			}
-			icfg.addLocation(loc, location.initial(), location.error(), location.entry(), location.exit(),
-					location.loopHead(), false);
+			icfg.addLocation(loc, false, false, false, false, false, false);
+		}
+		// each kind of special location in its recorded order (the collections keep insertion order)
+		final SpecialLocations special = pkg.special();
+		for (final String name : special.initial()) {
+			icfg.markLocation(location(locations, name), true, false, false, false, false, false);
+		}
+		for (final String name : special.error()) {
+			icfg.markLocation(location(locations, name), false, true, false, false, false, false);
+		}
+		for (final String name : special.entry()) {
+			icfg.markLocation(location(locations, name), false, false, true, false, false, false);
+		}
+		for (final String name : special.exit()) {
+			icfg.markLocation(location(locations, name), false, false, false, true, false, false);
+		}
+		for (final String name : special.loopHeads()) {
+			icfg.markLocation(location(locations, name), false, false, false, false, true, false);
+		}
+		for (final String name : special.ofInterest()) {
+			icfg.markLocation(location(locations, name), false, false, false, false, false, true);
 		}
 
+		final Map<Integer, IcfgEdge> createdEdges = new HashMap<>();
 		final Map<Integer, IcfgCallTransition> calls = new HashMap<>();
 		final Map<Integer, UnmodifiableTransFormula> callAssignments = new HashMap<>();
 		int maxId = -1;
@@ -280,13 +305,46 @@ public final class ProgramPackageReader {
 				if (LetterNaming.idOf(created) != edge.id()) {
 					throw new IllegalStateException("Edge " + edge.id() + " got id " + LetterNaming.idOf(created));
 				}
-				source.addOutgoing(created);
-				target.addIncoming(created);
+				createdEdges.put(edge.id(), created);
 			}
+		}
+		// connected in each location's recorded order, which iterations over the edges of a location follow
+		final Set<Integer> connectedOut = new HashSet<>();
+		final Set<Integer> connectedIn = new HashSet<>();
+		for (final Location location : pkg.locations()) {
+			final IcfgLocation loc = locations.get(location.procedure() + "::" + location.debugId());
+			for (final Integer id : location.outgoing()) {
+				final IcfgEdge edge = createdEdges.get(id);
+				if (edge == null || edge.getSource() != loc || !connectedOut.add(id)) {
+					throw new IllegalArgumentException("Outgoing edge " + id + " does not fit location " + loc);
+				}
+				loc.addOutgoing(edge);
+			}
+			for (final Integer id : location.incoming()) {
+				final IcfgEdge edge = createdEdges.get(id);
+				if (edge == null || edge.getTarget() != loc || !connectedIn.add(id)) {
+					throw new IllegalArgumentException("Incoming edge " + id + " does not fit location " + loc);
+				}
+				loc.addIncoming(edge);
+			}
+		}
+		if (connectedOut.size() != createdEdges.size() || connectedIn.size() != createdEdges.size()) {
+			throw new IllegalArgumentException("Not every edge is an outgoing and an incoming edge of a location");
 		}
 		// edges created later must not reuse a package id
 		serials.setNext(maxId + 1);
 		return icfg;
+	}
+
+	/**
+	 * Gives the script's variable manager the writer's state, before any fresh variable is constructed here.
+	 */
+	private void restoreFreshVariables(final FreshVariables fresh) {
+		final Map<TermVariable, String> basenames = new HashMap<>();
+		for (final FreshVariable var : fresh.variables()) {
+			basenames.put(mScript.variable(var.name(), SmtText.sort(mScript, var.sort())), var.basename());
+		}
+		mMgdScript.restoreFreshVariableState(basenames, fresh.counters());
 	}
 
 	private void replay(final String text) {
@@ -327,12 +385,17 @@ public final class ProgramPackageReader {
 		return unlet;
 	}
 
+	/**
+	 * A transition formula whose maps and sets iterate in the package's order, i.e. the writer's: they are linked
+	 * collections filled in that order and kept as they are ({@link TransFormulaBuilder#constructKeepingCollections}).
+	 * Hash maps that other code builds from them later therefore get the same insertion order as in the writer.
+	 */
 	private UnmodifiableTransFormula transFormula(final TransitionFormula tf) {
 		final Map<IProgramVar, TermVariable> inVars = varMap(tf.inVars());
 		final Map<IProgramVar, TermVariable> outVars = varMap(tf.outVars());
-		final List<TermVariable> auxVars = typed(tf.auxVars());
-		final List<TermVariable> branchEncoders = typed(tf.branchEncoders());
-		final Set<IProgramConst> nonTheoryConsts = new HashSet<>();
+		final Set<TermVariable> auxVars = new LinkedHashSet<>(typed(tf.auxVars()));
+		final Set<TermVariable> branchEncoders = new LinkedHashSet<>(typed(tf.branchEncoders()));
+		final Set<IProgramConst> nonTheoryConsts = new LinkedHashSet<>();
 		for (final String name : tf.nonTheoryConsts()) {
 			final IProgramConst constant = mConstants.get(name);
 			if (constant == null) {
@@ -345,19 +408,13 @@ public final class ProgramPackageReader {
 		free.addAll(outVars.values());
 		free.addAll(auxVars);
 		free.addAll(branchEncoders);
-		final TransFormulaBuilder builder = new TransFormulaBuilder(inVars, outVars, nonTheoryConsts.isEmpty(),
-				nonTheoryConsts.isEmpty() ? null : nonTheoryConsts, branchEncoders.isEmpty(),
-				branchEncoders.isEmpty() ? null : branchEncoders, auxVars.isEmpty());
-		builder.setFormula(parseTerm(tf.formula(), free, mScript.sort("Bool")));
-		for (final TermVariable aux : auxVars) {
-			builder.addAuxVar(aux);
-		}
-		builder.setInfeasibility(tf.infeasibility());
-		return builder.finishConstruction(mMgdScript);
+		return TransFormulaBuilder.constructKeepingCollections(parseTerm(tf.formula(), free, mScript.sort("Bool")),
+				inVars, outVars, nonTheoryConsts, auxVars, branchEncoders, tf.infeasibility(), mMgdScript);
 	}
 
 	private Map<IProgramVar, TermVariable> varMap(final Map<String, String> names) {
-		final Map<IProgramVar, TermVariable> result = new HashMap<>();
+		// in the package's (the writer's iteration) order
+		final Map<IProgramVar, TermVariable> result = new LinkedHashMap<>();
 		for (final Map.Entry<String, String> entry : names.entrySet()) {
 			final IProgramVar var = variable(entry.getKey());
 			result.put(var, mScript.variable(entry.getValue(), var.getSort()));
@@ -420,6 +477,37 @@ public final class ProgramPackageReader {
 	private static void requireNull(final Object value, final Edge edge) {
 		if (value != null) {
 			throw new IllegalArgumentException("Malformed " + edge.kind() + " edge " + edge.id());
+		}
+	}
+
+	/**
+	 * The debug identifier of a read location: its text, and the hash code of the writer's debug identifier, from which
+	 * {@link IcfgLocation} computes its own hash code. So read locations hash, and iterate in hash-based collections,
+	 * like the writer's.
+	 */
+	public static final class PackageDebugIdentifier extends DebugIdentifier {
+		private final String mText;
+		private final int mHash;
+
+		public PackageDebugIdentifier(final String text, final int hash) {
+			mText = text;
+			mHash = hash;
+		}
+
+		@Override
+		public String toString() {
+			return mText;
+		}
+
+		@Override
+		public int hashCode() {
+			return mHash;
+		}
+
+		@Override
+		public boolean equals(final Object obj) {
+			return obj instanceof PackageDebugIdentifier && ((PackageDebugIdentifier) obj).mText.equals(mText)
+					&& ((PackageDebugIdentifier) obj).mHash == mHash;
 		}
 	}
 

@@ -41,6 +41,7 @@ import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.BasicIcfg;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgEdge;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramNonOldVar;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.HistoryRecordingScript;
 import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.ManagedScript;
 import de.uni_freiburg.informatik.ultimate.logic.Logics;
@@ -105,7 +106,7 @@ public class ProgramPackageReaderTest {
 
 	private IcfgEdge originalEdge(final int id) {
 		for (final IcfgEdge edge : new IcfgEdge[] { mProgram.mInc, mProgram.mCall, mProgram.mSkip, mProgram.mReturn,
-				mProgram.mAssume }) {
+				mProgram.mAssume, mProgram.mShortcut }) {
 			if (LetterNaming.idOf(edge) == id) {
 				return edge;
 			}
@@ -120,6 +121,65 @@ public class ProgramPackageReaderTest {
 				loc.getOutgoingEdges().forEach(e -> result.add(LetterNaming.idOf(e)));
 			}
 		}
+		return result;
+	}
+
+	@Test
+	public void freshNamesContinueAsInTheWriter() {
+		// the writer's script already constructed fresh variables (as the C pipeline does)
+		final ManagedScript original = mProgram.mMgdScript;
+		original.constructFreshTermVariable("x", mProgram.mX.getSort());
+		original.constructFreshTermVariable("x", mProgram.mX.getSort());
+		final String json = ProgramPackageWriter.writeJson(mProgram.mIcfg);
+		final ManagedScript readScript = freshScript(Logics.ALL);
+		final BasicIcfg<IcfgLocation> read = ProgramPackageReader.readJson(readScript, json);
+		final IProgramNonOldVar readX = read.getCfgSmtToolkit().getSymbolTable().getGlobals().iterator().next();
+		assertEquals(original.constructFreshTermVariable("x", mProgram.mX.getSort()).getName(),
+				readScript.constructFreshTermVariable("x", readX.getSort()).getName());
+		assertEquals(original.constructFreshCopy(mProgram.mX.getTermVariable()).getName(),
+				readScript.constructFreshCopy(readX.getTermVariable()).getName());
+		assertEquals(original.getFreshVariableCounters(), readScript.getFreshVariableCounters());
+	}
+
+	/**
+	 * The read ICFG iterates its program points, the edges of each location and its special locations in the order of
+	 * the original, and its locations have the original hash codes: then TraceAbstraction builds the same queries in
+	 * the same order.
+	 */
+	@Test
+	public void iterationOrderAndHashCodesAreKept() {
+		final BasicIcfg<IcfgLocation> read = ProgramPackageReader.readJson(freshScript(Logics.ALL), mJson);
+		assertEquals(order(mProgram.mIcfg), order(read));
+		final IcfgLocation l1 = mProgram.mL1;
+		assertTrue("the test needs an edge order other than the id order",
+				LetterNaming.idOf(l1.getOutgoingEdges().get(0)) > LetterNaming.idOf(l1.getOutgoingEdges().get(1)));
+		assertEquals(mProgram.mIcfg.getCfgSmtToolkit().getProcedures().stream().toList(),
+				read.getCfgSmtToolkit().getProcedures().stream().toList());
+		assertEquals(names(mProgram.mIcfg.getCfgSmtToolkit().getSymbolTable().getLocals("main")),
+				names(read.getCfgSmtToolkit().getSymbolTable().getLocals("main")));
+	}
+
+	private static java.util.List<String> names(final Set<? extends IProgramVar> vars) {
+		return vars.stream().map(v -> v.getTermVariable().getName()).toList();
+	}
+
+	/**
+	 * Program points with their hash codes and the ids of their outgoing and incoming edges, and the special
+	 * locations, all in iteration order.
+	 */
+	private static java.util.List<String> order(final BasicIcfg<IcfgLocation> icfg) {
+		final java.util.List<String> result = new java.util.ArrayList<>();
+		for (final var entry : icfg.getProgramPoints().entrySet()) {
+			for (final IcfgLocation loc : entry.getValue().values()) {
+				result.add(entry.getKey() + "::" + loc + "#" + loc.hashCode() + " out "
+						+ loc.getOutgoingEdges().stream().map(LetterNaming::idOf).toList() + " in "
+						+ loc.getIncomingEdges().stream().map(LetterNaming::idOf).toList());
+			}
+		}
+		result.add("initial " + icfg.getInitialNodes());
+		result.add("errors " + icfg.getProcedureErrorNodes());
+		result.add("entries " + icfg.getProcedureEntryNodes());
+		result.add("exits " + icfg.getProcedureExitNodes());
 		return result;
 	}
 

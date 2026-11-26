@@ -75,16 +75,22 @@ public class ProgramPackageWriterTest {
 			assertTrue(declaration, declaration.startsWith("(declare-fun "));
 		}
 
-		assertEquals(List.of("f", "main"), pkg.procedures().stream().map(ProgramPackage.Procedure::name).toList());
-		assertEquals(List.of("x"), pkg.procedures().get(1).modifiableGlobals());
+		// in the toolkit's iteration order
+		assertEquals(program.mIcfg.getCfgSmtToolkit().getProcedures().stream().toList(),
+				pkg.procedures().stream().map(ProgramPackage.Procedure::name).toList());
+		assertEquals(List.of("x"), pkg.procedures().stream().filter(p -> p.name().equals("main")).findFirst()
+				.orElseThrow().modifiableGlobals());
 
 		assertEquals(6, pkg.locations().size());
-		final Location l0 = pkg.locations().stream().filter(l -> l.debugId().equals("l0")).findFirst().orElseThrow();
-		assertTrue(l0.initial() && l0.entry() && !l0.error());
-		final Location err = pkg.locations().stream().filter(l -> l.debugId().equals("err")).findFirst().orElseThrow();
-		assertTrue(err.error() && !err.initial());
+		assertEquals(List.of("main::l0"), pkg.special().initial());
+		assertEquals(List.of("main::err"), pkg.special().error());
+		assertTrue(pkg.special().entry().contains("main::l0") && pkg.special().entry().contains("f::entry"));
+		final Location l1 = pkg.locations().stream().filter(l -> l.debugId().equals("l1")).findFirst().orElseThrow();
+		// the order at the location, not the id order
+		assertEquals(List.of(LetterNaming.idOf(program.mCall), LetterNaming.idOf(program.mShortcut)), l1.outgoing());
+		assertEquals(program.mL1.getDebugIdentifier().hashCode(), l1.hash());
 
-		assertEquals(5, pkg.edges().size());
+		assertEquals(6, pkg.edges().size());
 		for (int i = 1; i < pkg.edges().size(); i++) {
 			assertTrue(pkg.edges().get(i - 1).id() < pkg.edges().get(i).id());
 		}

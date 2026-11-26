@@ -109,7 +109,12 @@ packages, also for `aws_byte_cursor_read_harness`).
 * `globals` (with their old variables), `constants`, and `procedures` (locals including parameters, in/out parameters,
   modifiable globals). A variable is `{identifier, sort, termVariable, defaultConstant, primedConstant}`; elsewhere a
   program variable is referred to by the name of its term variable.
-* `locations`: `{procedure, debugId, initial, error, entry, exit, loopHead}`, named `<procedure>::<debugId>`.
+* `locations`: `{procedure, debugId, hash, outgoing, incoming}`, named `<procedure>::<debugId>`; `hash` is the hash code
+  of the writer's debug identifier, `outgoing`/`incoming` the edge ids in their order at the location.
+* `special`: the initial, error, entry, exit and loop locations and the locations of interest, each list in the
+  iteration order of the writer's collection.
+* `freshVariables`: the state of the script's variable manager (counter per basename, basename per term variable), so
+  that the reading process constructs the same fresh names and no fresh variable clashes with one of the package.
 * `edges`, ordered by id: `{id, kind: INTERNAL|CALL|RETURN, source, target, transFormula, withBranchEncoders?, call?,
   overapproximations?}`. `overapproximations` are the reasons of the edge's `Overapprox` annotation: a counterexample
   through such an edge does not prove a violation, also in a session started from the package.
@@ -118,6 +123,14 @@ packages, also for `aws_byte_cursor_read_harness`).
   shortcuts that havoc the callee's effects (multi-process sessions therefore require the interprocedural analysis). `transFormula` is the edge's formula (for a call the
   local-variable assignment, for a return the assignment of the return values): `{formula, inVars, outVars, auxVars,
   branchEncoders, nonTheoryConsts, infeasibility}`, formula in SMT-LIB with lets.
+
+*Same behaviour as from C:* every collection that TraceAbstraction iterates is written in the writer's iteration
+order and read back in that order (symbol table, procedures, program points, edges of a location, special locations,
+and the variable maps and sets of a transition formula, which the reader keeps as linked collections via
+`TransFormulaBuilder.constructKeepingCollections`); read locations hash like the writer's (`PackageDebugIdentifier`);
+the variable manager continues from the writer's state. Then a session started from the package sends byte-identical
+SMT queries to the solver (checked on the trace checks of `ki-stack-mutual-safe`). Without this, fresh variables got
+other names and collections another order, and one hard trace check took 4 times as long.
 
 *Reading* (`ProgramPackageReader`, wrapped by the source plug-in `de.uni_freiburg.informatik.ultimate.source.programpackage`
 of the toolchain `AutomizerPackage.xml`): the script is built like the IcfgBuilder's, from the session's IcfgBuilder

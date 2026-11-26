@@ -71,7 +71,11 @@ import de.uni_freiburg.informatik.ultimate.util.datastructures.relation.HashRela
  *
  * <pre>
  * main::l0 --inc--> main::l1 --call--> f::entry --skip--> f::exit --return--> main::l2 --assume--> main::err
+ *                    main::l1 --shortcut--> main::l2
  * </pre>
+ *
+ * The shortcut is created before the call (lower id) but connected after it, so the edge order at {@code main::l1}
+ * and {@code main::l2} is not the id order.
  */
 final class TestProgram {
 
@@ -99,6 +103,7 @@ final class TestProgram {
 	final IcfgEdge mSkip;
 	final IcfgReturnTransition mReturn;
 	final IcfgEdge mAssume;
+	final IcfgEdge mShortcut;
 	final VpAlphabet<IcfgEdge> mAlphabet;
 	final IPredicate mEmptyStack;
 
@@ -134,15 +139,17 @@ final class TestProgram {
 				SmtParserUtils.parseWithVariables("(> x 1)", mServices, mMgdScript, mSymbolTable), Set.of(mX),
 				mMgdScript);
 		mInc = connect(edgeFactory.createInternalTransition(mL0, mL1, null, skip));
+		mShortcut = edgeFactory.createInternalTransition(mL1, mL2, null, skip);
 		mCall = edgeFactory.createCallTransition(mL1, mFEntry, null, skip);
 		connect(mCall);
 		mSkip = connect(edgeFactory.createInternalTransition(mFEntry, mFExit, null, skip));
 		mReturn = edgeFactory.createReturnTransition(mFExit, mL2, mCall, null, skip, skip);
 		connect(mReturn);
+		connect(mShortcut);
 		mAssume = connect(edgeFactory.createInternalTransition(mL2, mErr, null, assume));
 		// as the C frontend marks an edge it overapproximates (e.g. float operations in integer mode)
 		new Overapprox("float in integer mode", new DefaultLocation()).annotate(mAssume);
-		mAlphabet = new VpAlphabet<>(Set.of(mInc, mSkip, mAssume), Set.of(mCall), Set.of(mReturn));
+		mAlphabet = new VpAlphabet<>(Set.of(mInc, mSkip, mAssume, mShortcut), Set.of(mCall), Set.of(mReturn));
 		mEmptyStack = mPredicateFactory.newEmptyStackPredicate();
 	}
 
