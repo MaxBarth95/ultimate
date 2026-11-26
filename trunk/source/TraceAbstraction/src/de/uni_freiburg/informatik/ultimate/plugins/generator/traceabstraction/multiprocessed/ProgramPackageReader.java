@@ -75,6 +75,7 @@ import de.uni_freiburg.informatik.ultimate.logic.Sort;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Constant;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.DetachedLocation;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Edge;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.EdgeKind;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.FreshVariable;
@@ -229,25 +230,39 @@ public final class ProgramPackageReader {
 			}
 			icfg.addLocation(loc, false, false, false, false, false, false);
 		}
-		// each kind of special location in its recorded order (the collections keep insertion order)
+		// special locations that are not program points (no edges, see SpecialLocations.detached)
 		final SpecialLocations special = pkg.special();
+		final Map<String, IcfgLocation> detached = new HashMap<>();
+		for (final DetachedLocation location : special.detached()) {
+			if (!withLocations.contains(location.procedure())) {
+				throw new IllegalArgumentException("Detached location " + location.debugId()
+						+ " of a procedure without program points: " + location.procedure());
+			}
+			final IcfgLocation loc = new IcfgLocation(new PackageDebugIdentifier(location.debugId(), location.hash()),
+					location.procedure());
+			final String name = location.procedure() + "::" + location.debugId();
+			if (locations.containsKey(name) || detached.put(name, loc) != null) {
+				throw new IllegalArgumentException("Two locations named " + name);
+			}
+		}
+		// each kind of special location in its recorded order (the collections keep insertion order)
 		for (final String name : special.initial()) {
-			icfg.markLocation(location(locations, name), true, false, false, false, false, false);
+			mark(icfg, locations, detached, name, true, false, false, false, false, false);
 		}
 		for (final String name : special.error()) {
-			icfg.markLocation(location(locations, name), false, true, false, false, false, false);
+			mark(icfg, locations, detached, name, false, true, false, false, false, false);
 		}
 		for (final String name : special.entry()) {
-			icfg.markLocation(location(locations, name), false, false, true, false, false, false);
+			mark(icfg, locations, detached, name, false, false, true, false, false, false);
 		}
 		for (final String name : special.exit()) {
-			icfg.markLocation(location(locations, name), false, false, false, true, false, false);
+			mark(icfg, locations, detached, name, false, false, false, true, false, false);
 		}
 		for (final String name : special.loopHeads()) {
-			icfg.markLocation(location(locations, name), false, false, false, false, true, false);
+			mark(icfg, locations, detached, name, false, false, false, false, true, false);
 		}
 		for (final String name : special.ofInterest()) {
-			icfg.markLocation(location(locations, name), false, false, false, false, false, true);
+			mark(icfg, locations, detached, name, false, false, false, false, false, true);
 		}
 
 		final Map<Integer, IcfgEdge> createdEdges = new HashMap<>();
@@ -464,6 +479,20 @@ public final class ProgramPackageReader {
 			}
 			return (ILocalProgramVar) v;
 		}).collect(Collectors.toList());
+	}
+
+	private static void mark(final BasicIcfg<IcfgLocation> icfg, final Map<String, IcfgLocation> locations,
+			final Map<String, IcfgLocation> detached, final String name, final boolean isInitial,
+			final boolean isError, final boolean isProcEntry, final boolean isProcExit, final boolean isLoopLocation,
+			final boolean isLocationOfInterest) {
+		final IcfgLocation detachedLoc = detached.get(name);
+		if (detachedLoc != null) {
+			icfg.markDetachedLocation(detachedLoc, isInitial, isError, isProcEntry, isProcExit, isLoopLocation,
+					isLocationOfInterest);
+		} else {
+			icfg.markLocation(location(locations, name), isInitial, isError, isProcEntry, isProcExit, isLoopLocation,
+					isLocationOfInterest);
+		}
 	}
 
 	private static IcfgLocation location(final Map<String, IcfgLocation> locations, final String name) {

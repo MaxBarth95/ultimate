@@ -139,6 +139,13 @@ public class ProgramPackageSource implements ISource {
 				loc.getOutgoingEdges().forEach(location::annotate);
 			}
 		}
+		// and the special locations that are not program points (ProgramPackage.SpecialLocations.detached)
+		icfg.getProcedureErrorNodes().values().forEach(errors -> errors.forEach(location::annotate));
+		icfg.getInitialNodes().forEach(location::annotate);
+		icfg.getProcedureEntryNodes().values().forEach(location::annotate);
+		icfg.getProcedureExitNodes().values().forEach(location::annotate);
+		icfg.getLoopLocations().forEach(location::annotate);
+		icfg.getLocationsOfInterest().forEach(location::annotate);
 		mLogger.info(String.format("Read the program package %s (%d bytes) in %d ms", file.getName(),
 				json.getBytes(StandardCharsets.UTF_8).length, (System.nanoTime() - start) / 1_000_000));
 		assert ProgramPackageWriter.writeJson(icfg).equals(json) : "Writing the read package gives other bytes";

@@ -154,9 +154,25 @@ public record ProgramPackage(String identifier, String logic, List<String> decla
 	 * collection it comes from ({@code getInitialNodes()}, {@code getProcedureErrorNodes()} flattened in key order,
 	 * {@code getProcedureEntryNodes()}, {@code getProcedureExitNodes()}, {@code getLoopLocations()},
 	 * {@code getLocationsOfInterest()}).
+	 *
+	 * @param detached
+	 *            the special locations that are not program points, in the order in which the lists above name them
+	 *            first. The IcfgBuilder removes unreachable locations from the program points and disconnects them,
+	 *            but keeps them in the error locations (e.g. the error location of a {@code reach_error()} after a
+	 *            {@code longjmp}). TraceAbstraction still counts them as error locations, so the package keeps them.
 	 */
 	public record SpecialLocations(List<String> initial, List<String> error, List<String> entry, List<String> exit,
-			List<String> loopHeads, List<String> ofInterest) {
+			List<String> loopHeads, List<String> ofInterest, List<DetachedLocation> detached) {
+	}
+
+	/**
+	 * A special location that is not a program point and has no edges, named {@code <procedure>::<debugId>} like a
+	 * program point.
+	 *
+	 * @param hash
+	 *            the hash code of its debug identifier
+	 */
+	public record DetachedLocation(String procedure, String debugId, int hash) {
 	}
 
 	/**

@@ -87,7 +87,24 @@ public final class LocationNaming {
 		return loc;
 	}
 
-	private static String nameOf(final IcfgLocation loc) {
+	/**
+	 * @return whether the location is a program point of the program
+	 */
+	public boolean isProgramPoint(final IcfgLocation loc) {
+		return mLocationToName.containsKey(loc);
+	}
+
+	/**
+	 * @return whether a program point has this name
+	 */
+	public boolean isName(final String name) {
+		return mNameToLocation.containsKey(name);
+	}
+
+	/**
+	 * @return the name {@code <procedure>::<debugId>} of a location, whether or not it is a program point
+	 */
+	static String nameOf(final IcfgLocation loc) {
 		return loc.getProcedure() + "::" + loc.getDebugIdentifier();
 	}
 }

@@ -22,6 +22,8 @@ CASES = [
     ('loop-unsafe', 'loop-unsafe.c', ['--ta', '2'], ('FALSE', 'OK', 'WITNESS_PRESENT')),
     # procedure calls: in package mode the summary edge of a call must not be a shortcut
     ('call-global-safe', 'call-global-safe.c', ['--ta', '2'], ('TRUE', 'OK', 'WITNESS_PRESENT')),
+    # an error location in dead code is no program point, but still an error location of the ICFG
+    ('longjmp-dead-error', 'longjmp-dead-error.c', ['--ta', '2'], ('TRUE', 'OK', 'WITNESS_PRESENT')),
     # an overapproximated counterexample never gives FALSE (Ultimate's integer run answers unprovable)
     ('float-integer-mode', 'float-integer-mode.c', ['--ta', '1'], ('UNKNOWN', 'OK', 'WITNESS_NOT_APPLICABLE')),
     # a real UNKNOWN of a TA trace check ends the run with UNKNOWN at once (R2.6 rule 3)

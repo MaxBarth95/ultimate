@@ -160,6 +160,31 @@ public class BasicIcfg<LOC extends IcfgLocation> extends BasePayloadContainer im
 		addFlags(loc, proc, isInitial, isError, isProcEntry, isProcExit, isLoopLocation, isLocationOfInterest);
 	}
 
+	/**
+	 * Marks a location that is not a program point of this ICFG and has no edges as initial, error, procedure entry or
+	 * exit, loop location or location of interest, like {@link #markLocation}. The IcfgBuilder leaves such locations
+	 * among the error locations when it removes unreachable code, and a reader that reproduces another ICFG needs them.
+	 *
+	 * @throws IllegalArgumentException
+	 *             if the location is a program point, has edges, or its procedure is unknown
+	 */
+	public void markDetachedLocation(final LOC loc, final boolean isInitial, final boolean isError,
+			final boolean isProcEntry, final boolean isProcExit, final boolean isLoopLocation,
+			final boolean isLocationOfInterest) {
+		final String proc = getProcedure(loc);
+		final Map<DebugIdentifier, LOC> name2Loc = mProgramPoints.get(proc);
+		if (name2Loc == null) {
+			throw new IllegalArgumentException("Unknown procedure of location " + loc);
+		}
+		if (name2Loc.containsKey(loc.getDebugIdentifier())) {
+			throw new IllegalArgumentException("Location is a program point: " + loc);
+		}
+		if (!loc.getIncomingEdges().isEmpty() || !loc.getOutgoingEdges().isEmpty()) {
+			throw new IllegalArgumentException("Detached location has edges: " + loc);
+		}
+		addFlags(loc, proc, isInitial, isError, isProcEntry, isProcExit, isLoopLocation, isLocationOfInterest);
+	}
+
 	private void addFlags(final LOC loc, final String proc, final boolean isInitial, final boolean isError,
 			final boolean isProcEntry, final boolean isProcExit, final boolean isLoopLocation,
 			final boolean isLocationOfInterest) {

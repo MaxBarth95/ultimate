@@ -75,6 +75,7 @@ import de.uni_freiburg.informatik.ultimate.logic.Sort;
 import de.uni_freiburg.informatik.ultimate.logic.Term;
 import de.uni_freiburg.informatik.ultimate.logic.TermVariable;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Constant;
+import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.DetachedLocation;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.Edge;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.EdgeKind;
 import de.uni_freiburg.informatik.ultimate.plugins.generator.traceabstraction.multiprocessed.ProgramPackage.FreshVariable;
@@ -186,19 +187,50 @@ public final class ProgramPackageWriter {
 	}
 
 	private SpecialLocations specialLocations() {
+		final Map<String, IcfgLocation> detached = new LinkedHashMap<>();
+		final List<String> initial = names(mIcfg.getInitialNodes(), detached);
 		final List<String> errors = new ArrayList<>();
 		for (final Set<? extends IcfgLocation> procErrors : mIcfg.getProcedureErrorNodes().values()) {
-			errors.addAll(names(procErrors));
+			errors.addAll(names(procErrors, detached));
 		}
-		return new SpecialLocations(names(mIcfg.getInitialNodes()), errors,
-				names(mIcfg.getProcedureEntryNodes().values()), names(mIcfg.getProcedureExitNodes().values()),
-				names(mIcfg.getLoopLocations()), names(mIcfg.getLocationsOfInterest()));
+		final List<String> entry = names(mIcfg.getProcedureEntryNodes().values(), detached);
+		final List<String> exit = names(mIcfg.getProcedureExitNodes().values(), detached);
+		final List<String> loopHeads = names(mIcfg.getLoopLocations(), detached);
+		final List<String> ofInterest = names(mIcfg.getLocationsOfInterest(), detached);
+		final List<DetachedLocation> detachedLocations = new ArrayList<>(detached.size());
+		for (final IcfgLocation loc : detached.values()) {
+			detachedLocations.add(new DetachedLocation(loc.getProcedure(), loc.getDebugIdentifier().toString(),
+					loc.getDebugIdentifier().hashCode()));
+		}
+		return new SpecialLocations(initial, errors, entry, exit, loopHeads, ofInterest, detachedLocations);
 	}
 
-	private List<String> names(final Collection<? extends IcfgLocation> locs) {
+	/**
+	 * @param detached
+	 *            collects the locations that are not program points (see {@link SpecialLocations#detached()})
+	 * @throws IllegalArgumentException
+	 *             if such a location has edges, or its name is taken by another location
+	 */
+	private List<String> names(final Collection<? extends IcfgLocation> locs,
+			final Map<String, IcfgLocation> detached) {
 		final List<String> result = new ArrayList<>(locs.size());
 		for (final IcfgLocation loc : locs) {
-			result.add(mLocations.name(loc));
+			if (mLocations.isProgramPoint(loc)) {
+				result.add(mLocations.name(loc));
+				continue;
+			}
+			if (!loc.getIncomingEdges().isEmpty() || !loc.getOutgoingEdges().isEmpty()) {
+				throw new IllegalArgumentException("Special location " + loc + " is not a program point but has edges");
+			}
+			final String name = LocationNaming.nameOf(loc);
+			if (mLocations.isName(name)) {
+				throw new IllegalArgumentException("Special location " + loc + " has the name of a program point");
+			}
+			final IcfgLocation previous = detached.put(name, loc);
+			if (previous != null && previous != loc) {
+				throw new IllegalArgumentException("Two special locations named " + name);
+			}
+			result.add(name);
 		}
 		return result;
 	}

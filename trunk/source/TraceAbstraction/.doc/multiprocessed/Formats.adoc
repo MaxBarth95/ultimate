@@ -112,7 +112,10 @@ packages, also for `aws_byte_cursor_read_harness`).
 * `locations`: `{procedure, debugId, hash, outgoing, incoming}`, named `<procedure>::<debugId>`; `hash` is the hash code
   of the writer's debug identifier, `outgoing`/`incoming` the edge ids in their order at the location.
 * `special`: the initial, error, entry, exit and loop locations and the locations of interest, each list in the
-  iteration order of the writer's collection.
+  iteration order of the writer's collection, and `detached`: `{procedure, debugId, hash}` of the special locations
+  that are not program points (they have no edges). The IcfgBuilder removes unreachable code from the program points
+  but keeps its error locations (e.g. a `reach_error()` after a `longjmp`), and TraceAbstraction counts them, so the
+  package keeps them as well.
 * `freshVariables`: the state of the script's variable manager (counter per basename, basename per term variable), so
   that the reading process constructs the same fresh names and no fresh variable clashes with one of the package.
 * `edges`, ordered by id: `{id, kind: INTERNAL|CALL|RETURN, source, target, transFormula, withBranchEncoders?, call?,

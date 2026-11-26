@@ -40,6 +40,7 @@ import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger.LogLevel;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.BasicIcfg;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgEdge;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.IcfgLocation;
+import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.structure.debugidentifiers.StringDebugIdentifier;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramNonOldVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.cfg.variables.IProgramVar;
 import de.uni_freiburg.informatik.ultimate.lib.modelcheckerutils.smt.scripttransfer.HistoryRecordingScript;
@@ -157,6 +158,25 @@ public class ProgramPackageReaderTest {
 				read.getCfgSmtToolkit().getProcedures().stream().toList());
 		assertEquals(names(mProgram.mIcfg.getCfgSmtToolkit().getSymbolTable().getLocals("main")),
 				names(read.getCfgSmtToolkit().getSymbolTable().getLocals("main")));
+	}
+
+	@Test
+	public void detachedErrorLocationsAreKept() {
+		// the IcfgBuilder removes unreachable locations from the program points but keeps them as error locations
+		// (e.g. a reach_error() after a longjmp)
+		final IcfgLocation dead = new IcfgLocation(new StringDebugIdentifier("deadErr"), TestProgram.MAIN);
+		mProgram.mIcfg.markDetachedLocation(dead, false, true, false, false, false, false);
+		final String json = ProgramPackageWriter.writeJson(mProgram.mIcfg);
+		final BasicIcfg<IcfgLocation> read = ProgramPackageReader.readJson(freshScript(Logics.ALL), json);
+		assertEquals(json, ProgramPackageWriter.writeJson(read));
+		assertEquals(order(mProgram.mIcfg), order(read));
+		final IcfgLocation readDead = read.getProcedureErrorNodes().get(TestProgram.MAIN).stream()
+				.filter(l -> "deadErr".equals(l.toString())).findFirst().orElseThrow();
+		assertEquals(dead.hashCode(), readDead.hashCode());
+		assertTrue(readDead.getIncomingEdges().isEmpty() && readDead.getOutgoingEdges().isEmpty());
+		assertTrue(!read.getProgramPoints().get(TestProgram.MAIN).containsValue(readDead));
+		assertThrows(IllegalArgumentException.class,
+				() -> mProgram.mIcfg.markDetachedLocation(mProgram.mL1, false, true, false, false, false, false));
 	}
 
 	private static java.util.List<String> names(final Set<? extends IProgramVar> vars) {
