@@ -30,7 +30,6 @@ package de.uni_freiburg.informatik.ultimate.core.coreplugin.services;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
@@ -113,40 +112,44 @@ public class ToolchainStorage implements IToolchainStorage, IUltimateServiceProv
 
 	@Override
 	public void clear() {
+		// Destroy the storables without holding the lock: destroying a storable may wait for another thread that needs
+		// the lock, e.g., the monitor thread of a MonitoredProcess removes the process from this storage when it ends.
+		// The storables stay in the storage while they are destroyed, so that services can still be looked up.
+		final List<Entry<String, IStorable>> current;
 		synchronized (mLock) {
-			final Collection<IStorable> values = mToolchainStorage.values();
-			if (values.isEmpty()) {
-				return;
-			}
-			final List<IStorable> current = new ArrayList<>(values);
+			current = new ArrayList<>(mToolchainStorage.entrySet());
+		}
+		if (current.isEmpty()) {
+			return;
+		}
 
-			if (current.isEmpty()) {
-				return;
-			}
+		// destroy storables in reverse order s.t., e.g., scripts are destroyed
+		// before the solver is destroyed.
+		// this is done because we assume that instances created later may
+		// depend on instances created earlier.
+		Collections.reverse(current);
 
-			// destroy storables in reverse order s.t., e.g., scripts are destroyed
-			// before the solver is destroyed.
-			// this is done because we assume that instances created later may
-			// depend on instances created earlier.
-			Collections.reverse(current);
-
-			final ILogger coreLogger = getLoggingService().getLogger(Activator.PLUGIN_ID);
-			if (coreLogger.isDebugEnabled()) {
-				coreLogger.debug("Clearing " + current.size() + " storables from " + getClass().getSimpleName());
+		final ILogger coreLogger = getLoggingService().getLogger(Activator.PLUGIN_ID);
+		if (coreLogger.isDebugEnabled()) {
+			coreLogger.debug("Clearing " + current.size() + " storables from " + getClass().getSimpleName());
+		}
+		for (final Entry<String, IStorable> entry : current) {
+			final IStorable storable = entry.getValue();
+			if (storable == null) {
+				coreLogger.warn("Found NULL storable, ignoring");
+				continue;
 			}
-			for (final IStorable storable : current) {
-				if (storable == null) {
-					coreLogger.warn("Found NULL storable, ignoring");
-					continue;
-				}
-				try {
-					storable.destroy();
-				} catch (final Throwable t) {
-					coreLogger.fatal("There was an exception during clearing of toolchain storage while destroying "
-							+ storable.getClass().toString() + ": " + t.getMessage());
-				}
+			try {
+				storable.destroy();
+			} catch (final Throwable t) {
+				coreLogger.fatal("There was an exception during clearing of toolchain storage while destroying "
+						+ storable.getClass().toString() + ": " + t.getMessage());
 			}
-			mToolchainStorage.clear();
+		}
+		synchronized (mLock) {
+			for (final Entry<String, IStorable> entry : current) {
+				mToolchainStorage.remove(entry.getKey(), entry.getValue());
+			}
 			mMarker.clear();
 			pushMarker(this);
 		}
@@ -262,23 +265,26 @@ public class ToolchainStorage implements IToolchainStorage, IUltimateServiceProv
 		if (mMarker.isEmpty() || !hasMarker(marker)) {
 			return Collections.emptySet();
 		}
+		// Collect the keys under the lock, but destroy the storables after releasing it (see clear()).
+		final List<String> keys = new ArrayList<>();
 		synchronized (mLock) {
-			final Set<String> rtr = new HashSet<>();
 			final Iterator<Pair<Object, Set<String>>> iter = mMarker.iterator();
 			while (iter.hasNext()) {
 				final Pair<Object, Set<String>> markerPair = iter.next();
 				iter.remove();
-				for (final String key : markerPair.getSecond()) {
-					if (destroyStorable(key)) {
-						rtr.add(key);
-					}
-				}
+				keys.addAll(markerPair.getSecond());
 				if (markerPair.getFirst() == marker) {
-					return rtr;
+					break;
 				}
 			}
-			return rtr;
 		}
+		final Set<String> rtr = new HashSet<>();
+		for (final String key : keys) {
+			if (destroyStorable(key)) {
+				rtr.add(key);
+			}
+		}
+		return rtr;
 	}
 
 	private boolean hasMarker(final Object marker) {
